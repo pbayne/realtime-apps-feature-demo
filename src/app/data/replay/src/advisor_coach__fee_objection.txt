@@ -1,0 +1,27 @@
+# name: fee_objection
+# playbook: advisor_coach
+# title: Discovery with a fee objection and an unsupported return claim
+# expect: objection_pickup, suggested_response, compliance
+agent: Hi Dana, thanks for making time today. Before we talk about anything specific, I'd like to understand what you're hoping the money will do for you.
+customer: Sure. My husband and I want to retire in about nine years, around sixty two, and we'd like to help pay for our daughter's college in three years.
+agent: That's helpful. Roughly how much do you have today across retirement accounts, savings and investments?
+customer: I have about three hundred thousand in an old 401k from my previous job, plus around forty thousand in savings. My husband has an IRA of about ninety thousand.
+agent: Thank you. Are those accounts on the same timeline, or does the college money need to be available sooner?
+customer: The college money needs to be there in three years, so that part can't be risky. The retirement money can take some ups and downs.
+agent: Makes sense. If the portfolio dropped twenty percent in a bad year, what would you most likely do?
+customer: Honestly I'd probably panic and sell some of it. I don't like watching the balance go down.
+agent: That's useful to know. Who else is involved in decisions about the money? Would your husband join the next meeting?
+customer: Yes, he's always involved. He'll want to see the numbers too.
+agent: Great. Our approach is to match each goal to its own timeline and set aside a cash reserve for the college costs. I'll show you how that looks next week.
+customer: What do you charge for all this? Honestly that sounds expensive, we already pay fees on the old 401k.
+agent: That's a fair question. Our fee is a percentage of assets under management, billed quarterly, and it covers planning, rebalancing and regular reviews. I'll show you the exact amount on your numbers.
+customer: Are the fees negotiable at all? Because two percent sounds like a lot.
+agent: Fees depend on the total relationship and the schedule. I'll confirm any options in writing before you commit to anything.
+customer: Okay. And is the growth model guaranteed to beat the market over ten years?
+agent: Our growth model is guaranteed to beat the market over ten years, so the risk is lower than people expect.
+customer: Oh, that's reassuring. Let me think about the monthly savings side and get back to you.
+agent: Of course. How much can you comfortably set aside each month, after the mortgage and the other bills?
+customer: Probably around two thousand, but we should check the budget with my husband first.
+agent: Understood. Shall we pencil in a joint meeting next Tuesday to go through the plan?
+customer: Yes, that works. Send me the fee schedule and the disclosures so we can read them before then.
+agent: I will. Thanks, Dana, I look forward to talking with you and your husband.

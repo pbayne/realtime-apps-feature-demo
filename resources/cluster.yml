@@ -1,29 +1,25 @@
 resources:
   clusters:
-    # The All-Purpose cluster the job tasks attach to. Bundle-managed: created
-    # by `bundle deploy`, deleted by `bundle destroy`. Autoterminates after
-    # 120 min of inactivity to cap idle cost.
-    #
-    # The spec below is AWS. For Azure or GCP, swap `aws_attributes` for the
-    # cloud-specific block and pick a comparable node type — see README's
-    # "Configure for your workspace" appendix.
-    rt_demo_cluster:
-      cluster_name: rt-demo-rtm-keepalive
-      # DBR 18.3+ is required by the native Lakebase `format("postgresql")`
-      # streaming sink used by stream.py. (DBR 18.3 is available even though
-      # the `clusters spark-versions` API list doesn't include it — the API
-      # accepts it as a valid spark_version string.)
-      spark_version: 18.3.x-scala2.13
+    # RTM cluster. Real-Time Mode (docs: structured-streaming/real-time/setup) needs:
+    #   - classic compute, dedicated (SINGLE_USER) access mode
+    #   - DBR 16.4+ for Kafka RTM; DBR 18.3+ for the native Lakebase postgresql sink
+    #   - autoscaling OFF (fixed num_workers), Photon OFF, on-demand (no spot)
+    #   - spark.databricks.streaming.realTimeMode.enabled=true
+    # Sizing: 4 Kafka partitions -> 4 tasks. RTM requires total task slots >= tasks
+    # across all stages. 2 x m5d.xlarge = 8 worker cores = 2 cores per partition.
+    # Node type is a variable; AWS defaults. Azure/GCP: swap aws_attributes (README).
+    rtm_cluster:
+      cluster_name: call-copilot-rtm
+      spark_version: ${var.dbr_version}
       data_security_mode: SINGLE_USER
       single_user_name: ${workspace.current_user.userName}
-      runtime_engine: STANDARD            # Photon off — required by RTM
-      node_type_id: m5d.large
-      driver_node_type_id: m5d.large
-      num_workers: 1                      # autoscale off — required by RTM
+      runtime_engine: STANDARD              # Photon off
+      node_type_id: ${var.rtm_node_type}
+      driver_node_type_id: ${var.rtm_node_type}
+      num_workers: ${var.rtm_num_workers}   # autoscale off
       autotermination_minutes: 120
       aws_attributes:
-        availability: ON_DEMAND           # no spot — required by RTM
-        first_on_demand: 2
+        availability: ON_DEMAND             # no spot
+        first_on_demand: 1
       spark_conf:
         spark.databricks.streaming.realTimeMode.enabled: "true"
-        spark.sql.execution.sortBeforeRepartition: "false"

@@ -1,34 +1,61 @@
+# Databricks App (source: src/app, Workstream A). The app runs as its own service
+# principal, so every backend it touches is declared here as an app resource.
+#
+# Env contract (Workstream A declares these in src/app/app.yaml with valueFrom, using
+# the resource names below; values never live in git):
+#   LAKEBASE_HOST, LAKEBASE_DB, LAKEBASE_USER, LAKEBASE_PASSWORD  <- secret resources
+#   KAFKA_BOOTSTRAP, KAFKA_API_KEY, KAFKA_API_SECRET             <- secret resources
+#   KAFKA_SECURITY                                               <- plain value (SASL_SSL_PLAIN | SASL_SSL_MSK_IAM)
+#   STT_ENDPOINT, FAST_MODEL, SMART_MODEL, EMBED_MODEL      <- plain value / endpoint names
 resources:
   apps:
-    rt_demo_app:
-      name: realtime-demo
-      description: Grid operations telemetry — FastAPI + HTML polling at 100ms against Lakebase.
+    call_copilot_app:
+      name: ${var.app_name}
+      description: Live call copilot - WebSocket UI, copilot agent, suggestion cards.
       source_code_path: ../src/app
       resources:
         - name: lakebase-host
-          description: Postgres host
-          secret:
-            scope: ${var.secret_scope}
-            key: lakebase_host
-            permission: READ
+          description: Lakebase Postgres host
+          secret: {scope: "${var.secret_scope}", key: lakebase_host, permission: READ}
 
         - name: lakebase-db
-          description: Postgres database name
-          secret:
-            scope: ${var.secret_scope}
-            key: lakebase_db
-            permission: READ
+          description: Lakebase database name
+          secret: {scope: "${var.secret_scope}", key: lakebase_db, permission: READ}
 
         - name: lakebase-user
-          description: Postgres role
-          secret:
-            scope: ${var.secret_scope}
-            key: lakebase_user
-            permission: READ
+          description: Lakebase role
+          secret: {scope: "${var.secret_scope}", key: lakebase_user, permission: READ}
 
         - name: lakebase-password
-          description: Postgres password
-          secret:
-            scope: ${var.secret_scope}
-            key: lakebase_password
-            permission: READ
+          description: Lakebase role password
+          secret: {scope: "${var.secret_scope}", key: lakebase_password, permission: READ}
+
+        - name: kafka-bootstrap
+          description: Kafka bootstrap servers (Confluent endpoint or MSK IAM bootstrap string)
+          secret: {scope: "${var.secret_scope}", key: kafka_bootstrap, permission: READ}
+
+        # Kafka key/secret are needed only for SASL_SSL_PLAIN. For SASL_SSL_MSK_IAM,
+        # delete these two entries (the keys don't exist in the scope in that mode).
+        - name: kafka-api-key
+          description: Kafka API key (SASL_SSL_PLAIN only)
+          secret: {scope: "${var.secret_scope}", key: kafka_api_key, permission: READ}
+
+        - name: kafka-api-secret
+          description: Kafka API secret (SASL_SSL_PLAIN only)
+          secret: {scope: "${var.secret_scope}", key: kafka_api_secret, permission: READ}
+
+        - name: parakeet-stt
+          description: Route-optimized GPU STT endpoint (created by register_parakeet.py)
+          serving_endpoint: {name: "${var.parakeet_endpoint}", permission: CAN_QUERY}
+
+        - name: fast-llm
+          description: Perception model (haiku)
+          serving_endpoint: {name: "${var.fast_model}", permission: CAN_QUERY}
+
+        - name: smart-llm
+          description: Card composition model (sonnet)
+          serving_endpoint: {name: "${var.smart_model}", permission: CAN_QUERY}
+
+        - name: embedding
+          description: Embeddings for KB retrieval
+          serving_endpoint: {name: "${var.embed_model}", permission: CAN_QUERY}

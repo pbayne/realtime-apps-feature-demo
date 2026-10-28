@@ -1,11 +1,27 @@
+# Jobs. Two kinds of compute:
+#   - rtm_cluster (resources/cluster.yml): the continuous RTM job only.
+#   - batch job clusters below: setup, Delta history, KB index, scoring, Parakeet
+#     registration. Kept separate so batch work never takes RTM task slots.
 resources:
   jobs:
-    rt_demo_setup_job:
-      name: realtime-demo-setup
+    call_copilot_setup:
+      name: call-copilot-setup
+      description: Lakebase role, SPEC section 3 tables, NOTIFY trigger, Kafka topics, secrets. Idempotent. Run before the RTM job.
       max_concurrent_runs: 1
+      job_clusters:
+        - job_cluster_key: batch
+          new_cluster: &batch_cluster
+            spark_version: ${var.dbr_version}
+            node_type_id: ${var.batch_node_type}
+            num_workers: 1
+            data_security_mode: SINGLE_USER
+            single_user_name: ${workspace.current_user.userName}
+            runtime_engine: STANDARD
+            aws_attributes:
+              availability: ON_DEMAND
       tasks:
         - task_key: init
-          existing_cluster_id: ${resources.clusters.rt_demo_cluster.id}
+          job_cluster_key: batch
           notebook_task:
             notebook_path: ../src/notebooks/init.py
             base_parameters:
@@ -15,49 +31,124 @@ resources:
               pg_role: ${var.pg_role}
               pg_password: ${var.pg_password}
               secret_scope: ${var.secret_scope}
+              kafka_security: ${var.kafka_security}
+              kafka_topics: ${var.kafka_topics}
+              kafka_partitions: ${var.kafka_partitions}
+              kafka_replication_factor: ${var.kafka_replication_factor}
+              aws_region: ${var.aws_region}
 
-    rt_demo_job:
-      name: realtime-demo
+    call_copilot_rtm_enrich:
+      name: call-copilot-rtm-enrich
+      description: Kafka utterances -> RTM -> built-in enrichment -> Lakebase enrichments (native postgresql sink). Continuous; cancel to stop.
       max_concurrent_runs: 1
-      # Run is bounded by the stream task's awaitTermination(timeout) (default
-      # 1 h, see base_parameters.run_duration_seconds). `timeout_seconds` here
-      # is a job-level safety net in case the stream wedges before timeout.
-      timeout_seconds: 4000
-
-      # Both tasks run on the bundle-managed cluster declared in
-      # resources/cluster.yml. Reusing one All-Purpose cluster avoids the
-      # 3–5 min job-cluster boot per run.
-
+      # Continuous: no timeout. Stop with `databricks jobs cancel-run`.
       tasks:
-        - task_key: init
-          existing_cluster_id: ${resources.clusters.rt_demo_cluster.id}
+        - task_key: rtm_enrich
+          existing_cluster_id: ${resources.clusters.rtm_cluster.id}
           notebook_task:
-            notebook_path: ../src/notebooks/init.py
+            notebook_path: ../src/notebooks/rtm_enrich.py
             base_parameters:
-              project_id: ${var.project_id}
-              branch_name: ${var.branch_name}
-              database_name: ${var.database_name}
-              pg_role: ${var.pg_role}
-              pg_password: ${var.pg_password}
               secret_scope: ${var.secret_scope}
+              kafka_security: ${var.kafka_security}
+              utterances_topic: utterances
+              starting_offsets: latest
+              checkpoint_path: /Volumes/${var.catalog}/${resources.schemas.copilot_schema.name}/${resources.volumes.copilot_checkpoints.name}/rtm_enrich
+              rules_path: ${workspace.file_path}/src/notebooks/enrich_rules.json
+              lakebase_database: ${var.database_name}
+              sink_batchinterval: 50 milliseconds
+              sink_batchsize: "500"
 
-        - task_key: stream
-          depends_on:
-            - task_key: init
-          existing_cluster_id: ${resources.clusters.rt_demo_cluster.id}
+    call_copilot_delta_history:
+      name: call-copilot-delta-history
+      description: Kafka utterances and cards -> UC bronze Delta (micro-batch, not RTM). Continuous at a 5 s trigger.
+      max_concurrent_runs: 1
+      job_clusters:
+        - job_cluster_key: batch
+          new_cluster: *batch_cluster
+      tasks:
+        - task_key: delta_history
+          job_cluster_key: batch
           notebook_task:
-            notebook_path: ../src/notebooks/stream.py
+            notebook_path: ../src/notebooks/delta_history.py
             base_parameters:
-              # In `mode: development`, DAB prefixes UC resource names with
-              # `dev_<user>_…`; passing the resolved values keeps the notebook
-              # decoupled from the naming scheme.
-              checkpoint_path: /Volumes/${var.catalog}/${resources.schemas.rt_demo_schema.name}/${resources.volumes.rt_demo_checkpoints.name}/rt_demo
               secret_scope: ${var.secret_scope}
-              rows_per_second: "500"
-              run_duration_seconds: "3600"
-              # Native `format("postgresql")` sink flushes on `batchinterval`
-              # elapsed OR `batchsize` rows (default 1000), whichever hits
-              # first. Must be a Spark interval string using long-form
-              # unit names ("100 milliseconds", not "100" or "100 ms").
-              # See stream.py's widget docstring.
-              sink_batchinterval: "100 milliseconds"
+              kafka_security: ${var.kafka_security}
+              utterances_topic: utterances
+              cards_topic: cards
+              bronze_utterances_table: ${var.catalog}.${resources.schemas.copilot_schema.name}.bronze_utterances
+              bronze_cards_table: ${var.catalog}.${resources.schemas.copilot_schema.name}.bronze_cards
+              checkpoint_root: /Volumes/${var.catalog}/${resources.schemas.copilot_schema.name}/${resources.volumes.copilot_checkpoints.name}/delta_history
+              trigger_mode: processing_time
+
+    call_copilot_kb_index:
+      name: call-copilot-kb-index
+      description: src/app/playbooks/kb markdown -> Delta chunks -> Vector Search delta-sync index. Re-run when KB content changes.
+      max_concurrent_runs: 1
+      job_clusters:
+        - job_cluster_key: batch
+          new_cluster: *batch_cluster
+      tasks:
+        - task_key: build_kb_index
+          job_cluster_key: batch
+          notebook_task:
+            notebook_path: ../src/notebooks/build_kb_index.py
+            base_parameters:
+              uc_catalog: ${var.catalog}
+              uc_schema: ${resources.schemas.copilot_schema.name}
+              kb_dir: ${workspace.file_path}/src/app/playbooks/kb
+              vs_endpoint: ${var.vs_endpoint}
+              embedding_endpoint: ${var.embed_model}
+              index_name: kb_chunks_index
+
+    call_copilot_post_call_scoring:
+      name: call-copilot-post-call-scoring
+      description: Scores quiescent calls with ai_query() into gold_call_scores. Scheduled every 30 minutes.
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: "0 0/30 * * * ?"
+        timezone_id: UTC
+        pause_status: UNPAUSED
+      job_clusters:
+        - job_cluster_key: batch
+          new_cluster: *batch_cluster
+      tasks:
+        - task_key: post_call_scoring
+          job_cluster_key: batch
+          notebook_task:
+            notebook_path: ../src/notebooks/post_call_scoring.py
+            base_parameters:
+              uc_catalog: ${var.catalog}
+              uc_schema: ${resources.schemas.copilot_schema.name}
+              scoring_endpoint: ${var.smart_model}
+              idle_minutes: "15"
+              max_calls_per_run: "200"
+
+    call_copilot_parakeet_register:
+      name: call-copilot-parakeet-register
+      description: One-off (re-run on model upgrades). Registers Parakeet to UC and creates the route-optimized GPU endpoint.
+      max_concurrent_runs: 1
+      job_clusters:
+        - job_cluster_key: gpu
+          new_cluster:
+            spark_version: ${var.gpu_spark_version}
+            node_type_id: ${var.gpu_node_type}
+            num_workers: 0
+            data_security_mode: SINGLE_USER
+            single_user_name: ${workspace.current_user.userName}
+            spark_conf:
+              spark.master: local[*, 4]
+              spark.databricks.cluster.profile: singleNode
+            custom_tags:
+              ResourceClass: SingleNode
+      tasks:
+        - task_key: register_parakeet
+          job_cluster_key: gpu
+          notebook_task:
+            notebook_path: ../src/notebooks/register_parakeet.py
+            base_parameters:
+              uc_catalog: ${var.catalog}
+              uc_schema: ${resources.schemas.copilot_schema.name}
+              model_name: ${var.parakeet_model}
+              endpoint_name: ${var.parakeet_endpoint}
+              workload_type: GPU_MEDIUM
+              workload_size: Small

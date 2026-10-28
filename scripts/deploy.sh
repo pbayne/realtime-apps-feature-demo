@@ -1,33 +1,128 @@
 #!/usr/bin/env bash
+# Deploy the call-copilot bundle to a workspace.
+#
+# Usage:
+#   scripts/deploy.sh <databricks-profile> [catalog] [kafka_security]
+#     kafka_security: SASL_SSL_PLAIN (default, Confluent Cloud) | SASL_SSL_MSK_IAM
+#
+# Environment:
+#   DEPLOY_PARAKEET=1   also run the one-off Parakeet registration (GPU; needs quota)
+#   COPILOT_SCOPE       secret scope name (default call-copilot)
+#   BUNDLE_VAR_*        any bundle variable can be overridden, e.g. BUNDLE_VAR_project_id
+#
+# Order matters:
+#   1. secret scope + Kafka secrets (must exist before the setup job and app deploy)
+#   2. bundle validate, bundle deploy
+#   3. setup job  (Lakebase role/tables/trigger, Kafka topics, Lakebase secrets)
+#   4. app deploy (its secret bindings need the Lakebase keys written in step 3)
+#   5. KB index job (blocking)
+#   6. RTM enrichment job and Delta history job (continuous, --no-wait)
+#   7. optional Parakeet registration (blocking; creates the GPU endpoint)
+#
+# The generated Postgres password is stored in the secret scope by the setup job.
+# It is never printed.
 set -euo pipefail
 
-if [[ $# -lt 1 || $# -gt 2 ]]; then
-  echo "Usage: $0 <databricks-profile> [catalog]" >&2
+if [[ $# -lt 1 || $# -gt 3 ]]; then
+  echo "Usage: $0 <databricks-profile> [catalog] [kafka_security]" >&2
   exit 2
 fi
 
 profile=$1
 catalog=${2:-main}
-scope=realtime-demo
-password=$(openssl rand -hex 24)
+kafka_security=${3:-SASL_SSL_PLAIN}
+scope=${COPILOT_SCOPE:-call-copilot}
 
-if ! databricks secrets list-scopes --profile "$profile" -o json \
-  | jq -e --arg scope "$scope" '.scopes[]? | select(.name == $scope)' >/dev/null; then
-  databricks secrets create-scope "$scope" --profile "$profile"
-fi
+case "$kafka_security" in
+  SASL_SSL_PLAIN|SASL_SSL_MSK_IAM) ;;
+  *) echo "kafka_security must be SASL_SSL_PLAIN or SASL_SSL_MSK_IAM" >&2; exit 2 ;;
+esac
 
-for key in lakebase_host lakebase_db lakebase_user lakebase_password; do
-  printf '%s' placeholder | databricks secrets put-secret "$scope" "$key" --profile "$profile"
+for tool in databricks jq openssl; do
+  command -v "$tool" >/dev/null || { echo "missing required tool: $tool" >&2; exit 2; }
 done
 
+# Only read the bundle; never run from a path that could override it.
+cd "$(dirname "$0")/.."
+
+db() { databricks "$@" --profile "$profile"; }
+
+# --- 1. Secret scope and Kafka secrets ------------------------------------
+if ! db secrets list-scopes -o json | jq -e --arg s "$scope" '.[]? | select(.name == $s)' >/dev/null 2>&1 \
+   && ! db secrets list-scopes -o json | jq -e --arg s "$scope" '.scopes[]? | select(.name == $s)' >/dev/null 2>&1; then
+  db secrets create-scope "$scope"
+  echo "created secret scope '$scope'"
+fi
+
+have_secret() {
+  db secrets list-secrets "$scope" -o json \
+    | jq -e --arg k "$1" '(.secrets // .)[]? | select(.key == $k)' >/dev/null 2>&1
+}
+
+required_kafka=(kafka_bootstrap)
+[[ "$kafka_security" == "SASL_SSL_PLAIN" ]] && required_kafka+=(kafka_api_key kafka_api_secret)
+missing=()
+for key in "${required_kafka[@]}"; do
+  have_secret "$key" || missing+=("$key")
+done
+if (( ${#missing[@]} > 0 )); then
+  cat >&2 <<EOF
+Missing Kafka secrets in scope '$scope': ${missing[*]}
+Create them first (values never go in git):
+  databricks secrets put-secret $scope kafka_bootstrap --profile $profile
+EOF
+  if [[ "$kafka_security" == "SASL_SSL_PLAIN" ]]; then
+    cat >&2 <<EOF
+  databricks secrets put-secret $scope kafka_api_key --profile $profile
+  databricks secrets put-secret $scope kafka_api_secret --profile $profile
+EOF
+  fi
+  exit 1
+fi
+
+# The app's secret bindings need these keys to exist at deploy time. The setup job
+# overwrites them with real values. Placeholders are written only if absent.
+for key in lakebase_host lakebase_db lakebase_user lakebase_password lakebase_endpoint; do
+  if ! have_secret "$key"; then
+    printf '%s' placeholder | db secrets put-secret "$scope" "$key"
+  fi
+done
+
+# --- 2. Bundle variables and validate/deploy ------------------------------
+password=$(openssl rand -hex 24)
 export BUNDLE_VAR_catalog=$catalog
+export BUNDLE_VAR_secret_scope=$scope
+export BUNDLE_VAR_kafka_security=$kafka_security
 export BUNDLE_VAR_pg_password=$password
 
-databricks bundle validate --strict --target dev --profile "$profile"
-databricks bundle deploy --target dev --profile "$profile"
-databricks bundle run rt_demo_setup_job --target dev --profile "$profile"
-databricks bundle run rt_demo_app --target dev --profile "$profile"
-databricks bundle run rt_demo_job --target dev --no-wait --profile "$profile"
+db bundle validate --strict --target dev
+db bundle deploy --target dev
 
-echo "Deployment complete and the realtime job has started."
-echo "The generated database password was stored in secret scope '$scope'."
+# --- 3. Setup: Lakebase role, tables, trigger, Kafka topics, secrets -------
+db bundle run call_copilot_setup --target dev
+
+# --- 4. App (after the Lakebase keys are real) -----------------------------
+db bundle run call_copilot_app --target dev
+
+# --- 5. KB index (blocking; cheap) ----------------------------------------
+db bundle run call_copilot_kb_index --target dev
+
+# --- 6. Continuous jobs ----------------------------------------------------
+db bundle run call_copilot_rtm_enrich --target dev --no-wait
+db bundle run call_copilot_delta_history --target dev --no-wait
+
+# --- 7. Parakeet (opt-in) --------------------------------------------------
+if [[ "${DEPLOY_PARAKEET:-0}" == "1" ]]; then
+  db bundle run call_copilot_parakeet_register --target dev
+  echo "Parakeet registered. Note the data-plane URL printed by the job for the app."
+fi
+
+cat <<EOF
+
+Deployment complete.
+- Setup job, app, and KB index finished. RTM enrichment and Delta history are running (--no-wait).
+- Post-call scoring is scheduled every 30 minutes (UTC).
+- The Postgres password is stored in secret scope '$scope' under lakebase_password.
+- Restart the app once after the first setup run so it picks up the real secret values:
+    databricks apps stop call-copilot --profile $profile && databricks apps start call-copilot --profile $profile
+EOF

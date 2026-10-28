@@ -1,0 +1,23 @@
+# name: billing_dispute
+# playbook: contact_center
+# title: Duplicate charge dispute that escalates to a regulator complaint
+# expect: objection_pickup, suggested_response, compliance
+agent: Thank you for calling, you're through to billing support. May I start by confirming your identity?
+customer: Sure. My date of birth is the third of June, nineteen eighty-seven, and I'm at the address on the account.
+agent: Thanks, that's verified. What can I help you with today?
+customer: There's a wrong charge on my bill. I was charged twice for the same subscription this month, and I want that fixed.
+agent: I'm sorry about that. Can you tell me the amount and the date on the statement?
+customer: It's forty-nine pounds, both charged on the first and the fourth of this month.
+agent: Thank you, I can see both. Let me check for pending adjustments.
+customer: Why would I be charged twice? I've never changed my plan.
+agent: That usually happens when a payment retry is posted after a failed attempt. It's not supposed to double-bill, so I'll correct it.
+customer: Okay. So what happens to the money? Can I get a refund for the second one?
+agent: I can reverse the duplicate charge today. The refund goes back to the original card, and it usually takes five to ten business days.
+customer: Five to ten days? That's ridiculous. I've already had to chase this twice.
+agent: I understand the frustration, and I'm sorry you've had to call twice. I'll log a reference number for you now.
+customer: Fine, give me the reference number and tell me when I'll get confirmation by email.
+agent: The reference is in your confirmation email within the hour. Is there anything else on the account today?
+customer: Yes. This is the third time this year. If this happens again I'm going to make a complaint to the regulator.
+agent: Thank you for telling me. I'm going to log this as a formal complaint so it gets the right review, and you'll get a written acknowledgement.
+customer: Good. Make sure the complaint reference is in the email too.
+agent: I'll add it now. Thank you for your patience today.

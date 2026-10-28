@@ -1,256 +1,332 @@
-# Grid Operations Realtime App
+# Realtime Call Copilot — Databricks side
 
-## What the solution does
+Live call audio becomes sub-second transcripts, Kafka carries final utterances,
+Structured Streaming **Real-Time Mode (RTM)** enriches each utterance, and a
+Lakebase table plus Postgres `NOTIFY` push the result to the copilot app. The
+app turns it into suggestion cards for the agent or advisor. Contract:
+[`docs/SPEC.md`](docs/SPEC.md). This README covers the Databricks half
+(Workstream B): bundle, notebooks, jobs, the STT endpoint, and the batch jobs.
 
-End-to-end flow:
+## Architecture
 
-```
-rate source ──▶ Structured Streaming (Real-Time Mode) ──▶ Lakebase Postgres
-                                                                  │
-                                                                  ▼
-                                                       FastAPI (Databricks App)
-                                                                  │
-                                                                  ▼
-                                                       Browser polling at 100 ms
-```
+```mermaid
+flowchart LR
+  subgraph Browser / Audio
+    MIC[Mic or replay] -->|PCM16 16 kHz 100 ms| APP
+  end
+  subgraph Databricks App (Workstream A)
+    APP[FastAPI + WS UI + copilot agent]
+  end
+  APP -->|VAD window <= 30 s, base64 PCM16| STT[(Parakeet STT<br/>route-optimized GPU endpoint)]
+  STT -->|words + timestamps| APP
+  APP -->|final utterances JSON| K1[[Kafka: utterances]]
+  APP -->|cards JSON| K2[[Kafka: cards]]
 
-Success means **telemetry ingest → operator view remains below 500 ms**. In a representative AWS test workspace, the default settings measured approximately 130–200 ms. Treat those figures as illustrative, not a performance guarantee; cloud, region, workspace, and workload affect results.
+  K1 -->|RTM job, update mode, realTime 5 min| RTM[rtm_enrich.py<br/>built-in rules, sentiment, entities]
+  RTM -->|format postgresql, upsert call_id,seq| LB[(Lakebase Postgres)]
+  LB -->|AFTER INSERT/UPDATE trigger<br/>pg_notify enrichment_ready| APP
+  LB -->|live reads, writes| APP
 
-## Why Databricks
+  K1 -->|micro-batch 5 s| DH[delta_history.py]
+  K2 --> DH
+  DH --> BRZ[(UC bronze Delta<br/>bronze_utterances, bronze_cards)]
+  BRZ -->|every 30 min, idle calls| PCS[post_call_scoring.py<br/>ai_query]
+  PCS --> GOLD[(UC gold_call_scores)]
 
-- Real-Time Mode processes telemetry with sub-second latency.
-- The native Lakebase sink provides managed authentication, batching, retry, and idempotent upserts.
-- Lakebase serves operational reads to a Databricks App without adding an external database platform.
-- Unity Catalog governs persistent checkpoints and supporting data assets.
-- Declarative Automation Bundles make the environment repeatable and reviewable.
-
-## Layout
-
-```
-realtime-app-demo/
-├── databricks.yml                 # Bundle root: variables, targets
-├── resources/
-│   ├── lakebase.yml               # postgres_projects, schema, volume
-│   ├── cluster.yml                # All-Purpose cluster (RTM-configured)
-│   ├── job.yml                    # Triggered RTM job (init → stream tasks)
-│   └── app.yml                    # Databricks App + secret bindings
-└── src/
-    ├── notebooks/
-    │   ├── init.py                # Bootstrap: role, table, secrets, autovacuum
-    │   └── stream.py              # Rate → RTM → Lakebase native sink
-    └── app/                       # FastAPI + static HTML/canvas UI
-        ├── main.py
-        ├── app.yaml
-        ├── requirements.txt
-        └── static/index.html
+  KB[src/app/playbooks/kb/*.md] --> KBI[build_kb_index.py] --> VS[(Vector Search<br/>delta-sync, gte-large-en)]
+  VS -->|top-3 retrieval| APP
 ```
 
-## Workspace prerequisites
+ASCII summary of the Databricks path:
 
-The target workspace must satisfy all of the following:
-
-- **Unity Catalog enabled.** The bundle creates a schema + volume.
-- **Lakebase Autoscaling available.** Check via `databricks postgres list-projects` or the workspace UI's Compute → Lakebase panel.
-- **Databricks Apps enabled.**
-- **You have permission to** create All-Purpose clusters, UC schemas/volumes, secret scopes, and jobs.
-
-Cost note: Lakebase Autoscaling with `no_suspension: true` is billed continuously (the smallest setting, 0.5–1 CU, is about $0.50/h). The All-Purpose cluster the bundle creates (`m5d.large` × 2 on AWS) is about $0.30/h while running; it autoterminates after 120 min idle. Tear down when you're done — see "Tear down" below.
-
-### Classic-compute exception
-
-This asset intentionally does **not** run the streaming task on Serverless. The native Lakebase Structured Streaming sink is Public Preview and requires DBR 18.3+ on classic compute; Serverless and Lakeflow Spark Declarative Pipelines are not supported for this sink. The Databricks App and Lakebase remain managed/serverless services. Reassess this exception whenever the sink's support matrix changes, and archive or update the repository if it is no longer current.
-
-## Configure for your workspace
-
-The bundle is workspace-agnostic. The supported deployment path generates a unique password, seeds the required secret bindings, validates the bundle strictly, runs the short setup job, deploys the App, and starts the bounded realtime job without waiting for its one-hour run to finish:
-
-```bash
-./scripts/deploy.sh <your-profile-name> [catalog]
+```
+Kafka utterances (4 partitions, key=call_id)
+   └─► RTM cluster (classic, 2 x m5d.xlarge, Photon off, DBR 18.3)
+        readStream kafka → from_json → filter is_final → built-in enrich
+        → writeStream format("postgresql") upsertkey=call_id,seq
+        → trigger(realTime="5 minutes"), outputMode("update")
+             └─► Lakebase enrichments ──trigger──► pg_notify('enrichment_ready') ──► app
+Kafka utterances + cards ──► batch cluster ──► Delta bronze (5 s micro-batch)
+bronze ──► ai_query scoring (30 min) ──► gold_call_scores
+src/app/playbooks/kb ──► Delta chunks ──► Vector Search index (databricks-gte-large-en)
+Parakeet pyfunc ──► UC model ──► route-optimized GPU endpoint (A10G, no scale-to-zero)
 ```
 
-Requirements: Databricks CLI, `jq`, and `openssl`. The script always requires an explicit CLI profile and never stores the generated password in Git or prints it to the terminal.
+## Latency targets (SPEC section 7)
 
-The manual steps below explain what the script does and support troubleshooting.
+| Hop | Target | Where it is measured |
+|---|---|---|
+| STT first word | <= 0.8 s | app (`metrics.stt_first_word_ms`) |
+| Final utterance → enrichment row (RTM) | <= 300 ms | `enrichments.latency_ms` = `enriched_at_ms - emitted_at_ms` |
+| Customer final → card.start | <= 1.5 s | app |
+| card.done | <= 3 s | app |
 
-### 1. CLI profile
+`latency_ms` is written for every enrichment row. Track its p50/p95 with a
+query on `enrichments`. RTM's `realTime` trigger interval is a checkpoint
+interval, not a processing delay, so it does not add to this number. See
+[RTM overview](https://docs.databricks.com/aws/en/structured-streaming/real-time).
 
-Make sure your Databricks CLI has a profile configured for the target workspace. If you don't have one yet:
+## Prerequisites
 
-```bash
-databricks auth login --profile <your-profile-name>
+- Databricks workspace on AWS with Unity Catalog, Lakebase Autoscaling, Databricks
+  Apps, and Model Serving (GPU capacity for `g5.xlarge`, A10G).
+- A recent Databricks CLI (supports `bundle`, `apps`, `secrets`) with a profile for the target workspace (`databricks auth login --profile <name>`), `jq`, `openssl`, Python 3.11 with `uv` for tests.
+- Permission to create clusters, UC schemas and volumes, secret scopes, jobs, apps, serving endpoints, and Vector Search endpoints.
+- **Kafka**, one of:
+  - **Confluent Cloud** (`SASL_SSL_PLAIN`). Create a cluster, a service-account API key with
+    read/write on the topics, and the topics `utterances` and `cards` (4 partitions;
+    the setup job will create them if missing). Store the bootstrap endpoint and key/secret in the scope.
+  - **AWS MSK Serverless / IAM** (`SASL_SSL_MSK_IAM`). Use the IAM bootstrap string
+    (port 9098). The cluster instance profile must allow `kafka-cluster:Connect`,
+    `DescribeTopic`, `ReadData`, `WriteData`, `DescribeGroup`, `AlterGroup`. The Databricks Kafka auth doc
+    also covers a UC service credential as an alternative.
+    Note that the setup job's topic-creation step uses `aws-msk-iam-sasl-signer-python` on the driver. This path is **not yet exercised** (see Risks).
+- Secret scope (created by `scripts/deploy.sh`) containing the Kafka values:
+
+| Key | Mode | Value |
+|---|---|---|
+| `kafka_bootstrap` | both | Confluent bootstrap endpoint, or MSK IAM bootstrap string |
+| `kafka_api_key` | PLAIN | Confluent API key |
+| `kafka_api_secret` | PLAIN | Confluent API secret |
+
+Lakebase keys (`lakebase_host`, `_db`, `_user`, `_password`, `_endpoint`) are
+written by the setup job. Do not put them in git.
+
+## Kafka and RTM compatibility
+
+| Item | Confluent Cloud | MSK Serverless |
+|---|---|---|
+| RTM source | supported (Kafka) | supported as **source only** (docs) — fine here, since MSK is the source, not the sink |
+| Auth | SASL_SSL PLAIN with `kafkashaded.` login module | SASL_SSL, `AWS_MSK_IAM`, `shadedmskiam.` classes |
+| Topic creation | AdminClient, PLAIN | AdminClient, OAUTHBEARER (IAM signer) |
+| Status here | the primary path | implemented, **untested** against a live cluster |
+
+## Real-Time Mode restrictions (verified)
+
+Checked against Databricks docs at the time of writing. Re-check before a
+production release. The RTM overview and setup pages are current; some sections
+of the RTM reference were only available through summaries. The `postgresql`
+sink page returned 404 to the fetch tool, so its options were taken from a
+search summary of the Lakebase structured-streaming docs.
+
+| Constraint | Status | Source |
+|---|---|---|
+| Supported sources | Kafka, Event Hubs (Kafka API), Kinesis (source). **AWS MSK is source-only.** Delta, Pub/Sub, Pulsar are **not** supported. | [RTM reference](https://docs.databricks.com/aws/en/structured-streaming/real-time/reference) |
+| Supported sinks | Kafka, Event Hubs, `forEach` (ForeachWriter). Native Lakebase `format("postgresql")` sink for Lakebase (DBR 18+). | RTM reference; [Lakebase sink](https://docs.databricks.com/aws/en/structured-streaming/lakebase) (search summary) |
+| Output mode | `update` only. `append` and `complete` are not supported. | RTM reference |
+| `foreachBatch` | **Not supported.** `forEach` is. This is why `rtm_enrich.py` uses the native sink. | RTM reference |
+| Stateless ops | selection, projection, union supported. `mapPartitions` not. | RTM reference |
+| UDFs | Scala UDFs with limits. Python stateless scalar/pandas/Arrow UDFs supported, with `maxRecordsPerBatch=1` advised for latency. **Not** used here: enrichment is built-in functions only (see Risks). | RTM reference |
+| Aggregations | sum/count/min/max/avg and built-in aggregates supported. Not used by enrichment. | RTM reference |
+| Joins | stream-to-table only with broadcast ≤ 10 MB. Not used here. | RTM reference |
+| Delta source/sink | **Not supported** as RTM source or sink. Bronze writes are in `delta_history.py`, a separate micro-batch job. | RTM reference |
+| Cluster | classic, Dedicated or Standard (Python) access mode. Runtime 16.4+ for Kafka RTM setup. Autoscaling off, Photon off, spot off. `spark.databricks.streaming.realTimeMode.enabled=true`. | [RTM setup](https://docs.databricks.com/aws/en/structured-streaming/real-time/setup) |
+| Trigger | `.trigger(realTime="5 minutes")` in Python. Interval controls checkpointing, not delay. | RTM setup |
+| Task slots | Total slots ≥ number of tasks across all stages. With a Kafka topic, default parallelism = partitions (4 here). | RTM setup |
+| Serverless | Not supported for direct RTM queries. Serverless notebooks/jobs don't run this job. | RTM reference |
+| Lakebase sink options | `endpoint` (`project.branch[.endpoint]`), `database`, `dbtable` (`schema.table`), `batchinterval` (default 100 ms), `batchsize` (default 1000), `upsertkey`, `checkpointLocation`. Upsert uses `ON CONFLICT` on the PK. | [Lakebase sink](https://docs.databricks.com/aws/en/structured-streaming/lakebase) (search summary) |
+| Kafka auth options | `kafka.security.protocol`, `kafka.sasl.mechanism`, `kafka.sasl.jaas.config`, `kafka.sasl.client.callback.handler.class` (MSK IAM). Shaded classes: `kafkashaded.` (PLAIN), `shadedmskiam.` (IAM). | [Kafka authentication](https://docs.databricks.com/aws/en/connect/streaming/kafka/authentication) (search summary) |
+
+## Design choices
+
+- **Built-in functions only in the RTM job.** `rlike`, `regexp_extract_all`,
+  `filter`/`size` lambdas, `from_json`, `to_json`. A test
+  (`tests/notebooks/test_enrich_rules.py::test_enrichment_plan_is_streaming_and_has_no_python_udf_or_aggregation`)
+  fails if the analyzed plan gains a Python UDF, aggregate, join, or window.
+- **Shared rules file.** `src/notebooks/enrich_rules.json` is the single source. The RTM job loads it
+  with `rtm_lib.load_rules()`. Workstream A should load the same file in `src/app/enrich`
+  so the local stand-in and the RTM job apply identical rules.
+- **Upsert on PK.** `upsertkey=call_id,seq` matches the table's primary key, which the docs require.
+- **JSON-valued enrichment columns are `TEXT`**, not `JSONB`. The sink binds Spark strings;
+  an assignment from text to `jsonb` would fail without a cast. Switch if the sink's type mapping is confirmed.
+- **Two clusters.** The RTM cluster runs only the RTM job. Batch and streaming-to-Delta
+  jobs run on separate job clusters, so they never take RTM task slots.
+- **Fixed-cadence delta history.** `delta_history.py` uses `toTable()` on a plain
+  micro-batch stream with `processingTime="5 seconds"` (or `availableNow` for backfill). It has no `foreachBatch`.
+- **Route-optimized STT endpoint, created by notebook.** The DAB model-serving resource schema
+  was not verified for `route_optimized`, so `register_parakeet.py` creates it through the SDK.
+  The app declares `CAN_QUERY` on it as an app resource.
+
+## Parakeet STT endpoint
+
+### Request / response
+
+Request (one record per window, PCM16 LE, mono, 16 kHz, ≤ 30 s):
+
+```json
+{"dataframe_records": [{"audio_b64": "<base64 PCM16>", "offset_ms": 12340, "channel": "customer"}]}
 ```
 
-You'll pass `--profile <your-profile-name>` to every `bundle …` command below (or export `DATABRICKS_CONFIG_PROFILE=<name>` once per shell). The bundle's `dev` target intentionally has no host/profile baked in so the same bundle can target any workspace.
+Response:
 
-### 2. Pick a Unity Catalog
-
-Default is `main` (works on most workspaces). Override if your workspace uses a different catalog name, either by editing the `catalog` variable's default in `databricks.yml`, or via `export BUNDLE_VAR_catalog=<your_catalog>` at deploy time.
-
-### 3. (Azure / GCP only) Adjust the cluster spec
-
-The bundle creates the All-Purpose cluster automatically — no manual step on AWS. For non-AWS workspaces, edit `resources/cluster.yml`:
-
-- **Azure**: replace `aws_attributes` with `azure_attributes: { availability: ON_DEMAND_AZURE }` and change `node_type_id`/`driver_node_type_id` to e.g. `Standard_D4ds_v5`.
-- **GCP**: replace `aws_attributes` with `gcp_attributes: { use_preemptible_executors: false }` and use e.g. `n2-standard-4`.
-
-### 4. Pre-seed the secret scope (manual deployment only)
-
-The App resource validates that the four secret-binding keys exist at deploy time; the `init` notebook later rotates them to real values on first run.
-
-```bash
-databricks secrets create-scope realtime-demo
-for k in lakebase_host lakebase_db lakebase_user lakebase_password; do
-  echo "placeholder" | databricks secrets put-secret realtime-demo "$k"
-done
+```json
+{"predictions": [{
+  "text": "i want to think about the fees",
+  "words": [{"word": "i", "start_ms": 12340, "end_ms": 12420}],
+  "audio_ms": 4300,
+  "channel": "customer",
+  "model": "nvidia/parakeet-tdt-0.6b-v3"
+}]}
 ```
 
-Override `realtime-demo` if you renamed the `secret_scope` variable.
+The SPEC's streaming scheme (12 s rolling window, re-decoded every 0.4 s,
+LocalAgreement-2 commit) runs in the app's `stt/parakeet.py`. This endpoint only
+transcribes one window per call.
 
-### 5. Generate a Postgres password (required for manual deployment)
+### How the app calls it (route-optimized)
 
-```bash
-export BUNDLE_VAR_pg_password=$(openssl rand -hex 24)
+1. Create an OAuth M2M credential for a service principal (the App's SP, or a dedicated one).
+   Grant it `CAN_QUERY` on the endpoint. The App resource does this for the App's own SP.
+2. Exchange client credentials for a token at the workspace's OIDC endpoint
+   (`POST https://<workspace-host>/oidc/v1/token`, `grant_type=client_credentials`, `scope=all-apis`).
+3. Read the data-plane URL: `GET /api/2.0/serving-endpoints/parakeet-live` and
+   take `data_plane_info.query_info.endpoint_url`. `register_parakeet.py` prints
+   this block at the end of its run. **Field names are from memory and must be
+   checked against the printed output.**
+4. POST the request body to that URL. Do not use the workspace
+   `/serving-endpoints/<name>/invocations` path for route-optimized endpoints. Set the app
+   env `STT_ENDPOINT_URL` to it; `STT_ENDPOINT` (default `parakeet-live`) is used only when the
+   URL is unset.
+
+The app (`src/app/stt/parakeet.py`) sends exactly the request above, with `offset_ms` set to the
+window start and `channel` set to `agent` or `customer`. It reads word times as absolute call time,
+because the endpoint adds `offset_ms`.
+
+The app should cache the token and refresh before expiry.
+
+## Repository layout
+
 ```
-
-The bundle has no password default. Bundle validation fails if it is omitted, and the bootstrap task fails before making changes if it is shorter than 24 characters.
+databricks.yml                 bundle variables and the dev target (no host)
+resources/
+  cluster.yml                  RTM cluster (classic, fixed workers, RTM conf)
+  lakebase.yml                 Lakebase project, UC schema, checkpoint volume
+  job.yml                      setup, rtm_enrich, delta_history, kb_index, post_call_scoring, parakeet_register
+  app.yml                      Databricks App and its secret and serving-endpoint resources
+src/notebooks/
+  init.py                      Lakebase role, SPEC §3 tables, NOTIFY trigger, Kafka topics, secrets
+  rtm_lib.py                   shared pure functions (rules, enrichment expressions, Kafka options)
+  rtm_enrich.py                Kafka → RTM → native postgresql sink
+  delta_history.py             Kafka → Delta bronze (micro-batch, not RTM)
+  register_parakeet.py         NeMo pyfunc → UC; route-optimized GPU endpoint
+  build_kb_index.py            src/app/playbooks/kb → Delta → Vector Search index
+  post_call_scoring.py         ai_query scoring → gold_call_scores
+  enrich_rules.json            shared deterministic rules
+scripts/deploy.sh              preflight, bundle validate/deploy, ordered runs
+tests/notebooks/               pytest: rules, enrichment (local Spark), resources YAML
+```
 
 ## Deploy
 
-For brevity, set this once per shell:
+Deployment is one command. It needs the Kafka secrets in the scope, which are created out of band:
 
 ```bash
-export DATABRICKS_CONFIG_PROFILE=<your-profile-name>
-# (Optional) Only if your catalog isn't `main`:
-# export BUNDLE_VAR_catalog=<your_catalog>
+export DATABRICKS_CONFIG_PROFILE=<profile>
+# Kafka secrets first (values never go in git)
+databricks secrets create-scope call-copilot
+databricks secrets put-secret call-copilot kafka_bootstrap
+databricks secrets put-secret call-copilot kafka_api_key      # SASL_SSL_PLAIN only
+databricks secrets put-secret call-copilot kafka_api_secret   # SASL_SSL_PLAIN only
+
+scripts/deploy.sh <profile> <catalog> SASL_SSL_PLAIN          # or SASL_SSL_MSK_IAM
+DEPLOY_PARAKEET=1 scripts/deploy.sh <profile> <catalog> SASL_SSL_PLAIN   # also registers Parakeet (GPU)
 ```
 
-Then:
+Manual equivalent, in order:
 
 ```bash
-cd realtime-app-demo
-databricks bundle validate --strict --target dev
-databricks bundle deploy   --target dev
-
-# Deploy the app's source code. First time only — subsequent `bundle deploy`s
-# do this implicitly when source changes.
-databricks bundle run rt_demo_app --target dev
+databricks bundle validate --strict --target dev --profile <profile>
+databricks bundle deploy --target dev --profile <profile>
+databricks bundle run call_copilot_setup --target dev        # Lakebase + topics + secrets
+databricks bundle run call_copilot_app --target dev          # after the secrets are real
+databricks bundle run call_copilot_kb_index --target dev     # needs src/app/playbooks/kb/*.md
+databricks bundle run call_copilot_rtm_enrich --target dev --no-wait
+databricks bundle run call_copilot_delta_history --target dev --no-wait
+databricks bundle run call_copilot_parakeet_register --target dev   # once, GPU quota needed
 ```
 
-The second `bundle run` prints the deployed App URL — open it to confirm the UI loads (it'll show `stream stopped` until a stream run is going).
+Then restart the app once so it reads the real Lakebase secrets:
+`databricks apps stop call-copilot && databricks apps start call-copilot`.
 
-## Run
+**Stop the RTM job:** `databricks jobs list-runs --active-only`, then
+`databricks jobs cancel-run <run_id>`. The job has no timeout by design.
 
-```bash
-databricks bundle run rt_demo_job --target dev
-```
+## Secrets and env (app)
 
-This triggers one bounded job run: `init` provisions the Postgres role/table/secrets, then `stream` writes events for `run_duration_seconds` (default 3600 = 1 hour) and exits. After the first run completes, restart the App once so it picks up the now-real (non-placeholder) credentials from its env vars:
+Workstream A declares env in `src/app/app.yaml` with `valueFrom` against the
+resource names in `resources/app.yml`. Values never live in git.
 
-```bash
-databricks apps stop  realtime-demo
-databricks apps start realtime-demo
-```
-
-To re-run for another hour, just `databricks bundle run rt_demo_job --target dev` again.
-
-### Tune throughput or run length
-
-Both knobs live in `resources/job.yml` → `tasks[1].notebook_task.base_parameters`:
-
-- `rows_per_second` — 500 by default; 100–1000 still satisfies sub-second lag.
-- `run_duration_seconds` — 3600 (1 h) by default. Set lower for short demos, higher for soaks.
-- `sink_batchinterval` — max buffer hold time for the native sink (default `"100 milliseconds"`). Must be a Spark interval string with long-form unit names (e.g. `"100 milliseconds"`, `"1 second"`) — `"100"` fails with `INVALID_INTERVAL_FORMAT.MISSING_UNIT` and `"100 ms"` fails with `INVALID_INTERVAL_FORMAT.INVALID_UNIT`. Lower = less per-row latency; higher = fewer/larger commits. The sink also flushes at `batchsize` rows (default 1000), whichever hits first.
-
-Edit and redeploy; the next `bundle run rt_demo_job` picks up the new values.
-
-## Verify
-
-1. **Bundle deploy succeeds.**
-2. **Lakebase project provisioned** — Workspace UI ▸ Compute ▸ Lakebase ▸ `realtime-demo` shows `Active`.
-3. **Job run is healthy** — Workflows ▸ `realtime-demo` ▸ latest run: `init` SUCCESS, `stream` RUNNING (and will stay RUNNING for `run_duration_seconds` before terminating cleanly).
-4. **Rows are landing** — from any notebook attached to the cluster:
-   ```python
-   from pg8000 import dbapi
-   token = dbutils.secrets.get("realtime-demo", "lakebase_password")
-   conn = dbapi.connect(
-       host=dbutils.secrets.get("realtime-demo", "lakebase_host"),
-       port=5432,
-       database=dbutils.secrets.get("realtime-demo", "lakebase_db"),
-       user=dbutils.secrets.get("realtime-demo", "lakebase_user"),
-       password=token,
-       ssl_context=True,
-   )
-   cur = conn.cursor()
-   cur.execute("SELECT count(*), max(timestamp) FROM events")
-   print(cur.fetchone())
-   ```
-   The count should grow on every re-run.
-5. **App is reachable** — Apps UI ▸ `realtime-demo` is `Running`; the URL serves the page.
-6. **KPI under 500 ms** — "Ingest → serve" stays sub-half-second while the stream is up.
-
-## Tear down
-
-```bash
-databricks bundle destroy --target dev
-```
-
-Removes the cluster, job, app, schema, volume, and Lakebase project. **One manual step** still needed:
-
-```bash
-# The secret scope is created out-of-band, so `bundle destroy` doesn't remove it.
-databricks secrets delete-scope realtime-demo
-```
-
-## Why these choices
-
-| Choice | Why |
+| Env var | Resource name |
 |---|---|
-| Rate source | Synthetic; no external dependency; the `timestamp` field gives us a clean latency reference. |
-| Lakebase Autoscaling | Postgres-compatible, low-latency reads, scales to ~1 CU for the demo. |
-| Triggered job, two tasks (init → stream) | Stream is bounded by `awaitTermination(timeout)`; each run is one hour by default. Init runs once per run and is idempotent. |
-| DBR 18.3 Classic, Photon off, autoscale off | Real-Time Mode requirements + the native `format("postgresql")` sink needs DBR 18.3+. |
-| Bundle-managed All-Purpose cluster, not job cluster | Skips 3–5 min cluster boot per run; cluster autoterminates after 120 min idle. |
-| Native `format("postgresql")` streaming sink | Workspace-managed auth (no password on the streaming path), built-in batching, automatic retries on transient JDBC errors, upserts via the table's `PRIMARY KEY`. See the [Lakebase sink page](https://docs.databricks.com/aws/en/structured-streaming/lakebase). |
-| Password auth via secret scope (app only) | Databricks Apps runs in a separate security context and can't inherit workspace OAuth — the FastAPI app uses password auth with a Lakebase role. The streaming path uses workspace-managed OAuth via the native sink. |
-| Aggressive per-table autovacuum on `events` | Across successive runs the rate source resets `startTimeMs` and re-emits the same `id`s, turning INSERTs into hot-key UPDATEs. Autovacuum defaults are far too slow for this pattern — see the `databricks-spark-structured-streaming` skill's Lakebase-sink guidance. |
-| Plain HTML + canvas (no React/Recharts) | One file, no build step. |
-| Trigger `realTime="5 minutes"` | "5 minutes" is the long-running batch duration (sometimes called the checkpoint interval), not how often the trigger fires. RTM runs continuously between checkpoints. |
+| `LAKEBASE_HOST`, `LAKEBASE_DB`, `LAKEBASE_USER`, `LAKEBASE_PASSWORD` | `lakebase-host`, `lakebase-db`, `lakebase-user`, `lakebase-password` |
+| `KAFKA_BOOTSTRAP`, `KAFKA_API_KEY`, `KAFKA_API_SECRET` | `kafka-bootstrap`, `kafka-api-key`, `kafka-api-secret` |
+| `STT_ENDPOINT`, `STT_ENDPOINT_URL` (optional data-plane URL), `FAST_MODEL`, `SMART_MODEL`, `EMBED_MODEL` | plain values set on the App (defaults in `src/app/config.py`: `parakeet-live`, `databricks-claude-haiku-5-5`, `databricks-claude-sonnet-5-5`, `databricks-gte-large-en`) |
 
-## Common issues
+For MSK IAM, delete the two `kafka-api-*` resources in `resources/app.yml`.
 
-| Issue | Fix |
-|---|---|
-| `databricks bundle validate` fails with "profile not found" | Run `databricks auth login --profile <your-profile>` and retry. |
-| Bundle deploy fails: `Invalid secret resource …: Secret with scope realtime-demo and key … does not exist` | Run step 4 of "Configure for your workspace" (the secret-scope seeding). |
-| Init fails: `Provided authentication token is not a valid JWT encoding` connecting to Lakebase | The notebook session token is NOT a valid Lakebase Postgres credential. The notebook mints a short-lived JWT via `POST /api/2.0/postgres/credentials` and uses it as the admin password. |
-| Init fails: `database "<x>" does not exist` | The default Lakebase Autoscaling database is `databricks_postgres` (underscore). Don't override `database_name` unless you've also created that database in Lakebase. |
-| Init fails: `syntax error at or near "$1"` on `CREATE ROLE` | Postgres DDL doesn't accept bind parameters. The notebook inlines the password literal with escaping; don't replace with parameterised execute. |
-| Stream task: `Data source postgresql does not support streamed writing` | The workspace's DBR is < 18.3 — the native `format("postgresql")` streaming sink isn't registered. Bump `spark_version` in `resources/cluster.yml` to `18.3.x-scala2.13` or later. |
-| Stream task: `JDBC_STREAMING_SINK_INVALID_OPTIONS` | Typo in an option name passed to the native sink. Recognised options: `endpoint`, `dbtable`, `database`, `upsertkey`, `batchsize`, `batchinterval`, `checkpointLocation`. |
-| Stream is RUNNING but rows have stale timestamps for >60 s | The rate source persists `startTimeMs` in its checkpoint. The notebook clears the checkpoint dir at the top of the stream task; if you change that path, ensure the wipe still runs. |
-| Stream is RUNNING but no rows in `events` for >60 s | Probably an orphan stream from a previous run holding the checkpoint lock on the shared cluster. Cancel the active job run, restart the cluster from the Compute UI (or `databricks clusters restart <id>`), and trigger a fresh `bundle run rt_demo_job`. |
-| App KPI tile says `stream stopped` | The freshest event in Postgres is more than 5 s old — usually means the job's `run_duration_seconds` elapsed. Trigger another run. |
-| App page is stuck on `—` | Env vars haven't picked up the rotated secrets (true after the very first bundle deploy + run). Run `databricks apps stop && databricks apps start realtime-demo`. |
-| Lag display is > 1 s | Check the cluster: DBR ≥ 18.3 (native sink requires it), Photon off, autoscale off, ≥ 1 worker, `realTimeMode.enabled=true`, `sortBeforeRepartition=false`, trigger is `realTime="5 minutes"` (not `processingTime`). |
+## Cost notes
 
-## Dependencies and licenses
+- **RTM cluster.** Two `m5d.xlarge` workers plus a driver, on-demand, running the
+  whole time the RTM job runs. The 120-minute autotermination should not fire while the streaming job is active (confirm on first run).
+  Stop the job when no calls are live.
+- **Lakebase.** `no_suspension: true` at 0.5–2 CU. A warm endpoint is required:
+  a cold start on the sink adds latency to the first enrichment of each burst. Expect
+  continuous charges.
+- **GPU endpoint.** `GPU_MEDIUM` (A10G), `scale_to_zero_enabled=false`, always on.
+  This is the largest fixed cost. Scale-to-zero would break the STT first-word budget.
+- **Batch.** Post-call scoring runs every 30 minutes on a job cluster. It is idle-cheap.
+  Check current pricing before a demo; this README does not quote dollar figures.
 
-Only permissive dependencies allowed by the public-content policy are used directly.
+## Risks and open items
 
-| Library | Purpose | License | Source |
-|---|---|---|---|
-| FastAPI | App API | MIT | https://github.com/fastapi/fastapi |
-| Uvicorn | ASGI server | BSD-3-Clause | https://github.com/encode/uvicorn |
-| asyncpg | Async PostgreSQL client for the App | Apache-2.0 | https://github.com/MagicStack/asyncpg |
-| pg8000 | PostgreSQL client for bootstrap notebook | BSD-3-Clause | https://github.com/tlocke/pg8000 |
-| Databricks SDK for Python | Workspace identity and API client | Apache-2.0 | https://github.com/databricks/databricks-sdk-py |
-| Requests | HTTPS calls from the bootstrap notebook | Apache-2.0 | https://github.com/psf/requests |
+1. **`postgresql` sink details.** The docs page 404'd on direct fetch. Options and
+   the `endpoint` format come from a search summary. Verify on DBR 18.3 with a
+   tiny test that `upsertkey` works and that `TEXT` JSON columns accept Spark strings.
+2. **Python-regex vs Java-regex.** The rule patterns are common syntax. Spark
+   uses Java regex. Tests compile with Python `re` and run the rules under Spark's
+   Java engine. Keep patterns simple; add a Java check if rules get complex.
+3. **Sentiment tokenization.** The lexicon matches single tokens only. Multi-word
+   phrases ("not interested") won't score. The app's LLM perception covers those.
+4. **MSK IAM** driver-side topic creation (`aws-msk-iam-sasl-signer-python`) is not exercised.
+5. **Parakeet.** Not validated on real audio. The NeMo transcribe timestamp output
+   shape (`hyp.timestamp["word"]`) and the `.nemo` filename on Hugging Face are from memory.
+   Run `register_parakeet.py` once and check the smoke test output. Model quality and
+   first-word latency need a benchmark on the chosen GPU.
+6. **Route-optimized creation via SDK.** `route_optimized=True` and `data_plane_info`
+   field names are from memory. The notebook prints the response so they can be checked.
+7. **Model and runtime strings.** `gpu_spark_version` (`17.3.x-gpu-ml-scala2.13`) is a
+   placeholder. Confirm with `databricks clusters spark-versions`.
+8. **Vector Search app access.** Confirm the app's service principal can query the index
+   (UC `SELECT` on the index's source table plus the endpoint CAN_USE). The app resource list has
+   no UC securable entry for the index yet.
+9. **Enrichment columns beyond SPEC §3.** `latency_ms`, `emitted_at_ms`, and the
+   `entities` rule group are additions. These need to be reflected in `docs/SPEC.md` by its owner;
+   Workstream B was not permitted to edit SPEC.
+10. **Checkpoint compatibility.** Changing the RTM query shape (column list, sink options) can
+    require a new checkpoint path. Rename `rtm_enrich` in `resources/job.yml` to get one.
+11. **Single user.** SINGLE_USER access mode runs as the deploying user. The app's
+    service principal is separate. Acceptable for a demo; for production use a service principal.
 
-Transitive dependencies are checked for known vulnerabilities in CI with `pip-audit`. Any dependency change must update this table and receive license review before merge.
+## Tests
 
-## Maintenance and contribution
+```bash
+# App (local mode, no network, LLM disabled by conftest)
+.venv/bin/python -m pytest tests/app -q
 
-- Changes must arrive through a pull request; `main` is protected and requires review. The `quality` workflow must also pass once GitHub Actions is enabled for this repository by the organization.
-- A Databricks L7+ reviewer must participate in the initial publication review. Maintainers must record the approved reviewer in the PR.
-- Validate the demo against a currently supported DBR and its documented classic-compute exception at least every six months.
-- External contributions are not accepted directly. Open an issue so a Databricks maintainer can evaluate and reproduce the change.
+# Notebooks: rules, Spark expressions, bundle YAML. Spark tests skip when pyspark is absent.
+uv venv /tmp/cc-venv --python 3.11
+VIRTUAL_ENV=/tmp/cc-venv uv pip install -r tests/notebooks/requirements-dev.txt
+/tmp/cc-venv/bin/python -m pytest tests/notebooks -q
+
+# Frontend (use bun; the Homebrew node install is broken on the dev laptop)
+cd frontend && bun run typecheck && bun run build      # build writes src/app/static
+
+# Lint (ruff.toml: pyflakes, E4/E7/E9, import order)
+.venv/bin/python -m ruff check src/app tests/app tests/notebooks
+```
+
+CI (`.github/workflows/quality.yml`) runs the same three suites and fails if the committed
+`src/app/static` is stale.
+
+The Spark tests need Java 17 and the stock PyPI `pyspark==3.5.1`. A patched local pyspark
+that only supports Databricks Connect will not start a local session.

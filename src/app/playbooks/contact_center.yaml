@@ -1,0 +1,73 @@
+# Claims and billing contact-centre agent assist. Next-best-action, empathy and compliance.
+name: contact_center
+title: Contact centre agent assist
+persona: >
+  You assist a customer-service agent handling a claims or billing call. Suggest short,
+  empathetic responses grounded in policy, prompt the agent to confirm identity and close
+  the loop, and flag compliance risks immediately.
+kb_dir: kb/contact_center
+card_weights:
+  compliance: 1.0
+  objection_pickup: 0.95
+  suggested_response: 0.9
+  next_best_action: 0.8
+  next_question: 0.75
+  missing_info: 0.75
+  example: 0.5
+methodology:
+  items:
+    - key: identity_verified
+      label: Identity verified
+      keywords: [verify, verified, date of birth, postcode, security question, last four]
+      question: "Before I go further, can you confirm your date of birth and postcode?"
+    - key: issue
+      label: Issue captured
+      keywords: [issue, problem, charge, charged, bill, claim, happened]
+      question: "Can you walk me through what happened, starting with the charge or claim you're calling about?"
+    - key: resolution
+      label: Resolution offered
+      keywords: [refund, credit, waive, adjust, fix, resolve, reverse]
+      question: "I can look at a refund, a credit, or a reversal. Which would you prefer?"
+    - key: next_step
+      label: Next step agreed
+      keywords: [next step, follow up, follow-up, reference, ticket, email, timeline]
+      question: "I'll log a reference number and confirm the timeline by email. Is that the best contact?"
+objections:
+  - key: billing_dispute
+    patterns:
+      - "\\b(wrong (charge|amount|bill)|double charged|shouldn'?t have been charged)\\b"
+    kb_ref: kb/contact_center/billing_disputes.md
+  - key: affordability
+    patterns:
+      - "\\b(can'?t afford|struggling to pay|not in my budget)\\b"
+    kb_ref: kb/contact_center/payment_plans.md
+  - key: cancel_intent
+    patterns:
+      - "\\b(cancel (my|the|this)|switch(ing)? (provider|company|to another)|going elsewhere)\\b"
+    kb_ref: kb/contact_center/retention_offers.md
+compliance:
+  - key: complaint
+    title: "Compliance: complaint handling"
+    message: "Customer mentioned a complaint, regulator or legal action. Acknowledge, do not argue, and log it under the complaints procedure before continuing."
+    patterns: []
+  - key: vulnerability
+    title: "Vulnerable customer protocol"
+    message: "Possible vulnerability disclosed. Slow down, offer the vulnerable-customer team, and avoid pressure to pay today."
+    patterns: []
+  - key: unsupported_claim
+    title: "Compliance: no promises"
+    message: "Do not promise refunds, outcomes or timelines you cannot confirm. Say the team will confirm in writing."
+    patterns:
+      - "\\b(risk[- ]free|guaranteed (refund|approval))\\b"
+  - key: pii_disclosed
+    title: "Compliance: sensitive data"
+    message: "Full sensitive identifier was read out. Do not repeat it; use the secure verification step."
+    patterns: []
+prompts:
+  perception: |
+    You analyse one turn of a claims or billing support call. Be literal and conservative.
+    Output only the requested JSON.
+  compose: |
+    You coach a customer-service agent on a live call. Write one card body under 35 words:
+    empathetic, direct, policy-grounded. Use only the reference for policy facts. No promises
+    you cannot back. No preamble, no quotes.

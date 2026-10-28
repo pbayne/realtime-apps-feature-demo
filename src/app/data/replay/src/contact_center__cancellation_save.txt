@@ -1,0 +1,22 @@
+# name: cancellation_save
+# playbook: contact_center
+# title: Cancellation with affordability pressure and a risk-free claim
+# expect: objection_pickup, compliance, suggested_response
+agent: Hi, thanks for holding. I can help with your account. First, can you confirm your postcode and the last four digits of your account number?
+customer: It's the postcode on file and the account ends in four four two one.
+agent: Thank you, you're verified. How can I help today?
+customer: I want to cancel my plan. It's too expensive and honestly I'm switching to another company next month.
+agent: I'm sorry to hear that. Can you tell me what's driven the decision? Is it the price, the service, or something else?
+customer: It's mostly the price. I'm paying more than the competitor is offering for the same features.
+agent: I understand. I can check a downgrade to a lower plan that keeps the core service, or a reduced rate for a few months.
+customer: Hmm, what's the catch? Would I still be locked into a contract?
+agent: There's no lock-in on the downgrade, and I'll confirm the terms before anything changes.
+customer: Okay, I might be interested. But I can't afford to pay more than thirty pounds a month right now.
+agent: That's helpful. A plan at that price keeps the main features, and I can set up a payment plan for the first month.
+customer: What about the switch-over? Is there a risk-free trial if I move to the other company?
+agent: This is a risk-free trial for the next month, so you have nothing to lose by trying it.
+customer: Right. Can you put the downgrade in writing and send me the terms by email?
+agent: Yes, I'll email the terms today. Shall I apply the downgrade now and keep the old plan running until the end of the month?
+customer: Yes, do that. Make sure my date of birth isn't on the email, it's not safe to send it.
+agent: Agreed. I've applied the downgrade and I'll confirm the reference number by email within the hour. Anything else?
+customer: No, that's all. Thanks for sorting it out.

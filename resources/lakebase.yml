@@ -1,28 +1,29 @@
 resources:
   postgres_projects:
-    rt_demo_lakebase:
+    copilot_lakebase:
       project_id: ${var.project_id}
-      display_name: Realtime Demo
+      display_name: Call copilot
       pg_version: 17
+      # Always-on: the RTM sink and the app both need a warm endpoint. Suspending
+      # it adds a cold-start to the first enrichment write.
       default_endpoint_settings:
         autoscaling_limit_min_cu: 0.5
-        autoscaling_limit_max_cu: 1
+        autoscaling_limit_max_cu: 2
         no_suspension: true
 
   schemas:
-    rt_demo_schema:
+    copilot_schema:
       catalog_name: ${var.catalog}
-      name: realtime_demo
-      comment: Realtime app demo — checkpoint volume and supporting UC objects.
+      name: ${var.uc_schema}
+      comment: Call copilot - checkpoints, bronze and gold Delta tables, KB chunks, Parakeet model.
 
   volumes:
-    rt_demo_checkpoints:
+    copilot_checkpoints:
       catalog_name: ${var.catalog}
-      schema_name: ${resources.schemas.rt_demo_schema.name}
+      schema_name: ${resources.schemas.copilot_schema.name}
       name: checkpoints
       volume_type: MANAGED
 
-  # The secret scope `realtime-demo` and its four placeholder keys are created
-  # out-of-band (one-time per workspace) — see the prerequisites section in
-  # README.md. They aren't DAB resources because the app's secret bindings
-  # need the keys to exist at deploy time.
+  # The secret scope and Kafka secrets are created out of band before the first deploy
+  # (scripts/deploy.sh does this). They aren't DAB resources: the app secret bindings
+  # require the keys to exist at deploy time. See README "Secrets".

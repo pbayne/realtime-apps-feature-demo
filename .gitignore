@@ -7,6 +7,17 @@ __pycache__/
 *.pyo
 .env
 .venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Frontend (built output lives in src/app/static, which is committed)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Logs
+*.log
 
 # macOS
 .DS_Store

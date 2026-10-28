@@ -1,0 +1,28 @@
+# name: market_timing
+# playbook: advisor_coach
+# title: Market-timing fear, think-about-it, and a guarantee question
+# expect: objection_pickup, compliance, suggested_response
+agent: Thanks for coming in, Mark. Tell me a bit about what prompted you to look at this now.
+customer: We sold the house last year and have about four hundred thousand in cash sitting in a savings account. We'd like it invested for the long term.
+agent: Congratulations on the sale. What's the goal for that money? Is it for retirement, for the kids, or something else?
+customer: Mostly retirement. I'm fifty five, so I'd like to retire by sixty five, maybe sooner if things go well.
+agent: Got it, so roughly ten years. How comfortable are you with the value going down for a while in exchange for growth?
+customer: I'm moderately comfortable. I've lived through a couple of downturns, I just don't want a big drop right before I retire.
+agent: That's a sensible concern. How much of the four hundred thousand is needed in the next few years for living costs?
+customer: Maybe fifty thousand. The rest I'd like invested.
+agent: Thanks. Walk me through the other accounts you have today.
+customer: I have a pension from my last employer and a 401k with about two hundred thousand. My wife has her own retirement savings too.
+agent: Good. And what does your wife think about investing the sale proceeds?
+customer: She wants to talk about it together, so she'd need to be in on the decision.
+agent: Let's include her in the next conversation. Now, what's your monthly income, and how much could you put toward the plan each month?
+customer: My income is steady and I could put in about one thousand a month, but honestly the market looks really high right now.
+agent: Tell me more about that. What worries you about investing today?
+customer: I think I'd rather wait until the market calms down. Waiting for a correction seems safer than investing at these levels.
+agent: That's a common feeling. Nobody can reliably time the market, including us. We can spread the investment over several months to reduce the timing risk.
+customer: Interesting. Is it guaranteed that I won't lose money if I wait for the dip?
+agent: No investment is guaranteed, and results depend on markets and choices. I'll walk you through the disclosures so you can see the risks in writing.
+customer: Okay. I think I want to think about it and talk it over with my wife before we decide anything.
+agent: Completely fair. Would it help if I sent you the plan summary and the disclosures in advance?
+customer: Yes, please send them. We'll talk it over this weekend.
+agent: Perfect. I'll send the materials today and we can reconnect Thursday.
+customer: Thanks, that sounds good.

@@ -1,36 +1,108 @@
 bundle:
-  name: realtime_app_demo
+  name: call_copilot
 
+# Everything environment-specific is a variable. Supply secrets and overrides via
+# BUNDLE_VAR_<name> env vars (scripts/deploy.sh does this) or --var flags.
 variables:
   catalog:
-    description: Unity Catalog that hosts the schema and checkpoint volume.
+    description: Unity Catalog catalog for the schema, checkpoint volume, bronze/gold tables, and models.
     default: main
+  uc_schema:
+    description: UC schema that holds bronze/gold tables, the checkpoint volume, the KB table, and the Parakeet model.
+    default: call_copilot
+  app_name:
+    description: Databricks App name.
+    default: call-copilot
+
+  # --- Lakebase (Autoscaling Postgres) -------------------------------------
   project_id:
-    description: Lakebase Autoscaling project slug. Must be globally unique within the workspace.
-    default: realtime-demo
+    description: Lakebase Autoscaling project id. Must be unique within the workspace.
+    default: call-copilot
   branch_name:
-    description: Lakebase branch. Created automatically as `production` on project creation.
+    description: Lakebase branch the sink and app write to.
     default: production
   database_name:
-    description: Default database name in a new Lakebase Autoscaling project.
+    description: Postgres database inside the Lakebase project.
     default: databricks_postgres
   pg_role:
-    description: Postgres role used by both the streaming sink and the FastAPI app.
-    default: demo_writer
+    description: Postgres role used by the RTM sink and the app (one role in this build).
+    default: copilot_writer
   pg_password:
-    description: Strong password for `pg_role`. Required; generate a unique value for every deployment.
+    description: Strong password for pg_role (>= 24 chars). No default on purpose; deploy.sh generates one per deployment.
+
+  # --- Secrets and Kafka ----------------------------------------------------
   secret_scope:
-    description: Databricks secret scope holding Lakebase connection credentials.
-    default: realtime-demo
+    description: Secret scope holding Lakebase and Kafka connection values (see README "Secrets").
+    default: call-copilot
+  kafka_security:
+    description: "Kafka auth mode: SASL_SSL_PLAIN (Confluent Cloud) or SASL_SSL_MSK_IAM (AWS MSK Serverless / IAM)."
+    default: SASL_SSL_PLAIN
+  kafka_topics:
+    description: Comma-separated topics the setup job creates if missing.
+    default: utterances,cards
+  kafka_partitions:
+    description: Partitions per topic. Keep 4 to match the RTM sizing in resources/cluster.yml.
+    default: "4"
+  kafka_replication_factor:
+    description: Replication factor for new topics (MSK / Confluent require >= 3 on multi-AZ clusters).
+    default: "3"
+  aws_region:
+    description: AWS region, used only for MSK IAM token generation.
+    default: us-east-1
+
+  # --- Compute --------------------------------------------------------------
+  dbr_version:
+    description: Databricks Runtime for RTM and batch clusters. RTM Kafka needs 16.4+; the Lakebase sink needs 18.3+.
+    default: 18.3.x-scala2.13
+  rtm_node_type:
+    description: Node type for the RTM cluster (AWS). Workers must give >= 2 cores per Kafka partition (8 cores for 4 partitions).
+    default: m5d.xlarge
+  rtm_num_workers:
+    description: RTM worker count. Fixed (autoscale must be off). 2 x m5d.xlarge = 8 worker cores.
+    default: "2"
+  batch_node_type:
+    description: Node type for batch and streaming-to-Delta jobs (AWS).
+    default: m5d.xlarge
+  gpu_node_type:
+    description: GPU node type for the one-off Parakeet registration job (AWS g5 = A10G).
+    default: g5.xlarge
+  gpu_spark_version:
+    description: GPU ML runtime for register_parakeet. Verify the exact string in your workspace (databricks clusters spark-versions).
+    default: 17.3.x-gpu-ml-scala2.13
+
+  # --- Models and serving ---------------------------------------------------
+  parakeet_endpoint:
+    description: Route-optimized GPU serving endpoint name for Parakeet STT (created by register_parakeet.py).
+    default: parakeet-live
+  parakeet_model:
+    description: UC model name (under catalog.uc_schema) for the Parakeet pyfunc.
+    default: parakeet_tdt_v3
+  fast_model:
+    description: Fast LLM serving endpoint for perception (SPEC FAST_MODEL).
+    default: databricks-claude-haiku-5-5
+  smart_model:
+    description: Smart LLM serving endpoint for card composition and post-call scoring (SPEC SMART_MODEL).
+    default: databricks-claude-sonnet-5-5
+  embed_model:
+    description: Embedding endpoint for the KB Vector Search index (SPEC EMBED_MODEL).
+    default: databricks-gte-large-en
+  vs_endpoint:
+    description: Vector Search endpoint name.
+    default: call-copilot-vs
 
 include:
   - resources/*.yml
 
-# Targets are workspace-agnostic. Pass `--profile <name>` at deploy time to
-# select which workspace to hit (or set `DATABRICKS_CONFIG_PROFILE`); the
-# `cluster_id` variable is required. See README's "Configure for your
-# workspace" section. Clone `dev` to add `prod`, `staging`, etc.
+# src/app/playbooks (KB markdown read by build_kb_index.py) syncs with the app source.
+sync:
+  exclude:
+    - "**/*.pyc"
+    - tests/**
+    - frontend/node_modules/**
+
 targets:
   dev:
     default: true
     mode: development
+    # No host or profile here on purpose. Pick the workspace at deploy time with
+    # --profile <name> or DATABRICKS_CONFIG_PROFILE, so the same bundle targets any workspace.

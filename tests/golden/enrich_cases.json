@@ -1,0 +1,19 @@
+[
+  {"text": "No one can guarantee investment returns, and past performance does not predict results.", "speaker": "agent", "risk_flags": []},
+  {"text": "Returns are not guaranteed.", "speaker": "agent", "risk_flags": []},
+  {"text": "I can't guarantee what the market will do next year.", "speaker": "agent", "risk_flags": []},
+  {"text": "No investment is guaranteed, including this one.", "speaker": "agent", "risk_flags": []},
+  {"text": "We cannot guarantee any particular outcome.", "speaker": "agent", "risk_flags": []},
+  {"text": "Nothing is guaranteed in markets, so let's plan for a range.", "speaker": "agent", "risk_flags": []},
+  {"text": "This fund is not guaranteed by the government.", "speaker": "agent", "risk_flags": []},
+  {"text": "We don't guarantee returns.", "speaker": "agent", "risk_flags": []},
+  {"text": "This fund is guaranteed to outperform.", "speaker": "agent", "risk_flags": ["unsupported_claim"]},
+  {"text": "I guarantee you'll double your money.", "speaker": "agent", "risk_flags": ["unsupported_claim"]},
+  {"text": "No one can guarantee returns, but we guarantee the fee cap.", "speaker": "agent", "risk_flags": ["unsupported_claim"]},
+  {"text": "Our returns are guaranteed every year.", "speaker": "agent", "risk_flags": ["unsupported_claim"]},
+  {"text": "It's a risk-free investment.", "speaker": "agent", "risk_flags": ["unsupported_claim"]},
+  {"text": "Honestly you can't lose with this one.", "speaker": "customer", "risk_flags": ["unsupported_claim"]},
+  {"text": "The complaint is with the regulator.", "speaker": "customer", "risk_flags": ["complaint"]},
+  {"text": "What do you charge? That sounds too expensive.", "speaker": "customer", "risk_flags": [], "objection": "fees"},
+  {"text": "Our fees are very competitive.", "speaker": "agent", "risk_flags": [], "objection": null}
+]

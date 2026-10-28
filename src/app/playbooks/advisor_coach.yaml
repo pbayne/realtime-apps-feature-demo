@@ -1,0 +1,87 @@
+# Wealth-advisor discovery coach (Fisher-style). Copilot guides the advisor through
+# a discovery call: goals, time horizon, risk tolerance, assets, budget, decision makers,
+# and handles the common objections. All KB text is illustrative, not firm policy.
+name: advisor_coach
+title: Wealth advisor discovery coach
+persona: >
+  You are a live coach for a wealth advisor running a first discovery meeting with a prospect.
+  You help the advisor learn the prospect's goals and situation, answer product and fee
+  questions from the knowledge base, and handle objections without pressure.
+kb_dir: kb/advisor_coach
+card_weights:
+  compliance: 1.0
+  objection_pickup: 0.95
+  suggested_response: 0.9
+  next_best_action: 0.7
+  next_question: 0.8
+  missing_info: 0.75
+  example: 0.5
+methodology:
+  items:
+    - key: goals
+      label: Goals
+      keywords: [retire, retirement, goal, goals, college, house, legacy, sabbatical]
+      question: "What would a good outcome look like for you in five or ten years?"
+    - key: time_horizon
+      label: Time horizon
+      keywords: [horizon, years, until, before, later]
+      question: "When do you expect to need this money, and is it all on the same timeline?"
+    - key: risk_tolerance
+      label: Risk tolerance
+      keywords: [risk, volatile, volatility, conservative, aggressive, sleep]
+      question: "If the portfolio dropped 20 percent in a bad year, what would you most likely do?"
+    - key: assets
+      label: Assets
+      keywords: [401k, ira, brokerage, savings, pension, portfolio, property, accounts]
+      question: "Roughly what do you have today across retirement accounts, savings, and investments?"
+    - key: budget
+      label: Income and savings
+      keywords: [income, salary, budget, contribute, contribution, monthly]
+      question: "How much can you comfortably set aside each month?"
+    - key: decision_makers
+      label: Decision makers
+      keywords: [spouse, husband, wife, partner, decide, together, family]
+      question: "Who else is involved in decisions about the money, and would they join the next meeting?"
+objections:
+  - key: fees
+    patterns:
+      - "\\b(what do you charge|fee schedule|basis points|bps|percent of (my|the) assets)\\b"
+      - "\\b(too expensive|pricey|high fees)\\b"
+    kb_ref: kb/advisor_coach/fee_objections.md
+  - key: think_about_it
+    patterns:
+      - "\\bsend me (some )?(information|materials|details)\\b"
+      - "\\bdiscuss (it|this) with (my|our)\\b"
+    kb_ref: kb/advisor_coach/think_about_it.md
+  - key: market_timing
+    patterns:
+      - "\\b(market (is|looks) (really |too )?(high|expensive)|wait for (a )?(dip|correction))\\b"
+      - "\\b(what if (it|the market) (drops|crashes))\\b"
+    kb_ref: kb/advisor_coach/market_timing.md
+  - key: existing_advisor
+    patterns:
+      - "\\b(i (already )?(have|work with) (an? )?(advisor|planner))\\b"
+    kb_ref: kb/advisor_coach/existing_advisor.md
+compliance:
+  - key: unsupported_claim
+    title: "Compliance: no guarantees"
+    message: "Do not guarantee returns or outcomes. Say that results depend on markets and that past performance does not predict future results. Offer to walk through the disclosures."
+    patterns:
+      - "\\b(can'?t lose|no risk|sure thing)\\b"
+  - key: complaint
+    title: "Compliance: complaint or regulator"
+    message: "The prospect raised a complaint or regulator. Stop the pitch, note it verbatim, and hand off to compliance per the complaints procedure."
+    patterns: []
+  - key: pii_disclosed
+    title: "Compliance: sensitive data"
+    message: "Sensitive identifiers were spoken aloud. Do not repeat them. Move to the secure intake form."
+    patterns: []
+prompts:
+  perception: |
+    You analyse one turn of a wealth-management discovery call. The customer is the prospect.
+    Be literal. Output only the requested JSON.
+  compose: |
+    You coach a financial advisor during a live discovery call. Write the card body the advisor
+    should see: plain, warm, under 35 words, no legal promises, no quotes, no preamble. Use the
+    reference for facts. If the reference does not answer the question, tell the advisor to say
+    they will confirm and follow up.

@@ -1,0 +1,8 @@
+# Lint scope for CI: real errors (pyflakes), syntax-level pycodestyle errors, and import order.
+# Style-upgrade rules (UP/RUF/S/SIM/TRY) are intentionally off; the codebase targets Python 3.11.
+target-version = "py311"
+line-length = 120
+extend-exclude = ["src/app/static", "frontend", ".venv"]
+
+[lint]
+select = ["E4", "E7", "E9", "F", "I"]

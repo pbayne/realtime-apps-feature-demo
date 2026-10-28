@@ -9,7 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  app:
+    name: App (Python) lint, tests, audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -17,16 +18,56 @@ jobs:
         with:
           enable-cache: true
       - name: Install application and quality dependencies
-        run: uv pip install --system -r src/app/requirements.txt pytest ruff pip-audit
+        run: uv pip install --system -r src/app/requirements.txt -r tests/app/requirements-dev.txt ruff pip-audit
       - name: Lint
-        run: ruff check src/app tests
-      - name: Test
-        run: pytest -q
+        run: ruff check src/app tests/app tests/notebooks
+      - name: Test (src/app, local mode, no network)
+        run: pytest -q tests/app
       - name: Audit dependencies
         run: pip-audit -r src/app/requirements.txt
       - name: Reject credentials and private keys
         run: |
           if rg -n '(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|gh[opsu]_[A-Za-z0-9]{30,}|dapi[0-9a-f]{32})' --glob '!*.md' .; then
             echo 'Potential credential detected'
+            exit 1
+          fi
+
+  notebooks:
+    name: Databricks notebooks (rules, Spark expressions, bundle)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install notebook test dependencies (pyspark needs Java 17)
+        run: uv pip install --system -r tests/notebooks/requirements-dev.txt
+      - name: Test notebooks
+        # Spark-backed tests skip themselves when pyspark is missing (importorskip), so a
+        # runner without Spark reports skips instead of failing.
+        run: pytest -q tests/notebooks
+
+  frontend:
+    name: Frontend typecheck and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.0"
+      - name: Install
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+      - name: Typecheck and build into src/app/static
+        working-directory: frontend
+        run: bun run typecheck && bun run build
+      - name: Built UI must match the committed src/app/static
+        run: |
+          if ! git diff --exit-code -- src/app/static; then
+            echo 'src/app/static is stale: run `bun run build` in frontend/ and commit the result.'
             exit 1
           fi

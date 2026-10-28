@@ -1,0 +1,46 @@
+{
+  "_comment": "Shared deterministic enrichment rules. Loaded by src/notebooks/rtm_lib.py (RTM job, Spark built-ins only) and intended to be loaded by src/app/enrich (Workstream A) so both sides apply identical rules. All patterns are case-insensitive regexes using the common subset of Java and Python re syntax. An optional per-item `exclude_patterns` list removes negated or disclaimer phrasing (e.g. 'no one can guarantee') from the text before that item's `patterns` are tested; both sides replace every exclude match with a space. Add rules here, never in code.",
+  "objections": [
+    {"key": "fees", "patterns": ["\\bfees?\\b", "\\bcharges?\\b", "\\bcommissions?\\b", "\\bhow much (does|do) (it|that|you) cost\\b", "\\bexpensive\\b"]},
+    {"key": "think_about_it", "patterns": ["\\bthink (about )?(it|this)\\b", "\\blet me (think|sleep on)\\b", "\\bget back to you\\b", "\\bnot (ready|sure) (yet|now)\\b"]},
+    {"key": "market_timing", "patterns": ["\\bwait (until|for) (the )?market\\b", "\\bmarket is (too )?(high|volatile|crashing|down)\\b", "\\bbad time\\b", "\\btiming\\b"]},
+    {"key": "existing_advisor", "patterns": ["\\balready (have|work with) (an? )?(advis(or|er)|planner|broker)\\b", "\\bmy (current |other )?(advis(or|er)|planner|broker)\\b"]},
+    {"key": "affordability", "patterns": ["\\bcan'?t afford\\b", "\\bnot in (my|the) budget\\b", "\\btoo much money\\b"]},
+    {"key": "billing_dispute", "patterns": ["\\bwrong (charge|amount|bill)\\b", "\\bdispute\\b", "\\bovercharged\\b"]}
+  ],
+  "risk": [
+    {"key": "complaint", "patterns": ["\\bcomplain(t|ing)?\\b", "\\bombudsman\\b", "\\bregulator\\b", "\\blawyer\\b", "\\bsolicitor\\b", "\\bsue\\b"]},
+    {"key": "vulnerability", "patterns": ["\\bpassed away\\b", "\\bdiagnos(ed|is)\\b", "\\bjust lost (my )?job\\b", "\\bcan'?t (pay|afford) (the|my)\\b", "\\bstruggling\\b", "\\bhardship\\b"]},
+    {"key": "fraud_indicator", "patterns": ["\\bchange (my |the )?(bank )?(account|details)\\b", "\\bwire (it|the money)\\b", "\\bnever (made|applied for) (that|this)\\b"]},
+    {"key": "unsupported_claim", "patterns": ["\\bguarantee(d|s)?\\b", "\\brisk[- ]free\\b", "\\bno risk\\b", "\\bsure thing\\b", "\\bcan'?t lose\\b"],
+     "exclude_patterns": [
+      "\\bno (one|body|investment|product|strategy|fund|plan|advisor|adviser|planner|firm|provider) (can |could |will |would |does |is |ever |really )?(\\w+ )?guarantee[ds]?\\b",
+      "\\b(can'?t|cannot|can not|won'?t|will not|don'?t|do not|never|nobody|nothing) (ever |really |possibly |actually )?(\\w+ )?guarantee[ds]?\\b",
+      "\\bnot (be |ever |yet |always |\\w+ )?guarantee[ds]?\\b"
+     ]},
+    {"key": "pii_disclosed", "patterns": ["\\b\\d{3}-\\d{2}-\\d{4}\\b"]}
+  ],
+  "methodology": [
+    {"key": "goals", "patterns": ["\\bgoals?\\b", "\\bobjectives?\\b", "\\bretire(ment|ing)?\\b", "\\bsave (up )?for\\b"]},
+    {"key": "time_horizon", "patterns": ["\\btime ?horizon\\b", "\\bhow long\\b", "\\bin (\\d+|the next) years?\\b", "\\byears? (until|till|before)\\b"]},
+    {"key": "risk_tolerance", "patterns": ["\\brisk (tolerance|appetite)\\b", "\\bcomfortable with (risk|volatility)\\b", "\\bhow much (risk|volatility)\\b", "\\bconservative\\b", "\\baggressive\\b"]},
+    {"key": "assets", "patterns": ["\\bassets?\\b", "\\bsavings\\b", "\\bportfolio\\b", "\\b401\\(?k\\)?\\b", "\\bpension\\b", "\\bisa\\b", "\\bproperty\\b"]},
+    {"key": "budget", "patterns": ["\\bbudget\\b", "\\bincome\\b", "\\bsalary\\b", "\\bmonthly (contribution|savings)\\b"]},
+    {"key": "decision_makers", "patterns": ["\\bspouse\\b", "\\bhusband\\b", "\\bwife\\b", "\\bpartner\\b", "\\bdecision\\b", "\\bwho else\\b", "\\bfamily\\b"]},
+    {"key": "identity_verified", "patterns": ["\\bdate of birth\\b", "\\bpostcode\\b", "\\bsecurity questions?\\b", "\\bverif(y|ied|ication)\\b"]},
+    {"key": "next_step", "patterns": ["\\bnext steps?\\b", "\\bfollow[- ]up\\b", "\\bschedule\\b", "\\bmeet (again|next)\\b"]}
+  ],
+  "sentiment": {
+    "positive": ["good", "great", "thanks", "thank", "happy", "love", "excellent", "perfect", "helpful", "glad", "agree", "interested", "appreciate", "fantastic", "wonderful", "relief", "comfortable", "yes"],
+    "negative": ["bad", "terrible", "angry", "upset", "frustrated", "annoying", "annoyed", "unhappy", "worried", "worry", "concerned", "disappointed", "never", "wrong", "unacceptable", "ridiculous", "scam", "cancel", "hate", "confused", "scared", "stress", "expensive"]
+  },
+  "entities": [
+    {"key": "amount", "patterns": ["\\$\\s?\\d[\\d,]*(?:\\.\\d+)?", "\\b\\d+(?:\\.\\d+)?\\s?(?:k|thousand|million|dollars|pounds)\\b"]},
+    {"key": "percent", "patterns": ["\\b\\d+(?:\\.\\d+)?\\s?(?:%|percent)"]},
+    {"key": "date", "patterns": ["\\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?\\b", "\\b\\d{1,2}/\\d{1,2}/\\d{2,4}\\b"]},
+    {"key": "year", "patterns": ["\\b(?:19|20)\\d{2}\\b"]},
+    {"key": "email", "patterns": ["[\\w.+-]+@[\\w-]+\\.[\\w.]+"]},
+    {"key": "phone", "patterns": ["\\+?\\d[\\d\\s().-]{8,}\\d"]},
+    {"key": "reference", "patterns": ["\\b(?:policy|account|claim|reference)\\s*(?:no\\.?|number|#)?\\s*[A-Z0-9-]{5,}\\b"]}
+  ]
+}
