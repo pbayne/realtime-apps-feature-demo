@@ -1,8 +1,8 @@
 resources:
   postgres_projects:
-    copilot_lakebase:
+    sidekick_lakebase:
       project_id: ${var.project_id}
-      display_name: Call copilot
+      display_name: Call sidekick
       pg_version: 17
       # Always-on: the RTM sink and the app both need a warm endpoint. Suspending
       # it adds a cold-start to the first enrichment write.
@@ -12,15 +12,15 @@ resources:
         no_suspension: true
 
   schemas:
-    copilot_schema:
+    sidekick_schema:
       catalog_name: ${var.catalog}
       name: ${var.uc_schema}
-      comment: Call copilot - checkpoints, bronze and gold Delta tables, KB chunks, Parakeet model.
+      comment: Call sidekick - checkpoints, bronze and gold Delta tables, KB chunks, Parakeet model.
 
   volumes:
-    copilot_checkpoints:
+    sidekick_checkpoints:
       catalog_name: ${var.catalog}
-      schema_name: ${resources.schemas.copilot_schema.name}
+      schema_name: ${resources.schemas.sidekick_schema.name}
       name: checkpoints
       volume_type: MANAGED
 

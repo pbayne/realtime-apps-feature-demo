@@ -23,9 +23,9 @@ from typing import Optional
 from config import Settings
 from llm import LlmClient, LlmUnavailable
 
-from copilot.playbooks import KbDoc, Playbook
+from sidekick.playbooks import KbDoc, Playbook
 
-log = logging.getLogger("copilot.retrieval")
+log = logging.getLogger("sidekick.retrieval")
 
 _STOP = frozenset(
     "a an the and or of to in on for with is are was were be been it this that these those i you we they he she "

@@ -16,7 +16,7 @@ interface Turn {
   enr: Enr;
   /** Covers these coverage keys once the turn is finalised. */
   covers?: string[];
-  /** Cards the copilot emits right after this customer turn. */
+  /** Cards the sidekick emits right after this customer turn. */
   cards?: MockCard[];
   pauseAfterMs?: number;
 }

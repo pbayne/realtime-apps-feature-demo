@@ -5,10 +5,10 @@ import json
 
 import pytest
 from config import Settings
-from copilot.perception import Perception, parse_perception, perceive, strip_fences
-from copilot.playbooks import PlaybookRegistry
 from enrich.rules import load_rules
 from llm import LlmClient, LlmUnavailable
+from sidekick.perception import Perception, parse_perception, perceive, strip_fences
+from sidekick.playbooks import PlaybookRegistry
 
 KEYS = ["fees", "think_about_it", "market_timing", "existing_advisor"]
 

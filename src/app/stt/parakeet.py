@@ -39,7 +39,7 @@ from stt.agreement import LocalAgreement2
 from stt.base import Decoder, Frame, TranscriptEvent, Window, Word
 from stt.vad import Vad
 
-log = logging.getLogger("copilot.stt")
+log = logging.getLogger("sidekick.stt")
 
 
 @dataclass

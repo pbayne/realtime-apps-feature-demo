@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy the call-copilot bundle to a workspace.
+# Deploy the call-sidekick bundle to a workspace.
 #
 # Usage:
 #   scripts/deploy.sh <databricks-profile> [catalog] [kafka_security]
@@ -8,7 +8,7 @@
 #
 # Environment:
 #   DEPLOY_PARAKEET=1   also run the one-off Parakeet registration (GPU; needs quota)
-#   COPILOT_SCOPE       secret scope name (default call-copilot)
+#   SIDEKICK_SCOPE       secret scope name (default call-sidekick)
 #   BUNDLE_VAR_*        any bundle variable can be overridden, e.g. BUNDLE_VAR_project_id
 #
 # Order matters:
@@ -32,7 +32,7 @@ fi
 profile=$1
 catalog=${2:-main}
 kafka_security=${3:-SASL_SSL_PLAIN}
-scope=${COPILOT_SCOPE:-call-copilot}
+scope=${SIDEKICK_SCOPE:-call-sidekick}
 
 case "$kafka_security" in
   SASL_SSL_PLAIN|SASL_SSL_SCRAM_SHA_256|SASL_SSL_SCRAM_SHA_512|SASL_SSL_MSK_IAM) ;;
@@ -103,21 +103,21 @@ db bundle validate --strict --target dev
 db bundle deploy --target dev
 
 # --- 3. Setup: Lakebase role, tables, trigger, Kafka topics, secrets -------
-db bundle run call_copilot_setup --target dev
+db bundle run call_sidekick_setup --target dev
 
 # --- 4. App (after the Lakebase keys are real) -----------------------------
-db bundle run call_copilot_app --target dev
+db bundle run call_sidekick_app --target dev
 
 # --- 5. KB index (blocking; cheap) ----------------------------------------
-db bundle run call_copilot_kb_index --target dev
+db bundle run call_sidekick_kb_index --target dev
 
 # --- 6. Continuous jobs ----------------------------------------------------
-db bundle run call_copilot_rtm_enrich --target dev --no-wait
-db bundle run call_copilot_delta_history --target dev --no-wait
+db bundle run call_sidekick_rtm_enrich --target dev --no-wait
+db bundle run call_sidekick_delta_history --target dev --no-wait
 
 # --- 7. Parakeet (opt-in) --------------------------------------------------
 if [[ "${DEPLOY_PARAKEET:-0}" == "1" ]]; then
-  db bundle run call_copilot_parakeet_register --target dev
+  db bundle run call_sidekick_parakeet_register --target dev
   echo "Parakeet registered. Note the data-plane URL printed by the job for the app."
 fi
 
@@ -128,5 +128,5 @@ Deployment complete.
 - Post-call scoring is scheduled every 30 minutes (UTC).
 - The Postgres password is stored in secret scope '$scope' under lakebase_password.
 - Restart the app once after the first setup run so it picks up the real secret values:
-    databricks apps stop call-copilot --profile $profile && databricks apps start call-copilot --profile $profile
+    databricks apps stop call-sidekick --profile $profile && databricks apps start call-sidekick --profile $profile
 EOF

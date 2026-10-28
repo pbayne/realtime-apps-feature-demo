@@ -1,7 +1,8 @@
 """Decision policy (SPEC section 4): silence, budget, cooldown, compliance bypass, dedupe."""
 
 from config import get_settings
-from copilot.decide import (
+from enrich.rules import load_rules
+from sidekick.decide import (
     Candidate,
     GuardConfig,
     GuardState,
@@ -11,9 +12,8 @@ from copilot.decide import (
     grounded_confidence,
     turn_candidates,
 )
-from copilot.playbooks import PlaybookRegistry
-from copilot.retrieval import Hit
-from enrich.rules import load_rules
+from sidekick.playbooks import PlaybookRegistry
+from sidekick.retrieval import Hit
 
 WEIGHTS = {"objection_pickup": 0.95, "suggested_response": 0.9, "next_question": 0.8, "compliance": 1.0,
            "missing_info": 0.75, "next_best_action": 0.7}

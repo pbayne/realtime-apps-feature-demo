@@ -1,5 +1,5 @@
 bundle:
-  name: call_copilot
+  name: call_sidekick
 
 # Everything environment-specific is a variable. Supply secrets and overrides via
 # BUNDLE_VAR_<name> env vars (scripts/deploy.sh does this) or --var flags.
@@ -9,15 +9,15 @@ variables:
     default: main
   uc_schema:
     description: UC schema that holds bronze/gold tables, the checkpoint volume, the KB table, and the Parakeet model.
-    default: call_copilot
+    default: call_sidekick
   app_name:
     description: Databricks App name.
-    default: call-copilot
+    default: call-sidekick
 
   # --- Lakebase (Autoscaling Postgres) -------------------------------------
   project_id:
     description: Lakebase Autoscaling project id. Must be unique within the workspace.
-    default: call-copilot
+    default: call-sidekick
   branch_name:
     description: Lakebase branch the sink and app write to.
     default: production
@@ -26,14 +26,14 @@ variables:
     default: databricks_postgres
   pg_role:
     description: Postgres role used by the RTM sink and the app (one role in this build).
-    default: copilot_writer
+    default: sidekick_writer
   pg_password:
     description: Strong password for pg_role (>= 24 chars). No default on purpose; deploy.sh generates one per deployment.
 
   # --- Secrets and Kafka ----------------------------------------------------
   secret_scope:
     description: Secret scope holding Lakebase and Kafka connection values (see README "Secrets").
-    default: call-copilot
+    default: call-sidekick
   kafka_security:
     description: "Kafka auth mode: SASL_SSL_PLAIN (Confluent Cloud), SASL_SSL_SCRAM_SHA_256 / _512 (Redpanda Cloud) or SASL_SSL_MSK_IAM (AWS MSK; jobs only)."
     default: SASL_SSL_PLAIN
@@ -88,7 +88,7 @@ variables:
     default: databricks-gte-large-en
   vs_endpoint:
     description: Vector Search endpoint name.
-    default: call-copilot-vs
+    default: call-sidekick-vs
 
 include:
   - resources/*.yml

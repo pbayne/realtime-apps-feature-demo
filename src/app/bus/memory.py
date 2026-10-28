@@ -8,7 +8,7 @@ from typing import Any
 
 from .base import Handler
 
-log = logging.getLogger("copilot.bus.memory")
+log = logging.getLogger("sidekick.bus.memory")
 
 
 class MemoryBus:

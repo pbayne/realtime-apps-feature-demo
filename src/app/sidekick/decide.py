@@ -19,9 +19,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from copilot.perception import Perception
-from copilot.playbooks import Playbook
-from copilot.retrieval import Hit
+from sidekick.perception import Perception
+from sidekick.playbooks import Playbook
+from sidekick.retrieval import Hit
 
 
 @dataclass

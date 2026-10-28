@@ -3,8 +3,8 @@
 from pathlib import Path
 
 import pytest
-from copilot.playbooks import PlaybookRegistry
 from enrich.rules import load_rules
+from sidekick.playbooks import PlaybookRegistry
 from stt.replay import ReplayFrameSource, load_script
 
 APP_ROOT = Path(__file__).resolve().parents[2] / "src" / "app"

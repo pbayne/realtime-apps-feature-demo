@@ -1,4 +1,4 @@
-"""CallSession: one live call. Orchestrates STT events, enrichment, copilot turns and cards.
+"""CallSession: one live call. Orchestrates STT events, enrichment, sidekick turns and cards.
 
 Flow per final utterance (SPEC sections 3, 4 and 7):
   final -> store + bus `utterances` (RTM job or local enricher consume it)
@@ -24,8 +24,12 @@ from typing import Any, Optional
 
 from bus.base import EventBus
 from config import Settings
-from copilot.compose import compose_body, truncate_words
-from copilot.decide import (
+from enrich.rules import enrich
+from hub import Hub
+from llm import LlmClient
+from models import CallRecord, Card, Utterance, new_id, now_ms
+from sidekick.compose import compose_body, truncate_words
+from sidekick.decide import (
     Candidate,
     GuardConfig,
     GuardState,
@@ -34,13 +38,9 @@ from copilot.decide import (
     decide,
     turn_candidates,
 )
-from copilot.perception import Perception, perceive
-from copilot.playbooks import Playbook, PlaybookRegistry
-from copilot.retrieval import Hit, Retriever
-from enrich.rules import enrich
-from hub import Hub
-from llm import LlmClient
-from models import CallRecord, Card, Utterance, new_id, now_ms
+from sidekick.perception import Perception, perceive
+from sidekick.playbooks import Playbook, PlaybookRegistry
+from sidekick.retrieval import Hit, Retriever
 from store.base import Store
 from stt.base import TranscriptEvent
 from stt.browser import BrowserPassthrough
@@ -48,7 +48,7 @@ from stt.parakeet import StreamingSession
 from stt.replay import ReplayFrameSource, ReplayScript, ScriptDecoder
 from stt.vad import Vad
 
-log = logging.getLogger("copilot.session")
+log = logging.getLogger("sidekick.session")
 
 MAX_TRACES = 200
 COMPLIANCE_REPEAT_FINALS = 3
@@ -316,7 +316,7 @@ class CallSession:
                 call_id=call_id, seq=ev.seq, speaker=ev.speaker, text=ev.text,
                 t_start_ms=ev.t_start_ms, t_end_ms=ev.t_end_ms, emitted_at_ms=emitted, playbook=pb.name,
             ))
-        except Exception:  # noqa: BLE001 - store outage must not stop the copilot
+        except Exception:  # noqa: BLE001 - store outage must not stop the sidekick
             log.exception("put_utterance failed")
         await deps.bus.publish(self.settings.kafka_utterances_topic, call_id, {
             "call_id": call_id, "seq": ev.seq, "speaker": ev.speaker, "text": ev.text, "is_final": True,

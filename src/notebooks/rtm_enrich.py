@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Call copilot — RTM enrichment
+# MAGIC # Call sidekick — RTM enrichment
 # MAGIC
 # MAGIC Kafka `utterances` (final utterances only) → parse JSON → deterministic
 # MAGIC enrichment (objection / risk / methodology rules, entity regex, sentiment
@@ -29,7 +29,7 @@
 
 from pyspark.sql import functions as F  # noqa: E402  (also available via %run rtm_lib)
 
-dbutils.widgets.text("secret_scope", "call-copilot")
+dbutils.widgets.text("secret_scope", "call-sidekick")
 dbutils.widgets.text("kafka_security", SASL_PLAIN)          # SASL_SSL_PLAIN | SASL_SSL_SCRAM_SHA_256 | SASL_SSL_SCRAM_SHA_512 | SASL_SSL_MSK_IAM
 dbutils.widgets.text("utterances_topic", "utterances")
 dbutils.widgets.text("starting_offsets", "latest")          # used only for a brand-new checkpoint
@@ -116,7 +116,7 @@ query = (
     .option("batchsize", batchsize)
     .option("checkpointLocation", checkpoint_path)
     .trigger(realTime="5 minutes")
-    .queryName("call_copilot_rtm_enrich")
+    .queryName("call_sidekick_rtm_enrich")
     .start()
 )
 

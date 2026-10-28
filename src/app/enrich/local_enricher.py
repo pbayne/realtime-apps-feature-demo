@@ -16,7 +16,7 @@ from store.base import Store
 
 from enrich.rules import Rules, enrich
 
-log = logging.getLogger("copilot.enrich.local")
+log = logging.getLogger("sidekick.enrich.local")
 
 
 def enrichment_row(value: dict[str, Any], rules: Rules) -> dict[str, Any]:

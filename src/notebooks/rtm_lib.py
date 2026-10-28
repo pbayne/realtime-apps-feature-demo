@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Shared library for the call-copilot Databricks side
+# MAGIC # Shared library for the call-sidekick Databricks side
 # MAGIC
 # MAGIC Pure functions only (no widgets, no dbutils, no network). Imported by
 # MAGIC `rtm_enrich.py`, `init.py`, `delta_history.py` via `%run ./rtm_lib`, and by

@@ -1,10 +1,10 @@
-"""Apply the copilot schema to a Lakebase Autoscaling endpoint as the current CLI user.
+"""Apply the sidekick schema to a Lakebase Autoscaling endpoint as the current CLI user.
 
 For dev databases outside the bundle flow (the bundle's setup job runs init.py instead).
 TABLE_DDL is read from src/notebooks/init.py so there is one source of truth.
 
   .venv/bin/python scripts/lakebase_bootstrap.py --profile e2-demo \
-      --endpoint projects/call-copilot-pbayne/branches/production/endpoints/primary
+      --endpoint projects/call-sidekick-pbayne/branches/production/endpoints/primary
 """
 
 from __future__ import annotations

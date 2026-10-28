@@ -1,7 +1,7 @@
-# Realtime Call Copilot — Build Spec (v0.2)
+# Realtime Call Sidekick — Build Spec (v0.2)
 
 Live call → sub-second transcription → Kafka → Spark Structured Streaming
-**Real-Time Mode** enrichment → Lakebase → copilot agent → suggestion cards
+**Real-Time Mode** enrichment → Lakebase → sidekick agent → suggestion cards
 pushed to the rep/agent UI over WebSocket. Built on the
 `realtime-apps-feature-demo` skeleton (DAB + RTM + native `postgresql` sink).
 
@@ -48,7 +48,7 @@ src/app/                      FastAPI Databricks App (bundled as the DAB app sou
   enrich/     rules.py        pure transform (Python mirror of rtm_lib); extend_rules for playbooks
               enrich_rules.json  shared rules, byte-identical to src/notebooks/enrich_rules.json
               local_enricher.py  LOCAL stand-in for the RTM job (writes the enrichments row)
-  copilot/    perception.py   ONE fast-model call per customer final: intent, sentiment, objection, question
+  sidekick/    perception.py   ONE fast-model call per customer final: intent, sentiment, objection, question
               retrieval.py    KB retrieval: in-memory embed/keyword (local), Vector Search (databricks)
               decide.py       candidate cards → rank → guardrails → trace (pure)
               compose.py      smart-model card text, streamed tokens (sonnet)
@@ -174,7 +174,7 @@ Binary frames: PCM16 mono 16 kHz, ~100 ms per frame. Browser mic = `agent`
 channel by default (toggle). Only for `mode=mic` calls; a replay call gets an `error` and close (4400).
 Replay mode needs no audio socket.
 
-## 4. Copilot decision policy
+## 4. Sidekick decision policy
 
 ### 4.1 Per final **customer** utterance
 1. **Start immediately** when the final arrives: app-side perception (one fast-model call, budget

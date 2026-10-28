@@ -2,7 +2,7 @@
   "lockfileVersion": 1,
   "workspaces": {
     "": {
-      "name": "realtime-call-copilot-frontend",
+      "name": "realtime-call-sidekick-frontend",
       "dependencies": {
         "lucide-react": "^1.9.0",
         "react": "^19.0.0",

@@ -24,7 +24,7 @@ from typing import Any, Optional
 from config import Settings
 from models import CallRecord, Card, Utterance
 
-log = logging.getLogger("copilot.store.lakebase")
+log = logging.getLogger("sidekick.store.lakebase")
 
 DDL = """
 CREATE TABLE IF NOT EXISTS calls (

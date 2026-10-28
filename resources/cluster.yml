@@ -9,7 +9,7 @@ resources:
     # across all stages. 2 x m5d.xlarge = 8 worker cores = 2 cores per partition.
     # Node type is a variable; AWS defaults. Azure/GCP: swap aws_attributes (README).
     rtm_cluster:
-      cluster_name: call-copilot-rtm
+      cluster_name: call-sidekick-rtm
       spark_version: ${var.dbr_version}
       data_security_mode: SINGLE_USER
       single_user_name: ${workspace.current_user.userName}

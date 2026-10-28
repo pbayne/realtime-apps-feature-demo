@@ -5,7 +5,7 @@ import type { CallState, CallStatus } from "../lib/store";
 import type { Speaker } from "../lib/types";
 import { Brand } from "./Brand";
 import { ContextPanel } from "./ContextPanel";
-import { CopilotFeed } from "./CopilotFeed";
+import { SidekickFeed } from "./SidekickFeed";
 import { TranscriptPanel } from "./TranscriptPanel";
 
 interface Props {
@@ -110,7 +110,7 @@ export function Console({ state, channel, sttBrowser, notice, onEnd, onChannel, 
           <TranscriptPanel state={state} />
         </div>
         <div className="h-[520px] min-h-0 md:h-auto xl:h-auto">
-          <CopilotFeed state={state} onResolve={onResolve} />
+          <SidekickFeed state={state} onResolve={onResolve} />
         </div>
         <div className="h-[460px] min-h-0 md:col-span-2 md:h-auto xl:col-span-1 xl:h-auto">
           <ContextPanel state={state} />

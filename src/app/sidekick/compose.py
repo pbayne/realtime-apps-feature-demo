@@ -14,10 +14,10 @@ from typing import Awaitable, Callable, Optional
 from config import Settings
 from llm import LlmClient, LlmUnavailable
 
-from copilot.decide import Candidate
-from copilot.playbooks import Playbook
+from sidekick.decide import Candidate
+from sidekick.playbooks import Playbook
 
-log = logging.getLogger("copilot.compose")
+log = logging.getLogger("sidekick.compose")
 
 DEFAULT_SYSTEM = (
     "You write one short live-coaching card for a person on a call. Reply with plain text only: "

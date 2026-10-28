@@ -67,10 +67,10 @@ export function StartScreen({ error, onStart }: Props) {
         <section>
           <p className="kbd-label">New call</p>
           <h1 className="mt-2 text-[34px] font-semibold leading-[1.1] tracking-tight">
-            Start a copilot session
+            Start a sidekick session
           </h1>
           <p className="mt-3 max-w-md text-[14px] leading-relaxed text-[var(--color-muted)]">
-            Live transcription, enrichment and suggestion cards stream into one console. The copilot
+            Live transcription, enrichment and suggestion cards stream into one console. The sidekick
             stays quiet unless it has something grounded to say.
           </p>
 

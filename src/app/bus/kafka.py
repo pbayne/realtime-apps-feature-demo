@@ -18,7 +18,7 @@ from config import Settings
 
 from .base import Handler
 
-log = logging.getLogger("copilot.bus.kafka")
+log = logging.getLogger("sidekick.bus.kafka")
 
 # KAFKA_SECURITY mode (shared with the notebooks) -> SASL mechanism.
 _MODE_MECHANISM = {

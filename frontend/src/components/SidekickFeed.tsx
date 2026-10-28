@@ -11,7 +11,7 @@ interface Props {
   onResolve(cardId: string, action: "accept" | "reject" | "edit", text?: string): void;
 }
 
-export function CopilotFeed({ state, onResolve }: Props) {
+export function SidekickFeed({ state, onResolve }: Props) {
   const [showOlder, setShowOlder] = useState(false);
 
   const all = state.cardOrder.map((id) => state.cards[id]).filter(Boolean) as CardView[];
@@ -27,7 +27,7 @@ export function CopilotFeed({ state, onResolve }: Props) {
       <header className="flex items-center justify-between border-b border-[var(--color-line)] px-4 py-3">
         <div>
           <h2 className="flex items-center gap-2 text-[14px] font-semibold">
-            <Sparkles className="size-4 text-sky-300" /> Copilot feed
+            <Sparkles className="size-4 text-sky-300" /> Sidekick feed
           </h2>
           <p className="text-[11.5px] text-[var(--color-muted)]">
             {all.length === 0 ? "Silent until there is something grounded to say" : `${all.length} suggestion${all.length === 1 ? "" : "s"} this call`}

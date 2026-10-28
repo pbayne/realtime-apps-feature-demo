@@ -1,7 +1,7 @@
 """LakebaseStore against a real Postgres (LISTEN/NOTIFY + poll fallback).
 
 Skipped unless TEST_LAKEBASE_HOST is set. Example (throwaway local Postgres):
-  TEST_LAKEBASE_HOST=/tmp TEST_LAKEBASE_PORT=5544 TEST_LAKEBASE_DB=copilot_test \
+  TEST_LAKEBASE_HOST=/tmp TEST_LAKEBASE_PORT=5544 TEST_LAKEBASE_DB=sidekick_test \
   TEST_LAKEBASE_USER=postgres .venv/bin/python -m pytest tests/app/test_lakebase_store.py
 """
 
@@ -19,14 +19,14 @@ HOST = os.environ.get("TEST_LAKEBASE_HOST")
 pytestmark = pytest.mark.skipif(not HOST, reason="set TEST_LAKEBASE_HOST to run against a real Postgres")
 
 TRIGGER_SQL = """
-CREATE OR REPLACE FUNCTION copilot_notify_enrichment() RETURNS trigger AS $$
+CREATE OR REPLACE FUNCTION sidekick_notify_enrichment() RETURNS trigger AS $$
 BEGIN
   PERFORM pg_notify('enrichment_ready', NEW.call_id || ':' || NEW.seq);
   RETURN NEW;
 END; $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS enrichments_notify ON enrichments;
 CREATE TRIGGER enrichments_notify AFTER INSERT OR UPDATE ON enrichments
-  FOR EACH ROW EXECUTE FUNCTION copilot_notify_enrichment();
+  FOR EACH ROW EXECUTE FUNCTION sidekick_notify_enrichment();
 """
 
 

@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Call copilot — bootstrap (idempotent)
+# MAGIC # Call sidekick — bootstrap (idempotent)
 # MAGIC
 # MAGIC One-shot task, safe to re-run. It does four things:
 # MAGIC
@@ -39,12 +39,12 @@
 # COMMAND ----------
 
 DEFAULTS = {
-    "project_id": "call-copilot",
+    "project_id": "call-sidekick",
     "branch_name": "production",
     "database_name": "databricks_postgres",
-    "pg_role": "copilot_writer",
+    "pg_role": "sidekick_writer",
     "pg_password": "",
-    "secret_scope": "call-copilot",
+    "secret_scope": "call-sidekick",
     "kafka_security": "SASL_SSL_PLAIN",     # SASL_SSL_PLAIN | SASL_SSL_SCRAM_SHA_256 | SASL_SSL_SCRAM_SHA_512 | SASL_SSL_MSK_IAM
     "kafka_topics": "utterances,cards",
     "kafka_partitions": "4",

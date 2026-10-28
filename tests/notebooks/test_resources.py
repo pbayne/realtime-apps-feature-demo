@@ -58,7 +58,7 @@ def test_rtm_cluster_meets_real_time_mode_requirements():
 
 def test_rtm_job_is_only_on_rtm_cluster_and_has_no_timeout():
     doc = _load(ROOT / "resources" / "job.yml")
-    job = doc["resources"]["jobs"]["call_copilot_rtm_enrich"]
+    job = doc["resources"]["jobs"]["call_sidekick_rtm_enrich"]
     assert job["tasks"][0]["existing_cluster_id"] == "${resources.clusters.rtm_cluster.id}"
     assert "timeout_seconds" not in job
 

@@ -40,7 +40,7 @@ class FakeLlm(LlmClient):
         system = messages[0]["content"]
         user = messages[-1]["content"]
         if "ONE JSON object" in system:
-            # One perception call returns the whole schema (see copilot/perception.py).
+            # One perception call returns the whole schema (see sidekick/perception.py).
             if self.perception_delay:
                 await asyncio.sleep(self.perception_delay)
             question = user.rstrip().endswith("?") or "charge" in user.lower()
@@ -157,7 +157,7 @@ def test_replay_call_emits_full_event_flow(client):
     assert all(d["verdict"] in ("winner", "blocked", "allowed") for c in snap["decisions"] for d in c["candidates"])
 
 
-def test_browser_stt_over_call_socket_flows_into_copilot(client):
+def test_browser_stt_over_call_socket_flows_into_sidekick(client):
     r = client.post("/api/calls", json={"playbook": "advisor_coach", "mode": "mic"})
     call_id = r.json()["call_id"]
     with client.websocket_connect(f"/ws/call/{call_id}") as ws:

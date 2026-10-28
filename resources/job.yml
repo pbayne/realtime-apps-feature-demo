@@ -4,8 +4,8 @@
 #     registration. Kept separate so batch work never takes RTM task slots.
 resources:
   jobs:
-    call_copilot_setup:
-      name: call-copilot-setup
+    call_sidekick_setup:
+      name: call-sidekick-setup
       description: Lakebase role, SPEC section 3 tables, NOTIFY trigger, Kafka topics, secrets. Idempotent. Run before the RTM job.
       max_concurrent_runs: 1
       job_clusters:
@@ -37,8 +37,8 @@ resources:
               kafka_replication_factor: ${var.kafka_replication_factor}
               aws_region: ${var.aws_region}
 
-    call_copilot_rtm_enrich:
-      name: call-copilot-rtm-enrich
+    call_sidekick_rtm_enrich:
+      name: call-sidekick-rtm-enrich
       description: Kafka utterances -> RTM -> built-in enrichment -> Lakebase enrichments (native postgresql sink). Continuous; cancel to stop.
       max_concurrent_runs: 1
       # Continuous: no timeout. Stop with `databricks jobs cancel-run`.
@@ -52,14 +52,14 @@ resources:
               kafka_security: ${var.kafka_security}
               utterances_topic: utterances
               starting_offsets: latest
-              checkpoint_path: /Volumes/${var.catalog}/${resources.schemas.copilot_schema.name}/${resources.volumes.copilot_checkpoints.name}/rtm_enrich
+              checkpoint_path: /Volumes/${var.catalog}/${resources.schemas.sidekick_schema.name}/${resources.volumes.sidekick_checkpoints.name}/rtm_enrich
               rules_path: ${workspace.file_path}/src/notebooks/enrich_rules.json
               lakebase_database: ${var.database_name}
               sink_batchinterval: 50 milliseconds
               sink_batchsize: "500"
 
-    call_copilot_delta_history:
-      name: call-copilot-delta-history
+    call_sidekick_delta_history:
+      name: call-sidekick-delta-history
       description: Kafka utterances and cards -> UC bronze Delta (micro-batch, not RTM). Continuous at a 5 s trigger.
       max_concurrent_runs: 1
       job_clusters:
@@ -75,13 +75,13 @@ resources:
               kafka_security: ${var.kafka_security}
               utterances_topic: utterances
               cards_topic: cards
-              bronze_utterances_table: ${var.catalog}.${resources.schemas.copilot_schema.name}.bronze_utterances
-              bronze_cards_table: ${var.catalog}.${resources.schemas.copilot_schema.name}.bronze_cards
-              checkpoint_root: /Volumes/${var.catalog}/${resources.schemas.copilot_schema.name}/${resources.volumes.copilot_checkpoints.name}/delta_history
+              bronze_utterances_table: ${var.catalog}.${resources.schemas.sidekick_schema.name}.bronze_utterances
+              bronze_cards_table: ${var.catalog}.${resources.schemas.sidekick_schema.name}.bronze_cards
+              checkpoint_root: /Volumes/${var.catalog}/${resources.schemas.sidekick_schema.name}/${resources.volumes.sidekick_checkpoints.name}/delta_history
               trigger_mode: processing_time
 
-    call_copilot_kb_index:
-      name: call-copilot-kb-index
+    call_sidekick_kb_index:
+      name: call-sidekick-kb-index
       description: src/app/playbooks/kb markdown -> Delta chunks -> Vector Search delta-sync index. Re-run when KB content changes.
       max_concurrent_runs: 1
       job_clusters:
@@ -94,14 +94,14 @@ resources:
             notebook_path: ../src/notebooks/build_kb_index.py
             base_parameters:
               uc_catalog: ${var.catalog}
-              uc_schema: ${resources.schemas.copilot_schema.name}
+              uc_schema: ${resources.schemas.sidekick_schema.name}
               kb_dir: ${workspace.file_path}/src/app/playbooks/kb
               vs_endpoint: ${var.vs_endpoint}
               embedding_endpoint: ${var.embed_model}
               index_name: kb_chunks_index
 
-    call_copilot_post_call_scoring:
-      name: call-copilot-post-call-scoring
+    call_sidekick_post_call_scoring:
+      name: call-sidekick-post-call-scoring
       description: Scores quiescent calls with ai_query() into gold_call_scores. Scheduled every 30 minutes.
       max_concurrent_runs: 1
       schedule:
@@ -118,13 +118,13 @@ resources:
             notebook_path: ../src/notebooks/post_call_scoring.py
             base_parameters:
               uc_catalog: ${var.catalog}
-              uc_schema: ${resources.schemas.copilot_schema.name}
+              uc_schema: ${resources.schemas.sidekick_schema.name}
               scoring_endpoint: ${var.smart_model}
               idle_minutes: "15"
               max_calls_per_run: "200"
 
-    call_copilot_parakeet_register:
-      name: call-copilot-parakeet-register
+    call_sidekick_parakeet_register:
+      name: call-sidekick-parakeet-register
       description: One-off (re-run on model upgrades). Registers Parakeet to UC and creates the route-optimized GPU endpoint.
       max_concurrent_runs: 1
       job_clusters:
@@ -147,7 +147,7 @@ resources:
             notebook_path: ../src/notebooks/register_parakeet.py
             base_parameters:
               uc_catalog: ${var.catalog}
-              uc_schema: ${resources.schemas.copilot_schema.name}
+              uc_schema: ${resources.schemas.sidekick_schema.name}
               model_name: ${var.parakeet_model}
               endpoint_name: ${var.parakeet_endpoint}
               workload_type: GPU_MEDIUM

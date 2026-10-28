@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Call copilot — register Parakeet STT and deploy a GPU endpoint
+# MAGIC # Call sidekick — register Parakeet STT and deploy a GPU endpoint
 # MAGIC
 # MAGIC Wraps `nvidia/parakeet-tdt-0.6b-v3` (NeMo) as an MLflow pyfunc, registers it
 # MAGIC in Unity Catalog, and creates a **route-optimized GPU Model Serving endpoint**
@@ -47,7 +47,7 @@
 # COMMAND ----------
 
 dbutils.widgets.text("uc_catalog", "main")
-dbutils.widgets.text("uc_schema", "call_copilot")
+dbutils.widgets.text("uc_schema", "call_sidekick")
 dbutils.widgets.text("model_name", "parakeet_tdt_v3")
 dbutils.widgets.text("endpoint_name", "parakeet-live")
 dbutils.widgets.text("workload_type", "GPU_MEDIUM")     # A10G-class
@@ -186,7 +186,7 @@ print(_model.predict(None, [{"audio_b64": _silence, "offset_ms": 0, "channel": "
 # COMMAND ----------
 
 mlflow.set_registry_uri("databricks-uc")
-mlflow.set_experiment(f"/Shared/call-copilot/{model_name}")
+mlflow.set_experiment(f"/Shared/call-sidekick/{model_name}")
 
 from mlflow.models.signature import ModelSignature
 from mlflow.types import ColSpec, Schema

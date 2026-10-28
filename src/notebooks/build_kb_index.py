@@ -1,13 +1,13 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Call copilot — playbook KB → Delta → Vector Search
+# MAGIC # Call sidekick — playbook KB → Delta → Vector Search
 # MAGIC
 # MAGIC Reads `src/app/playbooks/kb/*.md` from the bundle, splits each document on `##` headings
 # MAGIC into chunks, writes a Delta table with Change Data Feed enabled, and creates
 # MAGIC (or syncs) a **delta-sync** Vector Search index that embeds `content` with
 # MAGIC `databricks-gte-large-en` (SPEC section 6 `EMBED_MODEL`).
 # MAGIC
-# MAGIC Retrieval is the app's job (`copilot/retrieval.py`, top-3 per utterance). This
+# MAGIC Retrieval is the app's job (`sidekick/retrieval.py`, top-3 per utterance). This
 # MAGIC notebook only builds the index.
 # MAGIC
 # MAGIC Chunk ids are `<doc stem>#<n>`. Each chunk keeps `source_doc` and `clause` (the
@@ -20,9 +20,9 @@
 # COMMAND ----------
 
 dbutils.widgets.text("uc_catalog", "main")
-dbutils.widgets.text("uc_schema", "call_copilot")
+dbutils.widgets.text("uc_schema", "call_sidekick")
 dbutils.widgets.text("kb_dir", "")                       # ${workspace.file_path}/src/app/playbooks/kb
-dbutils.widgets.text("vs_endpoint", "call-copilot-vs")
+dbutils.widgets.text("vs_endpoint", "call-sidekick-vs")
 dbutils.widgets.text("embedding_endpoint", "databricks-gte-large-en")
 dbutils.widgets.text("index_name", "kb_chunks_index")
 

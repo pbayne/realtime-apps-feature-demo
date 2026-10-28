@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from models import now_ms
 
-log = logging.getLogger("copilot.hub")
+log = logging.getLogger("sidekick.hub")
 
 _QUEUE_MAX = 1000
 

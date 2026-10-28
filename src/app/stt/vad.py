@@ -12,7 +12,7 @@ import logging
 import math
 from typing import Protocol
 
-log = logging.getLogger("copilot.stt.vad")
+log = logging.getLogger("sidekick.stt.vad")
 
 
 class Vad(Protocol):

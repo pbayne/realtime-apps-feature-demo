@@ -1,4 +1,4 @@
-"""Realtime call copilot: FastAPI app.
+"""Realtime call sidekick: FastAPI app.
 
 Run locally:  MODE=local uvicorn main:app --port 8000   (from src/app)
 Deployed via app.yaml with ${DATABRICKS_APP_PORT:-8000}.
@@ -36,7 +36,7 @@ from stt.base import Frame
 from stt.parakeet import ParakeetDecoder
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-log = logging.getLogger("copilot.main")
+log = logging.getLogger("sidekick.main")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 SAMPLE_RATE = 16000
@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
         await services.stop()
 
 
-app = FastAPI(title="Realtime call copilot", lifespan=lifespan)
+app = FastAPI(title="Realtime call sidekick", lifespan=lifespan)
 
 
 def _svc(request_or_ws: Any) -> Services:
@@ -284,7 +284,7 @@ else:
     @app.get("/", response_class=HTMLResponse)
     async def placeholder() -> str:
         return (
-            "<!doctype html><title>Call copilot</title><h1>Call copilot</h1>"
+            "<!doctype html><title>Call sidekick</title><h1>Call sidekick</h1>"
             "<p>API is running. The UI has not been built into src/app/static yet.</p>"
             "<p><a href='/docs'>API docs</a> &middot; <a href='/healthz'>healthz</a></p>"
         )

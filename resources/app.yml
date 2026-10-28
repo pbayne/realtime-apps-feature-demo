@@ -4,14 +4,14 @@
 # Env contract (Workstream A declares these in src/app/app.yaml with valueFrom, using
 # the resource names below; values never live in git):
 #   LAKEBASE_HOST, LAKEBASE_DB, LAKEBASE_USER, LAKEBASE_PASSWORD  <- secret resources
-#   KAFKA_BOOTSTRAP, KAFKA_API_KEY, KAFKA_API_SECRET             <- secret resources
-#   KAFKA_SECURITY                                               <- plain value (SASL_SSL_PLAIN | SASL_SSL_MSK_IAM)
-#   STT_ENDPOINT, FAST_MODEL, SMART_MODEL, EMBED_MODEL      <- plain value / endpoint names
+#   KAFKA_BOOTSTRAP_SERVERS, KAFKA_SECURITY, KAFKA_USERNAME, KAFKA_PASSWORD <- secret resources
+#     (KAFKA_SECURITY: SASL_SSL_PLAIN | SASL_SSL_SCRAM_SHA_256 | SASL_SSL_SCRAM_SHA_512)
+#   STT_ENDPOINT, FAST_MODEL, SMART_MODEL, EMBED_MODEL                     <- serving endpoint resources
 resources:
   apps:
-    call_copilot_app:
+    call_sidekick_app:
       name: ${var.app_name}
-      description: Live call copilot - WebSocket UI, copilot agent, suggestion cards.
+      description: Live call sidekick - WebSocket UI, sidekick agent, suggestion cards.
       source_code_path: ../src/app
       resources:
         - name: lakebase-host

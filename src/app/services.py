@@ -15,19 +15,19 @@ from typing import Optional
 
 from bus import build_bus
 from config import Settings
-from copilot.playbooks import Playbook, PlaybookRegistry
-from copilot.retrieval import Retriever, VectorSearchStub
 from enrich.local_enricher import LocalEnricher
 from enrich.rules import load_rules
 from hub import Hub
 from llm import LlmClient
 from models import CallRecord, now_ms
 from session import CallSession, Deps
+from sidekick.playbooks import Playbook, PlaybookRegistry
+from sidekick.retrieval import Retriever, VectorSearchStub
 from store import build_store
 from stt.replay import ReplayScript, load_script
 from stt.vad import Vad, build_vad
 
-log = logging.getLogger("copilot.services")
+log = logging.getLogger("sidekick.services")
 
 
 class ServiceError(Exception):

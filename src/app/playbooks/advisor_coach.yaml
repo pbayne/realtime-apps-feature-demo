@@ -1,4 +1,4 @@
-# Wealth-advisor discovery coach (Fisher-style). Copilot guides the advisor through
+# Wealth-advisor discovery coach (Fisher-style). Sidekick guides the advisor through
 # a discovery call: goals, time horizon, risk tolerance, assets, budget, decision makers,
 # and handles the common objections. All KB text is illustrative, not firm policy.
 name: advisor_coach

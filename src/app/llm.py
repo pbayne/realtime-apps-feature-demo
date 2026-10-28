@@ -20,7 +20,7 @@ from typing import Any, AsyncIterator, Optional, Sequence
 import httpx
 from config import Settings
 
-log = logging.getLogger("copilot.llm")
+log = logging.getLogger("sidekick.llm")
 
 
 class LlmUnavailable(RuntimeError):

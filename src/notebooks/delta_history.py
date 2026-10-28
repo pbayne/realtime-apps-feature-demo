@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Call copilot — Delta history (bronze)
+# MAGIC # Call sidekick — Delta history (bronze)
 # MAGIC
 # MAGIC Separate micro-batch Structured Streaming job, **not** Real-Time Mode. It reads
 # MAGIC the Kafka `utterances` and `cards` topics and appends them to Unity Catalog
@@ -21,7 +21,7 @@
 
 from pyspark.sql import functions as F  # noqa: E402
 
-dbutils.widgets.text("secret_scope", "call-copilot")
+dbutils.widgets.text("secret_scope", "call-sidekick")
 dbutils.widgets.text("kafka_security", "SASL_SSL_PLAIN")
 dbutils.widgets.text("utterances_topic", "utterances")
 dbutils.widgets.text("cards_topic", "cards")

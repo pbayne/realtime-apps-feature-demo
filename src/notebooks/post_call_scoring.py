@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Call copilot — post-call scoring (Lakeflow job)
+# MAGIC # Call sidekick — post-call scoring (Lakeflow job)
 # MAGIC
 # MAGIC Scores completed calls with `ai_query()` and writes `gold_call_scores`:
 # MAGIC summary, methodology coverage, objections handled, next steps, overall score.
@@ -16,7 +16,7 @@
 # COMMAND ----------
 
 dbutils.widgets.text("uc_catalog", "main")
-dbutils.widgets.text("uc_schema", "call_copilot")
+dbutils.widgets.text("uc_schema", "call_sidekick")
 dbutils.widgets.text("scoring_endpoint", "databricks-claude-sonnet-5-5")
 dbutils.widgets.text("idle_minutes", "15")
 dbutils.widgets.text("max_calls_per_run", "200")

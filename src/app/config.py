@@ -1,4 +1,4 @@
-"""Settings for the copilot app (pydantic-settings; env vars, optional .env).
+"""Settings for the sidekick app (pydantic-settings; env vars, optional .env).
 
 MODE=local swaps Kafka -> in-memory bus and Lakebase -> in-memory store.
 Every other knob has a SPEC-sourced default and can be overridden by env.
@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     # ~0.60-0.77, unrelated ~0.45-0.53. Keyword (idf overlap) is a noisier offline fallback.
     retrieval_min_score_embed: float = 0.58
     retrieval_min_score_keyword: float = 0.25
-    vs_index_template: str = "main.call_copilot.kb_{playbook}"  # Vector Search index, databricks mode
+    vs_index_template: str = "main.call_sidekick.kb_{playbook}"  # Vector Search index, databricks mode
 
     # --- decision policy (SPEC section 4) ---
     # Perception (one haiku call) runs concurrently and never gates the decision. Its budget only

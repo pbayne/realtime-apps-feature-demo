@@ -23,7 +23,7 @@ from typing import Any, Optional
 
 from llm import LlmClient, LlmUnavailable, parse_json_object
 
-from copilot.playbooks import Playbook
+from sidekick.playbooks import Playbook
 
 INTENTS = ("question", "objection", "request", "agreement", "statement", "closing")
 DEFAULT_CONFIDENCE = 0.6

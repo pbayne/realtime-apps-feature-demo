@@ -1,8 +1,8 @@
-# Realtime Call Copilot — Databricks side
+# Realtime Call Sidekick — Databricks side
 
 Live call audio becomes sub-second transcripts, Kafka carries final utterances,
 Structured Streaming **Real-Time Mode (RTM)** enriches each utterance, and a
-Lakebase table plus Postgres `NOTIFY` push the result to the copilot app. The
+Lakebase table plus Postgres `NOTIFY` push the result to the sidekick app. The
 app turns it into suggestion cards for the agent or advisor. Contract:
 [`docs/SPEC.md`](docs/SPEC.md). This README covers the Databricks half
 (Workstream B): bundle, notebooks, jobs, the STT endpoint, and the batch jobs.
@@ -15,7 +15,7 @@ flowchart LR
     MIC[Mic or replay] -->|PCM16 16 kHz 100 ms| APP
   end
   subgraph Databricks App (Workstream A)
-    APP[FastAPI + WS UI + copilot agent]
+    APP[FastAPI + WS UI + sidekick agent]
   end
   APP -->|VAD window <= 30 s, base64 PCM16| STT[(Parakeet STT<br/>route-optimized GPU endpoint)]
   STT -->|words + timestamps| APP
@@ -223,10 +223,10 @@ Deployment is one command. It needs the Kafka secrets in the scope, which are cr
 ```bash
 export DATABRICKS_CONFIG_PROFILE=<profile>
 # Kafka secrets first (values never go in git)
-databricks secrets create-scope call-copilot
-databricks secrets put-secret call-copilot kafka_bootstrap
-databricks secrets put-secret call-copilot kafka_api_key      # SASL_SSL_PLAIN only
-databricks secrets put-secret call-copilot kafka_api_secret   # SASL_SSL_PLAIN only
+databricks secrets create-scope call-sidekick
+databricks secrets put-secret call-sidekick kafka_bootstrap
+databricks secrets put-secret call-sidekick kafka_api_key      # SASL_SSL_PLAIN only
+databricks secrets put-secret call-sidekick kafka_api_secret   # SASL_SSL_PLAIN only
 
 scripts/deploy.sh <profile> <catalog> SASL_SSL_PLAIN          # or SASL_SSL_MSK_IAM
 DEPLOY_PARAKEET=1 scripts/deploy.sh <profile> <catalog> SASL_SSL_PLAIN   # also registers Parakeet (GPU)
@@ -237,16 +237,16 @@ Manual equivalent, in order:
 ```bash
 databricks bundle validate --strict --target dev --profile <profile>
 databricks bundle deploy --target dev --profile <profile>
-databricks bundle run call_copilot_setup --target dev        # Lakebase + topics + secrets
-databricks bundle run call_copilot_app --target dev          # after the secrets are real
-databricks bundle run call_copilot_kb_index --target dev     # needs src/app/playbooks/kb/*.md
-databricks bundle run call_copilot_rtm_enrich --target dev --no-wait
-databricks bundle run call_copilot_delta_history --target dev --no-wait
-databricks bundle run call_copilot_parakeet_register --target dev   # once, GPU quota needed
+databricks bundle run call_sidekick_setup --target dev        # Lakebase + topics + secrets
+databricks bundle run call_sidekick_app --target dev          # after the secrets are real
+databricks bundle run call_sidekick_kb_index --target dev     # needs src/app/playbooks/kb/*.md
+databricks bundle run call_sidekick_rtm_enrich --target dev --no-wait
+databricks bundle run call_sidekick_delta_history --target dev --no-wait
+databricks bundle run call_sidekick_parakeet_register --target dev   # once, GPU quota needed
 ```
 
 Then restart the app once so it reads the real Lakebase secrets:
-`databricks apps stop call-copilot && databricks apps start call-copilot`.
+`databricks apps stop call-sidekick && databricks apps start call-sidekick`.
 
 **Stop the RTM job:** `databricks jobs list-runs --active-only`, then
 `databricks jobs cancel-run <run_id>`. The job has no timeout by design.
