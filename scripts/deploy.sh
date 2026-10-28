@@ -3,7 +3,8 @@
 #
 # Usage:
 #   scripts/deploy.sh <databricks-profile> [catalog] [kafka_security]
-#     kafka_security: SASL_SSL_PLAIN (default, Confluent Cloud) | SASL_SSL_MSK_IAM
+#     kafka_security: SASL_SSL_PLAIN (default, Confluent Cloud) | SASL_SSL_SCRAM_SHA_256 (Redpanda Cloud)
+#                     | SASL_SSL_SCRAM_SHA_512 | SASL_SSL_MSK_IAM (jobs only; the app producer needs a user/password mode)
 #
 # Environment:
 #   DEPLOY_PARAKEET=1   also run the one-off Parakeet registration (GPU; needs quota)
@@ -34,8 +35,8 @@ kafka_security=${3:-SASL_SSL_PLAIN}
 scope=${COPILOT_SCOPE:-call-copilot}
 
 case "$kafka_security" in
-  SASL_SSL_PLAIN|SASL_SSL_MSK_IAM) ;;
-  *) echo "kafka_security must be SASL_SSL_PLAIN or SASL_SSL_MSK_IAM" >&2; exit 2 ;;
+  SASL_SSL_PLAIN|SASL_SSL_SCRAM_SHA_256|SASL_SSL_SCRAM_SHA_512|SASL_SSL_MSK_IAM) ;;
+  *) echo "kafka_security must be SASL_SSL_PLAIN, SASL_SSL_SCRAM_SHA_256, SASL_SSL_SCRAM_SHA_512 or SASL_SSL_MSK_IAM" >&2; exit 2 ;;
 esac
 
 for tool in databricks jq openssl; do
@@ -60,7 +61,7 @@ have_secret() {
 }
 
 required_kafka=(kafka_bootstrap)
-[[ "$kafka_security" == "SASL_SSL_PLAIN" ]] && required_kafka+=(kafka_api_key kafka_api_secret)
+[[ "$kafka_security" != "SASL_SSL_MSK_IAM" ]] && required_kafka+=(kafka_api_key kafka_api_secret)
 missing=()
 for key in "${required_kafka[@]}"; do
   have_secret "$key" || missing+=("$key")
@@ -71,7 +72,7 @@ Missing Kafka secrets in scope '$scope': ${missing[*]}
 Create them first (values never go in git):
   databricks secrets put-secret $scope kafka_bootstrap --profile $profile
 EOF
-  if [[ "$kafka_security" == "SASL_SSL_PLAIN" ]]; then
+  if [[ "$kafka_security" != "SASL_SSL_MSK_IAM" ]]; then
     cat >&2 <<EOF
   databricks secrets put-secret $scope kafka_api_key --profile $profile
   databricks secrets put-secret $scope kafka_api_secret --profile $profile
@@ -79,6 +80,9 @@ EOF
   fi
   exit 1
 fi
+
+# The app reads the auth mode from the scope too, so jobs and app can't disagree.
+printf '%s' "$kafka_security" | db secrets put-secret "$scope" kafka_security
 
 # The app's secret bindings need these keys to exist at deploy time. The setup job
 # overwrites them with real values. Placeholders are written only if absent.

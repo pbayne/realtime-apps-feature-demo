@@ -273,3 +273,18 @@ def test_exclude_patterns_are_plain_spark_builtins(spark):
     plan = rtm_lib.build_enrichment(stream, rules)._jdf.queryExecution().analyzed().toString()
     for forbidden in ("PythonUDF", "PythonEvalType", "Aggregate", "Join", "Window"):
         assert forbidden not in plan, forbidden
+
+
+def test_kafka_reader_options_scram_for_redpanda():
+    pytest.importorskip("pyspark")
+    import rtm_lib
+
+    opts = rtm_lib.kafka_reader_options("seed-x.redpanda.com:9092", rtm_lib.SASL_SCRAM_256, "copilot", "pw")
+    assert opts["kafka.security.protocol"] == "SASL_SSL"
+    assert opts["kafka.sasl.mechanism"] == "SCRAM-SHA-256"
+    assert opts["kafka.sasl.jaas.config"].startswith(
+        "kafkashaded.org.apache.kafka.common.security.scram.ScramLoginModule required")
+    assert 'username="copilot"' in opts["kafka.sasl.jaas.config"]
+    assert rtm_lib.kafka_needs_credentials(rtm_lib.SASL_SCRAM_256)
+    assert not rtm_lib.kafka_needs_credentials(rtm_lib.MSK_IAM)
+    assert rtm_lib.kafka_sasl_mechanism(rtm_lib.SASL_SCRAM_512) == "SCRAM-SHA-512"

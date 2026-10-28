@@ -1,6 +1,8 @@
 command: ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${DATABRICKS_APP_PORT:-8000}"]
 
 env:
+  - name: MODE
+    value: databricks
   - name: LAKEBASE_HOST
     valueFrom: lakebase-host
   - name: LAKEBASE_DB
@@ -9,3 +11,23 @@ env:
     valueFrom: lakebase-user
   - name: LAKEBASE_PASSWORD
     valueFrom: lakebase-password
+  # Kafka: KAFKA_SECURITY uses the notebook mode names (SASL_SSL_PLAIN for Confluent,
+  # SASL_SSL_SCRAM_SHA_256 for Redpanda Cloud). The username/password are the
+  # kafka_api_key / kafka_api_secret scope keys in both cases.
+  - name: KAFKA_BOOTSTRAP_SERVERS
+    valueFrom: kafka-bootstrap
+  - name: KAFKA_SECURITY
+    valueFrom: kafka-security
+  - name: KAFKA_USERNAME
+    valueFrom: kafka-api-key
+  - name: KAFKA_PASSWORD
+    valueFrom: kafka-api-secret
+  # Endpoint names come from the app's serving-endpoint resources.
+  - name: STT_ENDPOINT
+    valueFrom: parakeet-stt
+  - name: FAST_MODEL
+    valueFrom: fast-llm
+  - name: SMART_MODEL
+    valueFrom: smart-llm
+  - name: EMBED_MODEL
+    valueFrom: embedding

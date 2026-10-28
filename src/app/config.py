@@ -76,6 +76,9 @@ class Settings(BaseSettings):
 
     # --- Kafka (databricks mode) ---
     kafka_bootstrap_servers: Optional[str] = None
+    # Same mode names as the notebooks (rtm_lib.KAFKA_SECURITY_MODES). When set, it overrides
+    # kafka_security_protocol / kafka_sasl_mechanism below.
+    kafka_security: Optional[Literal["SASL_SSL_PLAIN", "SASL_SSL_SCRAM_SHA_256", "SASL_SSL_SCRAM_SHA_512"]] = None
     kafka_security_protocol: str = "SASL_SSL"
     kafka_sasl_mechanism: str = "PLAIN"
     kafka_username: Optional[str] = None

@@ -60,8 +60,26 @@ CARD_SCHEMA = StructType([
 QUESTION_RE = r"(?i)(\?\s*$)|(^\s*(what|how|when|why|who|where|can|could|do|does|is|are|will|would|should)\b)"
 
 SASL_PLAIN = "SASL_SSL_PLAIN"
+SASL_SCRAM_256 = "SASL_SSL_SCRAM_SHA_256"   # Redpanda Cloud (Serverless / Dedicated)
+SASL_SCRAM_512 = "SASL_SSL_SCRAM_SHA_512"
 MSK_IAM = "SASL_SSL_MSK_IAM"
-KAFKA_SECURITY_MODES = (SASL_PLAIN, MSK_IAM)
+KAFKA_SECURITY_MODES = (SASL_PLAIN, SASL_SCRAM_256, SASL_SCRAM_512, MSK_IAM)
+
+# SASL mechanism and Spark-shaded JAAS login module for the username/password modes.
+_USERPASS_MODES = {
+    SASL_PLAIN: ("PLAIN", "kafkashaded.org.apache.kafka.common.security.plain.PlainLoginModule"),
+    SASL_SCRAM_256: ("SCRAM-SHA-256", "kafkashaded.org.apache.kafka.common.security.scram.ScramLoginModule"),
+    SASL_SCRAM_512: ("SCRAM-SHA-512", "kafkashaded.org.apache.kafka.common.security.scram.ScramLoginModule"),
+}
+
+
+def kafka_needs_credentials(security: str) -> bool:
+    """True when the mode authenticates with kafka_api_key / kafka_api_secret from the scope."""
+    return security in _USERPASS_MODES
+
+
+def kafka_sasl_mechanism(security: str) -> str:
+    return _USERPASS_MODES[security][0] if security in _USERPASS_MODES else "OAUTHBEARER"
 
 REQUIRED_RULE_GROUPS = ("objections", "risk", "methodology")
 
@@ -239,16 +257,14 @@ def kafka_reader_options(bootstrap: str, security: str, api_key: str = None, api
     if security not in KAFKA_SECURITY_MODES:
         raise ValueError(f"kafka_security must be one of {KAFKA_SECURITY_MODES}, got {security!r}")
     opts = {"kafka.bootstrap.servers": bootstrap}
-    if security == SASL_PLAIN:
+    if security in _USERPASS_MODES:
+        mechanism, login_module = _USERPASS_MODES[security]
         user = _safe_secret_fragment(api_key, "kafka api key")
         pwd = _safe_secret_fragment(api_secret, "kafka api secret")
         opts.update({
             "kafka.security.protocol": "SASL_SSL",
-            "kafka.sasl.mechanism": "PLAIN",
-            "kafka.sasl.jaas.config": (
-                "kafkashaded.org.apache.kafka.common.security.plain.PlainLoginModule "
-                f'required username="{user}" password="{pwd}";'
-            ),
+            "kafka.sasl.mechanism": mechanism,
+            "kafka.sasl.jaas.config": f'{login_module} required username="{user}" password="{pwd}";',
         })
     else:  # MSK_IAM: credentials come from the cluster instance profile
         opts.update({

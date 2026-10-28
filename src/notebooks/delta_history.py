@@ -49,8 +49,8 @@ assert trigger_mode in ("processing_time", "available_now"), trigger_mode
 # COMMAND ----------
 
 bootstrap = dbutils.secrets.get(scope, "kafka_bootstrap")
-api_key = dbutils.secrets.get(scope, "kafka_api_key") if security == SASL_PLAIN else None
-api_secret = dbutils.secrets.get(scope, "kafka_api_secret") if security == SASL_PLAIN else None
+api_key = dbutils.secrets.get(scope, "kafka_api_key") if kafka_needs_credentials(security) else None
+api_secret = dbutils.secrets.get(scope, "kafka_api_secret") if kafka_needs_credentials(security) else None
 kafka_opts = kafka_reader_options(bootstrap, security, api_key, api_secret)
 
 

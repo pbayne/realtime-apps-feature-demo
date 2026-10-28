@@ -34,14 +34,18 @@ resources:
           description: Kafka bootstrap servers (Confluent endpoint or MSK IAM bootstrap string)
           secret: {scope: "${var.secret_scope}", key: kafka_bootstrap, permission: READ}
 
-        # Kafka key/secret are needed only for SASL_SSL_PLAIN. For SASL_SSL_MSK_IAM,
-        # delete these two entries (the keys don't exist in the scope in that mode).
+        - name: kafka-security
+          description: Kafka auth mode (SASL_SSL_PLAIN | SASL_SSL_SCRAM_SHA_256 | SASL_SSL_SCRAM_SHA_512)
+          secret: {scope: "${var.secret_scope}", key: kafka_security, permission: READ}
+
+        # Kafka key/secret are the SASL username/password (Confluent API key, Redpanda
+        # SCRAM user). The app producer does not support SASL_SSL_MSK_IAM.
         - name: kafka-api-key
-          description: Kafka API key (SASL_SSL_PLAIN only)
+          description: Kafka SASL username / API key
           secret: {scope: "${var.secret_scope}", key: kafka_api_key, permission: READ}
 
         - name: kafka-api-secret
-          description: Kafka API secret (SASL_SSL_PLAIN only)
+          description: Kafka SASL password / API secret
           secret: {scope: "${var.secret_scope}", key: kafka_api_secret, permission: READ}
 
         - name: parakeet-stt

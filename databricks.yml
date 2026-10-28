@@ -35,7 +35,7 @@ variables:
     description: Secret scope holding Lakebase and Kafka connection values (see README "Secrets").
     default: call-copilot
   kafka_security:
-    description: "Kafka auth mode: SASL_SSL_PLAIN (Confluent Cloud) or SASL_SSL_MSK_IAM (AWS MSK Serverless / IAM)."
+    description: "Kafka auth mode: SASL_SSL_PLAIN (Confluent Cloud), SASL_SSL_SCRAM_SHA_256 / _512 (Redpanda Cloud) or SASL_SSL_MSK_IAM (AWS MSK; jobs only)."
     default: SASL_SSL_PLAIN
   kafka_topics:
     description: Comma-separated topics the setup job creates if missing.

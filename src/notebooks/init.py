@@ -15,7 +15,8 @@
 # MAGIC    the RTM job can read them.
 # MAGIC
 # MAGIC Kafka credentials are created out of band and stored in the scope (see README):
-# MAGIC - `SASL_SSL_PLAIN`: `kafka_bootstrap`, `kafka_api_key`, `kafka_api_secret`
+# MAGIC - `SASL_SSL_PLAIN` (Confluent) or `SASL_SSL_SCRAM_SHA_256` / `_512` (Redpanda Cloud):
+# MAGIC   `kafka_bootstrap`, `kafka_api_key` (username), `kafka_api_secret` (password)
 # MAGIC - `SASL_SSL_MSK_IAM`: `kafka_bootstrap` (the IAM bootstrap string). No key needed.
 # MAGIC
 # MAGIC The database role password is never printed. It comes from the `pg_password`
@@ -44,7 +45,7 @@ DEFAULTS = {
     "pg_role": "copilot_writer",
     "pg_password": "",
     "secret_scope": "call-copilot",
-    "kafka_security": "SASL_SSL_PLAIN",     # SASL_SSL_PLAIN | SASL_SSL_MSK_IAM
+    "kafka_security": "SASL_SSL_PLAIN",     # SASL_SSL_PLAIN | SASL_SSL_SCRAM_SHA_256 | SASL_SSL_SCRAM_SHA_512 | SASL_SSL_MSK_IAM
     "kafka_topics": "utterances,cards",
     "kafka_partitions": "4",
     "kafka_replication_factor": "3",
@@ -63,12 +64,14 @@ for field in ("project_id", "branch_name", "database_name", "pg_role", "secret_s
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,62}", p[field]):
         raise ValueError(f"Invalid {field}: expected a simple identifier, got {p[field]!r}")
 
-if p["kafka_security"] not in ("SASL_SSL_PLAIN", "SASL_SSL_MSK_IAM"):
-    raise ValueError(f"kafka_security must be SASL_SSL_PLAIN or SASL_SSL_MSK_IAM, got {p['kafka_security']!r}")
-
 # COMMAND ----------
 
 # MAGIC %run ./rtm_lib
+
+# COMMAND ----------
+
+if p["kafka_security"] not in KAFKA_SECURITY_MODES:
+    raise ValueError(f"kafka_security must be one of {KAFKA_SECURITY_MODES}, got {p['kafka_security']!r}")
 
 # COMMAND ----------
 
@@ -141,10 +144,12 @@ TABLE_DDL = [
     """CREATE TABLE IF NOT EXISTS calls (
         call_id     TEXT PRIMARY KEY,
         playbook    TEXT NOT NULL,
-        started_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-        ended_at    TIMESTAMPTZ,
+        started_at  BIGINT NOT NULL,          -- epoch ms, like every other *_ms column
+        ended_at    BIGINT,
         customer_id TEXT,
-        status      TEXT NOT NULL DEFAULT 'live'
+        status      TEXT NOT NULL DEFAULT 'active',
+        mode        TEXT,                     -- replay | mic
+        script      TEXT                      -- replay script name
     )""",
     """CREATE TABLE IF NOT EXISTS utterances (
         call_id      TEXT NOT NULL,
@@ -154,6 +159,7 @@ TABLE_DDL = [
         t_start_ms   BIGINT,
         t_end_ms     BIGINT,
         emitted_at_ms BIGINT,
+        playbook     TEXT,
         PRIMARY KEY (call_id, seq)
     )""",
     # Written by the RTM job via the native sink (upsert on call_id,seq).
@@ -259,11 +265,11 @@ def msk_oauth_cb(_config):
     return token, expiry_ms / 1000.0
 
 
-if p["kafka_security"] == "SASL_SSL_PLAIN":
+if kafka_needs_credentials(p["kafka_security"]):
     admin_conf = {
         "bootstrap.servers": bootstrap,
         "security.protocol": "SASL_SSL",
-        "sasl.mechanisms": "PLAIN",
+        "sasl.mechanisms": kafka_sasl_mechanism(p["kafka_security"]),
         "sasl.username": dbutils.secrets.get(SCOPE, "kafka_api_key"),
         "sasl.password": dbutils.secrets.get(SCOPE, "kafka_api_secret"),
     }

@@ -30,7 +30,7 @@
 from pyspark.sql import functions as F  # noqa: E402  (also available via %run rtm_lib)
 
 dbutils.widgets.text("secret_scope", "call-copilot")
-dbutils.widgets.text("kafka_security", SASL_PLAIN)          # SASL_SSL_PLAIN | SASL_SSL_MSK_IAM
+dbutils.widgets.text("kafka_security", SASL_PLAIN)          # SASL_SSL_PLAIN | SASL_SSL_SCRAM_SHA_256 | SASL_SSL_SCRAM_SHA_512 | SASL_SSL_MSK_IAM
 dbutils.widgets.text("utterances_topic", "utterances")
 dbutils.widgets.text("starting_offsets", "latest")          # used only for a brand-new checkpoint
 dbutils.widgets.text("checkpoint_path", "")
@@ -61,8 +61,8 @@ assert topic in topic_names(topic), topic
 
 # kafka_bootstrap: broker list (SASL_SSL endpoint for Confluent, IAM bootstrap string for MSK).
 bootstrap = dbutils.secrets.get(scope, "kafka_bootstrap")
-api_key = dbutils.secrets.get(scope, "kafka_api_key") if kafka_security == SASL_PLAIN else None
-api_secret = dbutils.secrets.get(scope, "kafka_api_secret") if kafka_security == SASL_PLAIN else None
+api_key = dbutils.secrets.get(scope, "kafka_api_key") if kafka_needs_credentials(kafka_security) else None
+api_secret = dbutils.secrets.get(scope, "kafka_api_secret") if kafka_needs_credentials(kafka_security) else None
 lakebase_endpoint = dbutils.secrets.get(scope, "lakebase_endpoint")  # project_id.branch_id[.endpoint_id]
 
 rules = load_rules(rules_path)

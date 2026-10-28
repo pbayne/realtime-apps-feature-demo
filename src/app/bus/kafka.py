@@ -2,8 +2,10 @@
 
 Consumers are not needed by the app: the RTM job reads utterances, and enrichments
 come back through Lakebase. `subscribe` is implemented for parity with MemoryBus.
-Auth: SASL/SSL via env (KAFKA_SECURITY_PROTOCOL, KAFKA_SASL_MECHANISM,
-KAFKA_USERNAME, KAFKA_PASSWORD). Publish failures are logged, never raised.
+Auth: SASL/SSL via env. KAFKA_SECURITY (SASL_SSL_PLAIN | SASL_SSL_SCRAM_SHA_256 |
+SASL_SSL_SCRAM_SHA_512, same names as the notebooks) or the raw KAFKA_SECURITY_PROTOCOL /
+KAFKA_SASL_MECHANISM pair, plus KAFKA_USERNAME, KAFKA_PASSWORD. Publish failures are
+logged, never raised.
 """
 
 from __future__ import annotations
@@ -18,6 +20,13 @@ from .base import Handler
 
 log = logging.getLogger("copilot.bus.kafka")
 
+# KAFKA_SECURITY mode (shared with the notebooks) -> SASL mechanism.
+_MODE_MECHANISM = {
+    "SASL_SSL_PLAIN": "PLAIN",
+    "SASL_SSL_SCRAM_SHA_256": "SCRAM-SHA-256",
+    "SASL_SSL_SCRAM_SHA_512": "SCRAM-SHA-512",
+}
+
 
 class KafkaBus:
     def __init__(self, settings: Settings) -> None:
@@ -27,9 +36,17 @@ class KafkaBus:
         self._consumer_tasks: list[Any] = []
 
     def _sasl_kwargs(self) -> dict[str, Any]:
-        kw: dict[str, Any] = {"security_protocol": self._s.kafka_security_protocol}
-        if self._s.kafka_security_protocol.startswith("SASL"):
-            kw["sasl_mechanism"] = self._s.kafka_sasl_mechanism
+        protocol, mechanism = self._s.kafka_security_protocol, self._s.kafka_sasl_mechanism
+        if self._s.kafka_security:
+            protocol = "SASL_SSL"
+            mechanism = _MODE_MECHANISM[self._s.kafka_security]
+        kw: dict[str, Any] = {"security_protocol": protocol}
+        if protocol in ("SSL", "SASL_SSL"):
+            # aiokafka refuses SSL without an explicit context.
+            from aiokafka.helpers import create_ssl_context
+            kw["ssl_context"] = create_ssl_context()
+        if protocol.startswith("SASL"):
+            kw["sasl_mechanism"] = mechanism
             kw["sasl_plain_username"] = self._s.kafka_username
             kw["sasl_plain_password"] = self._s.kafka_password
         return kw
