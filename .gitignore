@@ -27,3 +27,4 @@ frontend/.vite/
 .vscode/
 *.swp
 *conf*.json
+!frontend/tsconfig.json
