@@ -38,15 +38,16 @@ resources:
           description: Kafka auth mode (SASL_SSL_PLAIN | SASL_SSL_SCRAM_SHA_256 | SASL_SSL_SCRAM_SHA_512)
           secret: {scope: "${var.secret_scope}", key: kafka_security, permission: READ}
 
-        # Kafka key/secret are the SASL username/password (Confluent API key, Redpanda
-        # SCRAM user). The app producer does not support SASL_SSL_MSK_IAM.
+        # The app's own Kafka identity (write-only on the topics). The jobs use the separate
+        # read-only kafka_api_key / kafka_api_secret. The app producer does not support
+        # SASL_SSL_MSK_IAM.
         - name: kafka-api-key
-          description: Kafka SASL username / API key
-          secret: {scope: "${var.secret_scope}", key: kafka_api_key, permission: READ}
+          description: App Kafka SASL username / API key (producer)
+          secret: {scope: "${var.secret_scope}", key: kafka_app_api_key, permission: READ}
 
         - name: kafka-api-secret
-          description: Kafka SASL password / API secret
-          secret: {scope: "${var.secret_scope}", key: kafka_api_secret, permission: READ}
+          description: App Kafka SASL password / API secret (producer)
+          secret: {scope: "${var.secret_scope}", key: kafka_app_api_secret, permission: READ}
 
         - name: parakeet-stt
           description: Route-optimized GPU STT endpoint (created by register_parakeet.py)

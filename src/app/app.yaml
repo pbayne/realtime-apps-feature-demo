@@ -12,8 +12,8 @@ env:
   - name: LAKEBASE_PASSWORD
     valueFrom: lakebase-password
   # Kafka: KAFKA_SECURITY uses the notebook mode names (SASL_SSL_PLAIN for Confluent,
-  # SASL_SSL_SCRAM_SHA_256 for Redpanda Cloud). The username/password are the
-  # kafka_api_key / kafka_api_secret scope keys in both cases.
+  # SASL_SSL_SCRAM_SHA_256 for Redpanda Cloud). The username/password are the app's
+  # producer identity (kafka_app_api_key / kafka_app_api_secret in the scope).
   - name: KAFKA_BOOTSTRAP_SERVERS
     valueFrom: kafka-bootstrap
   - name: KAFKA_SECURITY

@@ -85,9 +85,14 @@ interval, not a processing delay, so it does not add to this number. See
 
 | Key | Mode | Value |
 |---|---|---|
-| `kafka_bootstrap` | both | Confluent bootstrap endpoint, or MSK IAM bootstrap string |
-| `kafka_api_key` | PLAIN | Confluent API key |
-| `kafka_api_secret` | PLAIN | Confluent API secret |
+| `kafka_bootstrap` | all | Broker list (Confluent / Redpanda seed broker, or MSK IAM bootstrap string) |
+| `kafka_security` | all | Written by `deploy.sh`; read by the app |
+| `kafka_api_key` / `kafka_api_secret` | user/password modes | **Jobs** identity: read-only on `utterances`, `cards` (+ `spark-kafka-source*` groups) |
+| `kafka_app_api_key` / `kafka_app_api_secret` | user/password modes | **App** identity: write-only on `utterances`, `cards` |
+
+User/password modes are `SASL_SSL_PLAIN` (Confluent API key/secret) and
+`SASL_SSL_SCRAM_SHA_256` / `_512` (Redpanda Cloud SCRAM users). Check connectivity and
+least privilege with `scripts/kafka_smoke.py <env-file>`.
 
 Lakebase keys (`lakebase_host`, `_db`, `_user`, `_password`, `_endpoint`) are
 written by the setup job. Do not put them in git.
@@ -225,10 +230,12 @@ export DATABRICKS_CONFIG_PROFILE=<profile>
 # Kafka secrets first (values never go in git)
 databricks secrets create-scope call-sidekick
 databricks secrets put-secret call-sidekick kafka_bootstrap
-databricks secrets put-secret call-sidekick kafka_api_key      # SASL_SSL_PLAIN only
-databricks secrets put-secret call-sidekick kafka_api_secret   # SASL_SSL_PLAIN only
+databricks secrets put-secret call-sidekick kafka_api_key          # jobs user (not MSK IAM)
+databricks secrets put-secret call-sidekick kafka_api_secret
+databricks secrets put-secret call-sidekick kafka_app_api_key      # app user (not MSK IAM)
+databricks secrets put-secret call-sidekick kafka_app_api_secret
 
-scripts/deploy.sh <profile> <catalog> SASL_SSL_PLAIN          # or SASL_SSL_MSK_IAM
+scripts/deploy.sh <profile> <catalog> SASL_SSL_SCRAM_SHA_256  # Redpanda; or SASL_SSL_PLAIN / SASL_SSL_MSK_IAM
 DEPLOY_PARAKEET=1 scripts/deploy.sh <profile> <catalog> SASL_SSL_PLAIN   # also registers Parakeet (GPU)
 ```
 

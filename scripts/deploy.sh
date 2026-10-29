@@ -61,7 +61,8 @@ have_secret() {
 }
 
 required_kafka=(kafka_bootstrap)
-[[ "$kafka_security" != "SASL_SSL_MSK_IAM" ]] && required_kafka+=(kafka_api_key kafka_api_secret)
+# Jobs (consumer) and app (producer) authenticate as separate users.
+[[ "$kafka_security" != "SASL_SSL_MSK_IAM" ]] && required_kafka+=(kafka_api_key kafka_api_secret kafka_app_api_key kafka_app_api_secret)
 missing=()
 for key in "${required_kafka[@]}"; do
   have_secret "$key" || missing+=("$key")
@@ -74,8 +75,10 @@ Create them first (values never go in git):
 EOF
   if [[ "$kafka_security" != "SASL_SSL_MSK_IAM" ]]; then
     cat >&2 <<EOF
-  databricks secrets put-secret $scope kafka_api_key --profile $profile
+  databricks secrets put-secret $scope kafka_api_key --profile $profile        # jobs: read-only user
   databricks secrets put-secret $scope kafka_api_secret --profile $profile
+  databricks secrets put-secret $scope kafka_app_api_key --profile $profile    # app: write-only user
+  databricks secrets put-secret $scope kafka_app_api_secret --profile $profile
 EOF
   fi
   exit 1
