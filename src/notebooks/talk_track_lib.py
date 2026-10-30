@@ -1,3 +1,4 @@
+# Databricks notebook source
 """Pure helpers for talk_track_insights.py (no Spark): prompt building, output parsing, run ids.
 
 The model is asked for JSON only. Anything that does not fit the contract is dropped and counted, never guessed.
