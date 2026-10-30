@@ -20,8 +20,11 @@ Hot-path contract: `emit()` is synchronous and only appends to a bounded deque (
 logged). A background task drains it in batches; SDK calls run in worker threads (`asyncio.to_thread`),
 so the event loop never waits on the network. Streams are one per target table, created lazily and
 reset on error. Fail-soft: missing config disables the sink (logged once); write failures are counted,
-logged and the stream is recreated for the next batch. Records in a failed batch are not retried
-(a partial ack could duplicate them), so history is best-effort, at-most-once per record in this layer.
+logged, and the batch is retried on a fresh stream with exponential backoff (`history_retry_attempts`).
+Delivery is therefore at-least-once: a retry after a partial ack can duplicate rows. Every table has a natural
+key for downstream dedupe (calls.call_id, utterances/enrichments (call_id, seq), cards.card_id,
+feedback (card_id, at_ms), voice_turns (session_id, turn), voice_items.item_id). A batch that still fails after
+the last attempt is counted as failed and logged; the call never waits on history.
 """
 
 from __future__ import annotations
@@ -102,7 +105,7 @@ class ZerobusHistorySink:
         self._streams: dict[str, Any] = {}
         self._task: Optional[asyncio.Task[None]] = None
         self._wake: Optional[asyncio.Event] = None
-        self.counters = {"queued": 0, "written": 0, "dropped": 0, "failed": 0, "skipped": 0}
+        self.counters = {"queued": 0, "written": 0, "dropped": 0, "failed": 0, "skipped": 0, "retried": 0}
         self._last_warn = float("-inf")
         self.disabled_reason = config_problem(settings)
         if self.disabled_reason is None and sdk_factory is None:
@@ -184,17 +187,24 @@ class ZerobusHistorySink:
         by_table: dict[str, list[dict[str, Any]]] = {}
         for table, record in batch:
             by_table.setdefault(table, []).append(record)
+        attempts = max(1, self._s.history_retry_attempts)
         for table, records in by_table.items():
-            try:
-                await asyncio.to_thread(self._write, table, records)
-                self.counters["written"] += len(records)
-            except Exception as exc:  # noqa: BLE001 - fail-soft: count, log, keep the call alive
-                self.counters["failed"] += len(records)
-                now = time.monotonic()
-                if now - self._last_warn >= _WARN_INTERVAL_S:
-                    self._last_warn = now
-                    log.warning("zerobus write to %s failed (%d records, total failed %d): %s",
-                                table, len(records), self.counters["failed"], str(exc)[:300])
+            for attempt in range(attempts):
+                try:
+                    await asyncio.to_thread(self._write, table, records)   # _write resets the stream on error
+                    self.counters["written"] += len(records)
+                    break
+                except Exception as exc:  # noqa: BLE001 - fail-soft: retry, then count and log
+                    if attempt < attempts - 1:
+                        self.counters["retried"] += len(records)
+                        await asyncio.sleep(self._s.history_retry_base_s * (2 ** attempt))
+                        continue
+                    self.counters["failed"] += len(records)
+                    now = time.monotonic()
+                    if now - self._last_warn >= _WARN_INTERVAL_S:
+                        self._last_warn = now
+                        log.warning("zerobus write to %s failed after %d attempts (%d records, total failed %d): %s",
+                                    table, attempts, len(records), self.counters["failed"], str(exc)[:300])
 
     # -------------------------------------------------- blocking (thread) side
     def _write(self, table: str, records: list[dict[str, Any]]) -> None:

@@ -164,7 +164,7 @@ deployed endpoint).
 | History writes | Zerobus (service principal, MODIFY+SELECT on 7 tables) | Kafka producer + bronze job |
 | Secrets | Lakebase, Zerobus client id and secret, endpoint | the above plus Kafka secrets |
 | Failure surface | Zerobus queue (bounded, drop-oldest, counted); Lakebase (background) | broker, RTM job, checkpoint, topic ACLs |
-| On a failed history write | counted and logged; the call continues | the bronze job retries from the checkpoint |
+| On a failed history write | retried on a fresh stream (3 attempts, backoff), then counted; at-least-once; the call continues | the bronze job retries from the checkpoint |
 
 ### GPU endpoints and scale-to-zero (both backbones)
 
@@ -184,8 +184,7 @@ two always-on A10G endpoints.
   columns are STRING.
 - One stream per table. Batches are flushed every 0.5 s or 500 records. The queue holds 10 000 records and
   drops the oldest when full (counted in `/healthz` → `history.dropped`).
-- Acks mean durable, not queryable (the docs). A failed batch is counted in `history.failed` and not retried,
-  so history is at-most-once in the app. The Zerobus SDK retries transient errors itself.
+- Acks mean durable, not queryable (the docs). On a write error a failed batch is retried on a fresh stream with exponential backoff (`HISTORY_RETRY_ATTEMPTS`, default 3; `retried` counts), and only counted in `failed` after the last attempt. Delivery is at-least-once: a retry after a partial ack can duplicate rows, so dedupe downstream on the natural keys (calls.call_id, utterances/enrichments (call_id, seq), cards.card_id, feedback (card_id, at_ms), voice_turns (session_id, turn), voice_items.item_id).
 - Sources: Zerobus Ingest docs (<https://docs.databricks.com/aws/en/ingestion/zerobus-ingest>), message blocking
   and acknowledgment (<https://docs.databricks.com/aws/en/ingestion/zerobus-message-blocking>), and the Python
   SDK README (<https://github.com/databricks/zerobus-sdk/blob/main/python/README.md>). SDK 1.10.0,

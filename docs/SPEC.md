@@ -504,8 +504,7 @@ notebook's DDL has the same columns and types.
   counted in `dropped`, warning logged). A background task flushes batches of up to `HISTORY_BATCH_MAX` records
   every `HISTORY_FLUSH_INTERVAL_S`, in worker threads.
 - Acks: the sink waits on the last offset of each batch, then flushes. Acks mean durable, not yet queryable.
-- Failures: a failed batch increments `failed`, closes the stream, and is not retried (a partial ack could duplicate
-  records). The SDK's own transient-error recovery still applies.
+- Failures: the stream is closed and a failed batch is retried on a fresh stream with exponential backoff (`HISTORY_RETRY_ATTEMPTS`, default 3; `retried` counts), and only counted in `failed` after the last attempt. Delivery is at-least-once: a retry after a partial ack can duplicate rows, so dedupe downstream on the natural keys (calls.call_id, utterances/enrichments (call_id, seq), cards.card_id, feedback (card_id, at_ms), voice_turns (session_id, turn), voice_items.item_id).
 - Fail-soft: missing endpoint, client id or secret, or host disables the sink (one warning; `skipped` counts).
   The call keeps running.
 - Shutdown drains the queue up to `HISTORY_FLUSH_TIMEOUT_S`.

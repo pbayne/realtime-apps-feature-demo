@@ -129,19 +129,35 @@ async def test_queue_is_bounded_and_drops_oldest_without_blocking():
 
 
 @aio
-async def test_write_failure_is_counted_and_stream_is_recreated_for_next_batch():
+async def test_transient_write_failure_is_retried_on_a_fresh_stream():
     sdk = FakeSdk()
-    sink = ZerobusHistorySink(_settings(), sdk_factory=lambda s: sdk)
+    sink = ZerobusHistorySink(_settings(history_retry_base_s=0.0), sdk_factory=lambda s: sdk)
     await sink.start()
     sdk.failures_left = 1
     for seq in range(3):
         sink.emit("utterances", hs.utterance_row(_utt(seq)))
-    await sink._drain_all()                    # first batch fails
-    assert sink.counters["failed"] == 3 and sink.counters["written"] == 0
+    await sink._drain_all()                    # attempt 1 fails, attempt 2 succeeds on a new stream
+    assert sink.counters["written"] == 3 and sink.counters["failed"] == 0 and sink.counters["retried"] == 3
     assert sdk.streams[0].closed, "a failed stream is closed and dropped"
+    assert len(sdk.opened) == 2
+    await sink.stop()
+
+
+@aio
+async def test_persistent_write_failure_is_counted_after_the_last_attempt():
+    sdk = FakeSdk()
+    sink = ZerobusHistorySink(_settings(history_retry_base_s=0.0, history_retry_attempts=3), sdk_factory=lambda s: sdk)
+    await sink.start()
+    sdk.failures_left = 99
+    for seq in range(2):
+        sink.emit("utterances", hs.utterance_row(_utt(seq)))
+    await sink._drain_all()
+    assert sink.counters["failed"] == 2 and sink.counters["written"] == 0 and sink.counters["retried"] == 4
+    assert len(sdk.opened) == 3, "one fresh stream per attempt"
+    sdk.failures_left = 0
     sink.emit("utterances", hs.utterance_row(_utt(9)))
-    await sink._drain_all()                    # next batch opens a new stream
-    assert len(sdk.opened) == 2 and sink.counters["written"] == 1
+    await sink._drain_all()                    # the sink keeps working afterwards
+    assert sink.counters["written"] == 1
     await sink.stop()
 
 

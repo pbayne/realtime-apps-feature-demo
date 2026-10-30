@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Headphones } from "lucide-react";
+import { VoiceReadiness } from "./VoiceReadiness";
 import type { PlaybookSummary, VoiceOption, VoiceRole } from "../../lib/types";
 
 interface Props {
@@ -91,6 +92,8 @@ export function VoiceStartPanel(p: Props) {
           ))}
         </select>
       </div>
+
+      <VoiceReadiness />
 
       <p className="flex gap-2 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
         <Headphones className="mt-0.5 size-4 shrink-0 text-sky-300" />

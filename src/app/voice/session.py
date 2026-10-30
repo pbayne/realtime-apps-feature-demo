@@ -98,6 +98,8 @@ class VoiceDeps:
     stream_decoder: Optional[Callable[[Callable[[dict[str, Any]], None]], Any]] = None
     vad: Any = None                            # voice-activity gate for streams; None = energy VAD
     rules_for: Optional[Callable[[str], Rules]] = None
+    # Reports that an endpoint answered a real turn ("stt" | "tts" | "llm"), for the warmth indicator.
+    note_ok: Optional[Callable[[str], None]] = None
 
 
 @dataclass
@@ -190,6 +192,13 @@ class VoiceSession:
     def _user_label(self) -> str:
         """Speaker label for the user's own speech in live events: the assistant's user, or the practice rep."""
         return "user" if self.role == "assistant" else "agent"
+
+    def _note_ok(self, name: str) -> None:
+        if self.deps.note_ok is not None:
+            try:
+                self.deps.note_ok(name)
+            except Exception:  # noqa: BLE001 - telemetry must never break a turn
+                log.debug("note_ok failed", exc_info=True)
 
     def _emit(self, event: dict[str, Any]) -> None:
         if event.get("type") == "audio" and event.get("turn") in self._silenced_turns:
@@ -359,6 +368,7 @@ class VoiceSession:
         text = (ev.text or "").strip()
         if not text:
             return
+        self._note_ok("stt")
         if is_filler(text):
             # Noise, a cough or a hesitation ("uh", "mm-hmm") must not start a reply. Clear the caption.
             vlog("turn_skipped", session_id=self.session_id, reason="filler")
@@ -596,6 +606,7 @@ class VoiceSession:
                     async for delta in stream:
                         if rec.timing["llm_first_token_ms"] is None:
                             rec.timing["llm_first_token_ms"] = _ms(t0)
+                            self._note_ok("llm")
                         spoken = splitter.feed(delta)
                         if spoken:
                             say(spoken)
@@ -661,6 +672,7 @@ class VoiceSession:
                     rec.timing["first_audio_ms"] = _ms(t0)
                     started = rec.marks.get("tts_started", time.monotonic())
                     rec.timing["tts_first_audio_ms"] = _ms(started)
+                    self._note_ok("tts")
                 self._emit({"type": "audio", "turn": rec.turn, "seq": seq, "rate": chunk.rate,
                             "pcm_b64": base64.b64encode(chunk.pcm).decode("ascii")})
                 seq += 1

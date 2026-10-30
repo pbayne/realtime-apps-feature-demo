@@ -227,8 +227,8 @@ Sources: [Zerobus Ingest](https://docs.databricks.com/aws/en/ingestion/zerobus-i
 
 The sink (`src/app/history/zerobus.py`) never blocks the call. `emit()` appends to a bounded queue (10 000 records,
 drop-oldest, counted). A background task flushes batches (500 records or 0.5 s) through worker threads, one stream
-per table. Missing credentials disable the sink with one log line. Failed batches are counted, and the stream is
-recreated for the next batch. `/healthz` reports `history.queue_depth`, `dropped`, `failed`, and `written`.
+per table. Missing credentials disable the sink with one log line. On a write error a failed batch is retried on a fresh stream with exponential backoff (`HISTORY_RETRY_ATTEMPTS`, default 3; `retried` counts), and only counted in `failed` after the last attempt. Delivery is at-least-once: a retry after a partial ack can duplicate rows, so dedupe downstream on the natural keys (calls.call_id, utterances/enrichments (call_id, seq), cards.card_id, feedback (card_id, at_ms), voice_turns (session_id, turn), voice_items.item_id).
+`/api/health` reports `history.queue_depth`, `dropped`, `retried`, `failed`, and `written`.
 
 ## Kafka backbone: RTM restrictions (verified)
 

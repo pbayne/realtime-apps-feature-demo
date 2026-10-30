@@ -180,6 +180,20 @@ async def list_voices(request: Request):
     return {"voices": voice_catalog(), "default": _svc(request).settings.tts_voice}
 
 
+@app.get("/api/voice/warmup")
+async def voice_warmup_status(request: Request):
+    """Warmth of the voice endpoints (stt, tts, llm): warm | warming | cold."""
+    return _svc(request).voice_warmth()
+
+
+@app.post("/api/voice/warmup", status_code=202)
+async def voice_warmup(request: Request):
+    """Start waking the voice endpoints now (no-op while a warm-up is running). Poll GET for progress."""
+    svc = _svc(request)
+    svc.prewarm_voice(force=True)
+    return svc.voice_warmth()
+
+
 @app.post("/api/voice/sessions", status_code=201)
 async def create_voice_session(body: CreateVoiceSession, request: Request):
     svc = _svc(request)

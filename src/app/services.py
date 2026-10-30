@@ -95,6 +95,7 @@ class Services:
                                                protocol=settings.stt_protocol)
         self.voice_sessions: dict[str, VoiceSession] = {}
         self._last_prewarm = float("-inf")
+        self._warmth: dict[str, dict] = {}
         self._background: set[asyncio.Task] = set()
         policy = RetryPolicy(budget_s=settings.voice_warmup_budget_s, base_s=settings.voice_retry_base_s,
                              cap_s=settings.voice_retry_cap_s)
@@ -107,6 +108,7 @@ class Services:
             retriever=self.retriever, calls=self.sessions, finish_call=self.finish_call,
             new_practice_call=self.new_practice_call, history=self.history,
             stream_decoder=stream_decoder, vad=self.vad, rules_for=self.registry.rules_for,
+            note_ok=self.note_voice_ok,
         )
         self.readiness = EndpointReadiness(
             {"stt": settings.stt_endpoint, "tts": settings.tts_endpoint},
@@ -253,20 +255,26 @@ class Services:
         self.prewarm_voice()
         return vs
 
-    def prewarm_voice(self) -> None:
-        """Start waking scale-to-zero GPU endpoints as soon as someone opens a voice session, so the first
-        turn rarely waits for a cold start. Fire-and-forget, throttled per app instance, never raises."""
+    def prewarm_voice(self, *, force: bool = False) -> None:
+        """Start waking scale-to-zero GPU endpoints as soon as someone opens a voice session (or presses
+        "Warm up voice"), so the first turn rarely waits for a cold start. Fire-and-forget, throttled per app
+        instance unless forced, never raises. Progress is in `voice_warmth()`."""
         now = time.monotonic()
-        if now - self._last_prewarm < self.settings.voice_prewarm_interval_s:
+        if not force and now - self._last_prewarm < self.settings.voice_prewarm_interval_s:
             return
+        if any(w.get("warming") for w in self._warmth.values()):
+            return  # a warm-up is already running
         self._last_prewarm = now
 
         async def ping(name: str, coro) -> None:
             t0 = time.monotonic()
             try:
                 await asyncio.wait_for(coro, timeout=self.settings.voice_warmup_budget_s)
-                log.info("prewarm %s ok in %.1f s", name, time.monotonic() - t0)
+                elapsed = time.monotonic() - t0
+                self._warmth[name] = {"warming": False, "last_ok_ms": now_ms(), "last_ms": round(elapsed * 1000)}
+                log.info("prewarm %s ok in %.1f s", name, elapsed)
             except Exception as exc:  # warm-up is best effort; the turn path has its own retries
+                self._warmth[name] = {**self._warmth.get(name, {}), "warming": False, "error": type(exc).__name__}
                 log.info("prewarm %s not ready after %.1f s: %s", name, time.monotonic() - t0, type(exc).__name__)
 
         async def tts_ping() -> None:
@@ -285,9 +293,36 @@ class Services:
 
         pings = (("tts", tts_ping()), ("stt", self.transcriber.transcribe(_SILENT_WAV)), ("llm", llm_ping()))
         for name, coro in pings:
+            # Mark warming before the task runs, so a status read right after this call is accurate.
+            self._warmth[name] = {**self._warmth.get(name, {}), "warming": True, "started_ms": now_ms()}
             task = asyncio.create_task(ping(name, coro))
             self._background.add(task)
             task.add_done_callback(self._background.discard)
+
+    def note_voice_ok(self, name: str) -> None:
+        """A real turn reached this endpoint (stt | tts | llm): it is warm now."""
+        self._warmth[name] = {**self._warmth.get(name, {}), "warming": False, "last_ok_ms": now_ms()}
+
+    def voice_warmth(self) -> dict:
+        """Best-effort warmth per voice endpoint. Serving reports READY even when scaled to zero, so this tracks
+        when each endpoint last answered: warm (answered within voice_warm_window_s), warming (a ping is in
+        flight), or cold (never answered in this app instance, or idle longer than the window)."""
+        now = now_ms()
+        window_ms = self.settings.voice_warm_window_s * 1000
+        out = {}
+        for name in ("stt", "tts", "llm"):
+            w = self._warmth.get(name, {})
+            if w.get("warming"):
+                state = "warming"
+            elif w.get("last_ok_ms") and now - w["last_ok_ms"] < window_ms:
+                state = "warm"
+            else:
+                state = "cold"
+            out[name] = {"state": state, "last_ok_ms": w.get("last_ok_ms"), "started_ms": w.get("started_ms"),
+                         "last_ms": w.get("last_ms"), "error": w.get("error")}
+        states = {v["state"] for v in out.values()}
+        overall = "warm" if states == {"warm"} else ("warming" if "warming" in states else "cold")
+        return {"state": overall, "endpoints": out, "scale_to_zero": self.settings.gpu_scale_to_zero_hint}
 
     def voice_session(self, session_id: str) -> VoiceSession:
         vs = self.voice_sessions.get(session_id)

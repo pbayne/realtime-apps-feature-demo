@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     voice_warmup_budget_s: float = 240.0     # total time one STT or TTS call keeps retrying a cold endpoint
                                              # (Kokoro measured 112 s from scale-to-zero on an A10)
     voice_prewarm_interval_s: float = 60.0   # opening a voice session pings both GPU endpoints at most this often
+    voice_warm_window_s: float = 1200.0      # an endpoint that answered within this long counts as warm (scale-to-zero
+                                             # idles out after ~30 min)
+    gpu_scale_to_zero_hint: bool = True      # shown in the UI: whether the GPU endpoints can be cold
     live_debounce_ms: int = 600              # live analysis on stable partials: at most one run per window
     live_min_new_words: int = 4              # a partial must add this many words before it is analysed
     live_suggest_interval_s: float = 2.5     # live suggestion pass: at most one LLM call per session per interval
@@ -134,6 +137,8 @@ class Settings(BaseSettings):
     history_batch_max: int = 500               # records per flush per table
     history_flush_interval_s: float = 0.5
     history_flush_timeout_s: float = 10.0      # shutdown drain budget
+    history_retry_attempts: int = 3            # attempts per batch (fresh stream each time) before counting it failed
+    history_retry_base_s: float = 0.5          # backoff: base * 2**attempt
 
     # --- Kafka (databricks mode, backbone=kafka) ---
     kafka_bootstrap_servers: Optional[str] = None
