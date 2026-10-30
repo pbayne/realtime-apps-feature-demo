@@ -797,6 +797,7 @@ class VoiceSession:
             "sentiment": list(self.live.series),
             "suggestions": list(self.live.provisional.values()),
             "streaming": self.streaming, "dropped_frames": self.dropped_frames,
+            "closed": self.closed,   # ended (End, DELETE, deadline or reaper); readable for session_grace_s
         }
 
 

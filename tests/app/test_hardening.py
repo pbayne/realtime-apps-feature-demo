@@ -121,6 +121,8 @@ def test_post_end_is_the_beacon_twin_of_delete(client):
     sid = new_voice(client)["session_id"]
     assert client.post(f"/api/voice/sessions/{sid}/end").status_code == 204
     assert svc_of(client).voice_sessions[sid].closed
+    snap = client.get(f"/api/voice/sessions/{sid}")
+    assert snap.status_code == 200 and snap.json()["closed"] is True, "owner can still read it during the grace period"
 
 
 def test_a_practice_socket_blip_keeps_the_session_for_the_grace_period(client):
