@@ -329,6 +329,16 @@ uv venv /tmp/cc-venv --python 3.11
 VIRTUAL_ENV=/tmp/cc-venv uv pip install -r tests/notebooks/requirements-dev.txt
 /tmp/cc-venv/bin/python -m pytest tests/notebooks -q
 
+# Against the deployed app (OAuth via the CLI profile; warm the GPUs first)
+.venv/bin/python scripts/warmup_voice.py --profile realtime-call-sidekick
+# 1) protocol: stream synthesized speech into /ws/voice, save the spoken reply as a WAV, print timing
+.venv/bin/python scripts/voice_smoke.py --profile realtime-call-sidekick [--role practice]
+# 2) browser: headless Chrome, real speech through the app's own capture path (getUserMedia shim), then click
+#    the controls: live caption, live read, pin/dismiss a chip, spoken reply, Esc interrupt, M mute, Space PTT
+say -o /tmp/q.aiff "What should I ask a couple worried about fees?" && \
+  afconvert -f WAVE -d LEI16@48000 -c 1 /tmp/q.aiff /tmp/q.wav
+.venv/bin/python scripts/ui_e2e.py --profile realtime-call-sidekick --wav /tmp/q.wav   # 12 checks, exit 0 = all pass
+
 # Lint (ruff.toml: pyflakes, E4/E7/E9, import order)
 uvx ruff check src/app tests/app tests/notebooks scripts/*.py
 

@@ -43,9 +43,14 @@ MIC_SHIM = """(() => {
     const bytes = Uint8Array.from(atob(WAV_B64), (ch) => ch.charCodeAt(0));
     const buf = await ctx.decodeAudioData(bytes.buffer);
     const dest = ctx.createMediaStreamDestination();
-    const src = ctx.createBufferSource();
-    src.buffer = buf; src.connect(dest); src.start(ctx.currentTime + %s);
-    window.__sidekickMicEndsAt = performance.now() + (%s + buf.duration) * 1000;
+    // Speak once: the app re-acquires the mic on unmute / mode switch, and a real user would not repeat the
+    // question then. Later acquisitions get a silent stream.
+    if (!window.__sidekickSpoke) {
+      window.__sidekickSpoke = true;
+      const src = ctx.createBufferSource();
+      src.buffer = buf; src.connect(dest); src.start(ctx.currentTime + %s);
+      window.__sidekickMicEndsAt = performance.now() + (%s + buf.duration) * 1000;
+    }
     return dest.stream;
   };
 })();"""
