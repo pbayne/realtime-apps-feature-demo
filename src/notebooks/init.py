@@ -158,8 +158,11 @@ TABLE_DDL = [
         customer_id TEXT,
         status      TEXT NOT NULL DEFAULT 'active',
         mode        TEXT,                     -- replay | mic
-        script      TEXT                      -- replay script name
+        script      TEXT,                     -- replay script name
+        owner       TEXT                      -- the user who created the call (SPEC 10)
     )""",
+    # Existing deployments: the owner column is newer than the table (idempotent).
+    "ALTER TABLE calls ADD COLUMN IF NOT EXISTS owner TEXT",
     """CREATE TABLE IF NOT EXISTS utterances (
         call_id      TEXT NOT NULL,
         seq          INTEGER NOT NULL,

@@ -70,7 +70,7 @@ class MemoryStore:
     async def add_feedback(self, card_id: str, call_id: str, action: str, edited_text: Optional[str], at_ms: int) -> None:
         self.feedback.append({"card_id": card_id, "call_id": call_id, "action": action, "edited_text": edited_text, "at_ms": at_ms})
         card = self.cards.get(card_id)
-        if card is not None:
+        if card is not None and card["call_id"] == call_id:
             card["status"] = {"accept": "accepted", "reject": "rejected", "edit": "edited"}.get(action, card["status"])
 
     async def snapshot(self, call_id: str) -> dict[str, Any]:

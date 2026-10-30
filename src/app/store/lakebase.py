@@ -29,7 +29,8 @@ log = logging.getLogger("sidekick.store.lakebase")
 DDL = """
 CREATE TABLE IF NOT EXISTS calls (
   call_id TEXT PRIMARY KEY, playbook TEXT NOT NULL, started_at BIGINT NOT NULL,
-  ended_at BIGINT, customer_id TEXT, status TEXT NOT NULL DEFAULT 'active', mode TEXT, script TEXT);
+  ended_at BIGINT, customer_id TEXT, status TEXT NOT NULL DEFAULT 'active', mode TEXT, script TEXT, owner TEXT);
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS owner TEXT;
 CREATE TABLE IF NOT EXISTS utterances (
   call_id TEXT NOT NULL, seq INT NOT NULL, speaker TEXT NOT NULL, text TEXT NOT NULL,
   t_start_ms BIGINT, t_end_ms BIGINT, emitted_at_ms BIGINT, playbook TEXT,
@@ -87,15 +88,20 @@ class LakebaseStore:
         return {"host": host, "port": s.lakebase_port, "database": s.lakebase_db, "user": user, "password": password, "ssl": s.lakebase_sslmode}
 
     async def start(self) -> None:
+        """Connect and create tables. Safe to call again after a failure (the retry loop in Services does):
+        any half-open pool is closed first. Queries get command_timeout; a stuck database fails them, never hangs."""
         import asyncpg
 
+        await self.stop()
         creds = await asyncio.to_thread(self._credentials)
-        self._pool = await asyncpg.create_pool(min_size=self._s.lakebase_pool_min, max_size=self._s.lakebase_pool_max, **creds)
+        timeouts = {"command_timeout": self._s.lakebase_command_timeout_s, "timeout": self._s.lakebase_connect_timeout_s}
+        self._pool = await asyncpg.create_pool(min_size=self._s.lakebase_pool_min, max_size=self._s.lakebase_pool_max,
+                                               **creds, **timeouts)
         async with self._pool.acquire() as conn:
             await conn.execute(DDL)
         # LISTEN is only needed when RTM writes enrichments (BACKBONE=kafka). Direct mode enriches in process.
         if self._s.backbone == "kafka":
-            self._listen_conn = await asyncpg.connect(**creds)
+            self._listen_conn = await asyncpg.connect(**creds, **timeouts)
             await self._listen_conn.add_listener("enrichment_ready", self._on_notify)
         log.info("Lakebase store ready at %s/%s", creds["host"], creds["database"])
 
@@ -141,15 +147,16 @@ class LakebaseStore:
     # --------------------------------------------------------------- writes
     async def create_call(self, call: CallRecord) -> None:
         await self._pool.execute(
-            "INSERT INTO calls (call_id, playbook, started_at, customer_id, status, mode, script) "
-            "VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (call_id) DO NOTHING",
+            "INSERT INTO calls (call_id, playbook, started_at, customer_id, status, mode, script, owner) "
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (call_id) DO NOTHING",
             call.call_id, call.playbook, call.started_at_ms, call.customer_id, call.status, call.mode, call.script,
+            call.owner,
         )
 
     async def get_call(self, call_id: str) -> Optional[dict[str, Any]]:
         rec = await self._pool.fetchrow(
-            "SELECT call_id, playbook, started_at AS started_at_ms, ended_at AS ended_at_ms, customer_id, status, mode, script "
-            "FROM calls WHERE call_id=$1",
+            "SELECT call_id, playbook, started_at AS started_at_ms, ended_at AS ended_at_ms, customer_id, status, mode, "
+            "script, owner FROM calls WHERE call_id=$1",
             call_id,
         )
         return dict(rec) if rec else None
@@ -225,7 +232,8 @@ class LakebaseStore:
             card_id, call_id, action, edited_text, at_ms,
         )
         if status:
-            await self._pool.execute("UPDATE cards SET status=$2 WHERE card_id=$1", card_id, status)
+            # Scoped to the call: a card id from another call must not change this call's card.
+            await self._pool.execute("UPDATE cards SET status=$3 WHERE card_id=$1 AND call_id=$2", card_id, call_id, status)
 
     async def snapshot(self, call_id: str) -> dict[str, Any]:
         call = await self.get_call(call_id)
