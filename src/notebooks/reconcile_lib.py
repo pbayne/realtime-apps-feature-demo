@@ -1,3 +1,4 @@
+# Databricks notebook source
 """Pure helpers for reconcile_history.py: the Lakebase -> Delta table map, the SQL the job sends, the watermark.
 
 No Spark or dbutils imports, so tests/notebooks can check every statement the job runs (parity with
