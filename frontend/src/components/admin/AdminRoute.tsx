@@ -4,6 +4,7 @@ import { applyTheme, cacheTheme, currentTheme, type ThemeId } from "../../lib/th
 import type { AdminPage } from "../../lib/route";
 import { AdminShell } from "./AdminShell";
 import { ThemesPage } from "./ThemesPage";
+import { ArchitecturePage } from "./ArchitecturePage";
 
 interface Props {
   page: AdminPage;
@@ -33,6 +34,7 @@ export function AdminRoute({ page }: Props) {
   return (
     <AdminShell page={page} isAdmin={me?.is_admin ?? false}>
       {page === "themes" && <ThemesPage active={theme} saving={saving} note={note} onPick={pick} />}
+      {page === "architecture" && <ArchitecturePage />}
       {page === "insights" && me && !me.is_admin && <p className="text-[var(--color-muted)]">Insights are for admins.</p>}
     </AdminShell>
   );
