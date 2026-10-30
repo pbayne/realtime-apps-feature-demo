@@ -2,7 +2,7 @@
 # MAGIC %md
 # MAGIC # Call sidekick — playbook KB → Delta → Vector Search
 # MAGIC
-# MAGIC Reads `src/app/playbooks/kb/*.md` from the bundle, splits each document on `##` headings
+# MAGIC Reads `src/app/playbooks/kb/<playbook>/*.md` from the bundle, splits each document on `##` headings
 # MAGIC into chunks, writes a Delta table with Change Data Feed enabled, and creates
 # MAGIC (or syncs) a **delta-sync** Vector Search index that embeds `content` with
 # MAGIC `databricks-gte-large-en` (SPEC section 6 `EMBED_MODEL`).
@@ -85,15 +85,21 @@ def chunk_markdown(doc_id: str, text: str):
     return chunks
 
 
-paths = sorted(glob.glob(os.path.join(kb_dir, "*.md")))
+# KB docs live per playbook: kb/<playbook>/<doc>.md (the app's retriever filters on `playbook`).
+paths = sorted(glob.glob(os.path.join(kb_dir, "**", "*.md"), recursive=True))
 if not paths:
-    raise FileNotFoundError(f"no *.md under {kb_dir}")
+    raise FileNotFoundError(f"no *.md under {kb_dir} (expected kb/<playbook>/<doc>.md)")
 
 rows = []
 for path in paths:
-    doc_id = Path(path).stem
-    rows.extend(chunk_markdown(doc_id, Path(path).read_text(encoding="utf-8")))
-print(f"{len(paths)} documents -> {len(rows)} chunks")
+    rel = Path(path).relative_to(kb_dir)
+    playbook = rel.parts[0] if len(rel.parts) > 1 else "shared"
+    doc_id = f"kb/{rel.as_posix()}"           # same doc ids the app cites (kb/advisor_coach/fee_objections.md)
+    for c in chunk_markdown(doc_id, Path(path).read_text(encoding="utf-8")):
+        c["playbook"] = playbook
+        c["title"] = Path(path).stem.replace("_", " ")
+        rows.append(c)
+print(f"{len(paths)} documents -> {len(rows)} chunks across {len({r['playbook'] for r in rows})} playbooks")
 
 # COMMAND ----------
 
@@ -104,13 +110,18 @@ print(f"{len(paths)} documents -> {len(rows)} chunks")
 from pyspark.sql import functions as F
 from pyspark.sql.types import StringType, StructField, StructType
 
+# Column names match the app's Vector Search client (sidekick/retrieval.py): doc_id, title, section, text.
 schema_ddl = StructType([
     StructField("chunk_id", StringType(), False),
+    StructField("playbook", StringType(), False),
     StructField("doc_id", StringType(), False),
-    StructField("clause", StringType(), True),
-    StructField("content", StringType(), False),
+    StructField("title", StringType(), True),
+    StructField("section", StringType(), True),
+    StructField("text", StringType(), False),
 ])
-df = spark.createDataFrame(rows, schema=schema_ddl).withColumn("updated_at", F.current_timestamp())
+records = [{"chunk_id": r["chunk_id"], "playbook": r["playbook"], "doc_id": r["doc_id"], "title": r["title"],
+            "section": r["clause"], "text": r["content"]} for r in rows]
+df = spark.createDataFrame(records, schema=schema_ddl).withColumn("updated_at", F.current_timestamp())
 
 (df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(TABLE))
 spark.sql(f"ALTER TABLE {TABLE} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
@@ -142,7 +153,7 @@ except Exception:
         source_table_name=TABLE,
         primary_key="chunk_id",
         pipeline_type="TRIGGERED",
-        embedding_source_column="content",
+        embedding_source_column="text",
         embedding_model_endpoint_name=embedding_endpoint,
     )
     print(f"created index {INDEX}")

@@ -13,6 +13,7 @@ backend (settings.retrieval_min_score_*), so a Hit.score is only comparable with
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import re
@@ -120,7 +121,8 @@ class VectorSearchStub:
     async def search(self, playbook: str, query: str, k: int) -> list[Hit]:
         from databricks.sdk import WorkspaceClient
 
-        index_name = self._s.vs_index_template.format(playbook=playbook)
+        index_name = self._s.vs_index_template.format(playbook=playbook, catalog=self._s.history_catalog,
+                                                      schema=self._s.history_schema)
 
         def _call():
             w = WorkspaceClient()
@@ -129,6 +131,7 @@ class VectorSearchStub:
                 columns=["doc_id", "title", "section", "text"],
                 query_text=query,
                 num_results=k,
+                filters_json=json.dumps({"playbook": playbook}),   # one index, filtered per playbook
             )
 
         resp = await asyncio.to_thread(_call)

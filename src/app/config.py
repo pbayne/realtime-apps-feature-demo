@@ -99,13 +99,16 @@ class Settings(BaseSettings):
     readiness_ttl_s: float = 30.0            # /healthz voice readiness (serving endpoint states) cache
 
     # --- retrieval ---
+    # auto = memory (in-app gte embeddings over the playbook KB; right-sized for small KBs and no network
+    # hop per turn). vector_search is opt-in for large corpora (index from build_kb_index.py).
     retrieval_backend: Literal["auto", "memory", "keyword", "vector_search"] = "auto"
     retrieval_top_k: int = 3
     # Calibrated on e2-demo databricks-gte-large-en over the shipped KB: relevant top-1 cosine
     # ~0.60-0.77, unrelated ~0.45-0.53. Keyword (idf overlap) is a noisier offline fallback.
     retrieval_min_score_embed: float = 0.58
     retrieval_min_score_keyword: float = 0.25
-    vs_index_template: str = "main.call_sidekick.kb_{playbook}"  # Vector Search index, databricks mode
+    # RETRIEVAL_BACKEND=vector_search: one index built by build_kb_index.py, filtered by playbook.
+    vs_index_template: str = "{catalog}.{schema}.kb_chunks_index"
 
     # --- decision policy (SPEC section 4) ---
     # Perception (one haiku call) runs concurrently and never gates the decision. Its budget only

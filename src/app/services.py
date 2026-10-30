@@ -80,7 +80,7 @@ class Services:
         self.registry = PlaybookRegistry.load(settings.playbooks_dir, self.rules, settings.replay_dir)
         backend = settings.retrieval_backend
         if backend == "auto":
-            backend = "vector_search" if settings.mode == "databricks" else "memory"
+            backend = "memory"
         self.retrieval_backend = backend
         self.retriever = Retriever(self.llm, settings,
                                    VectorSearchStub(settings) if backend == "vector_search" else None,
