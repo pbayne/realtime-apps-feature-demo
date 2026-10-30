@@ -338,6 +338,8 @@ VIRTUAL_ENV=/tmp/cc-venv uv pip install -r tests/notebooks/requirements-dev.txt
 say -o /tmp/q.aiff "What should I ask a couple worried about fees?" && \
   afconvert -f WAVE -d LEI16@48000 -c 1 /tmp/q.aiff /tmp/q.wav
 .venv/bin/python scripts/ui_e2e.py --profile realtime-call-sidekick --wav /tmp/q.wav   # 12 checks, exit 0 = all pass
+# 3) real microphone: the Mac speaks the question out loud and the built-in mic hears it (no fake device)
+.venv/bin/python scripts/ui_e2e.py --profile realtime-call-sidekick --real-mic
 
 # Lint (ruff.toml: pyflakes, E4/E7/E9, import order)
 uvx ruff check src/app tests/app tests/notebooks scripts/*.py

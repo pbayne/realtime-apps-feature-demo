@@ -117,11 +117,13 @@ async def run(args) -> int:
     port = 9340
     proc = subprocess.Popen([CHROME, "--headless=new", f"--remote-debugging-port={port}",
                              f"--user-data-dir={tempfile.mkdtemp()}", "--window-size=1440,900",
-                             "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
+                             "--use-fake-ui-for-media-stream",
+                             *([] if args.real_mic else ["--use-fake-device-for-media-stream"]),
                              "--autoplay-policy=no-user-gesture-required", "about:blank"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     checks: dict[str, bool] = {}
     notes: dict[str, str] = {}
+    speaker = None
     try:
         for _ in range(60):
             try:
@@ -135,12 +137,22 @@ async def run(args) -> int:
             for d in ("Network", "Runtime", "Page"):
                 await cdp.call(f"{d}.enable")
             await cdp.call("Network.setExtraHTTPHeaders", headers=auth)
-            with open(args.wav, "rb") as f:
-                wav_b64 = base64.b64encode(f.read()).decode()
-            await cdp.call("Page.addScriptToEvaluateOnNewDocument",
-                           source=MIC_SHIM % (wav_b64, args.lead_in, args.lead_in))
+            if not args.real_mic:
+                with open(args.wav, "rb") as f:
+                    wav_b64 = base64.b64encode(f.read()).decode()
+                await cdp.call("Page.addScriptToEvaluateOnNewDocument",
+                               source=MIC_SHIM % (wav_b64, args.lead_in, args.lead_in))
             await cdp.call("Page.navigate", url=f"{app}/?autostart=1&voice=assistant&playbook={args.playbook}")
             t0 = time.monotonic()
+            speaker = None
+            if args.real_mic:
+                for _ in range(80):
+                    if (await cdp.js(PROBE) or {}).get("orb") == "Listening":
+                        break
+                    await asyncio.sleep(0.25)
+                await asyncio.sleep(1.0)
+                # Real acoustic path: the Mac speaks out loud and the built-in microphone hears it.
+                speaker = subprocess.Popen(["say", "-r", "175", args.say])
             seen_speaking = seen_caption = None
             pinned = dismissed = None
             interrupted_at = None
@@ -217,6 +229,8 @@ async def run(args) -> int:
             if cdp.console:
                 notes["console"] = " || ".join(cdp.console[:5])
     finally:
+        if speaker is not None and speaker.poll() is None:
+            speaker.terminate()
         proc.terminate()
     width = max(len(k) for k in checks)
     for k, ok in checks.items():
@@ -231,12 +245,19 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--profile", required=True)
     ap.add_argument("--app", default="call-sidekick")
-    ap.add_argument("--wav", required=True, help="speech WAV (any rate) played as the mic after --lead-in seconds")
+    ap.add_argument("--wav", help="speech WAV (any rate) played as the mic after --lead-in seconds")
+    ap.add_argument("--real-mic", action="store_true",
+                    help="use the machine's real default microphone and speak --say aloud through the speakers")
+    ap.add_argument("--say", default="Hi Sidekick. I have a first meeting tomorrow with a couple who are worried about "
+                                     "fees. What should I ask them, and what should I follow up on afterwards?")
     ap.add_argument("--lead-in", type=float, default=3.0)
     ap.add_argument("--playbook", default="advisor_coach")
     ap.add_argument("--timeout", type=float, default=90)
     ap.add_argument("--out", default="/tmp/sidekick-ui-e2e")
-    sys.exit(asyncio.run(run(ap.parse_args())))
+    args = ap.parse_args()
+    if not args.real_mic and not args.wav:
+        ap.error("--wav is required unless --real-mic")
+    sys.exit(asyncio.run(run(args)))
 
 
 if __name__ == "__main__":
