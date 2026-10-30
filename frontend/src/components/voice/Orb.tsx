@@ -31,6 +31,8 @@ interface Props {
   readMic(out: Uint8Array<ArrayBuffer>): void;
   /** Sidekick's (or the customer's) playback level. Drives the glow while they talk. */
   readAgent(out: Uint8Array<ArrayBuffer>): void;
+  /** Smaller orb beside the controls once the conversation has started, so the transcript gets the height. */
+  compact?: boolean;
 }
 
 const rms = (data: Uint8Array<ArrayBuffer>) => {
@@ -47,7 +49,7 @@ const rms = (data: Uint8Array<ArrayBuffer>) => {
  * Sidekick's voice brightens its glow and rings while it talks. The waveform shows whichever is the active
  * speaker. Everything is written straight to CSS variables per frame; React does not re-render for audio.
  */
-export function Orb({ state, label, readMic, readAgent }: Props) {
+export function Orb({ state, label, readMic, readAgent, compact = false }: Props) {
   const orbRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef(state);
@@ -111,14 +113,20 @@ export function Orb({ state, label, readMic, readAgent }: Props) {
   }, []);
 
   return (
-    <div className="flex flex-col items-center">
-      <div className="grid size-[150px] place-items-center">
-        <div ref={orbRef} data-state={state} className="orb" aria-hidden />
+    <div className={compact ? "flex min-w-0 items-center gap-4" : "flex flex-col items-center"}>
+      <div className={`grid shrink-0 place-items-center transition-all duration-300 ${compact ? "size-[84px]" : "size-[150px]"}`}>
+        <div ref={orbRef} data-state={state} className={`orb ${compact ? "orb-compact" : ""}`} aria-hidden />
       </div>
-      <p className="mt-1 text-[16px] font-semibold tracking-tight" aria-live="polite">
-        {label}
-      </p>
-      <canvas ref={canvasRef} className="mt-1.5 h-10 w-full max-w-[460px]" aria-hidden />
+      <div className={compact ? "min-w-0" : "contents"}>
+        <p className={`font-semibold tracking-tight ${compact ? "text-[15px]" : "mt-1 text-[16px]"}`} aria-live="polite">
+          {label}
+        </p>
+        <canvas
+          ref={canvasRef}
+          className={compact ? "mt-1 h-7 w-[220px] max-w-full" : "mt-1.5 h-10 w-full max-w-[460px]"}
+          aria-hidden
+        />
+      </div>
     </div>
   );
 }

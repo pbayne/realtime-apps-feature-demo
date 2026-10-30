@@ -90,3 +90,12 @@
   .orb { transform: none; }
   .orb[data-state="sidekick"]::after { transform: none; }
 }
+
+/* Compact orb beside the controls once the conversation has started. */
+.orb.orb-compact {
+  width: 64px;
+  height: 64px;
+}
+.orb.orb-compact::before {
+  inset: -7px;
+}

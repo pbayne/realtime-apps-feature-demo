@@ -18,7 +18,7 @@ export default function App() {
 
   // Demo convenience (?autostart=1): starts a call straight away.
   //   ?mode=replay|mic                       call console (real backend or ?mock=1)
-  //   ?mock=1&voice=assistant|practice       simulated voice session (no backend, no mic)
+  //   ?voice=assistant|practice              voice session (add ?mock=1 for a simulated one: no backend, no mic)
   //   &playbook=<name>&script=<name>|scenario=<name>
   const autostarted = useRef(false);
   useEffect(() => {
@@ -28,7 +28,7 @@ export default function App() {
     const playbook = params.get("playbook") || "advisor_coach";
     const voiceRole = params.get("voice");
     if (voiceRole) {
-      if (!MOCK) return;
+      // Real sessions too: the browser still asks for the mic, and audio starts after the first user gesture.
       const role: VoiceRole = voiceRole === "practice" ? "practice" : "assistant";
       const scenario =
         params.get("scenario") ||

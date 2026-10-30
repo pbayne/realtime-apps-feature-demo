@@ -143,6 +143,9 @@ export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void 
   );
   const lane = <LiveLane chips={state.chips} onPin={api.pinChip} onDismiss={api.dismissChip} />;
 
+  // Once the conversation has started, shrink the orb so the transcript gets the height.
+  const compact = state.exchanges.length > 0;
+
   return (
     <div className="flex min-h-full flex-col md:h-full md:min-h-0">
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-[var(--color-line)] bg-[var(--color-ink)]/80 px-5 py-3 backdrop-blur">
@@ -232,11 +235,21 @@ export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void 
         }`}
       >
         <section className="panel flex min-h-[560px] min-h-0 flex-col overflow-hidden md:min-h-0">
-          <div className="flex flex-col items-center gap-3 border-b border-[var(--color-line)] px-5 pb-4 pt-5">
-            <Orb state={orb.kind} label={orb.label} readMic={api.readMic} readAgent={api.readAgent} />
-            <Controls api={api} running={running} />
-            <LatencyHud timing={state.lastTiming} history={state.firstAudioHistory} />
-          </div>
+          {compact ? (
+            <div className="flex flex-col gap-2.5 border-b border-[var(--color-line)] px-5 py-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <Orb state={orb.kind} label={orb.label} readMic={api.readMic} readAgent={api.readAgent} compact />
+                <Controls api={api} running={running} />
+              </div>
+              <LatencyHud timing={state.lastTiming} history={state.firstAudioHistory} compact />
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-3 border-b border-[var(--color-line)] px-5 pb-4 pt-5">
+              <Orb state={orb.kind} label={orb.label} readMic={api.readMic} readAgent={api.readAgent} />
+              <Controls api={api} running={running} />
+              <LatencyHud timing={state.lastTiming} history={state.firstAudioHistory} />
+            </div>
+          )}
 
           <Conversation exchanges={state.exchanges} role={state.role} agentLabel={practice ? "Customer" : "Sidekick"} />
 

@@ -205,3 +205,12 @@ def test_practice_stream_injects_the_rep_line_into_the_call_pipeline():
 
     run(go())
     assert ("agent", "what are your fees") in injected
+
+
+def test_filler_only_speech_never_starts_a_reply():
+    from voice.session import is_filler
+
+    for noise in ("Uh", "um.", "Hmm", "uh, um", "Mm.", "  "):
+        assert is_filler(noise), noise
+    for real in ("Uh, what are the fees?", "Okay so what should I ask", "No", "Yeah.", "Okay", "Mm-hmm", "Thanks"):
+        assert not is_filler(real), real

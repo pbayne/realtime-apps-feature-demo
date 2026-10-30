@@ -118,6 +118,18 @@ def _ms(since: float) -> float:
     return round((time.monotonic() - since) * 1000.0, 1)
 
 
+
+# Non-lexical hesitations only. Short answers ("yeah", "okay", "right", "mm-hmm", "no") are real turns.
+_FILLER = {"uh", "um", "uhm", "umm", "er", "erm", "ah", "eh", "hm", "hmm", "mm", "huh"}
+
+
+def is_filler(text: str) -> bool:
+    """True for a streamed final that is only noise or hesitation: no word outside the filler set.
+    Typed turns are never filtered; this applies to transcribed speech only."""
+    words = [w for w in re.sub(r"[^a-z' ]+", " ", text.lower().replace("-", "")).split() if w]
+    return not words or all(w.strip("'") in _FILLER for w in words)
+
+
 class VoiceSession:
     def __init__(self, *, session_id: str, role: str, playbook: Playbook, voice: str, deps: VoiceDeps,
                  call_id: Optional[str] = None, scenario: Optional[PracticeScenario] = None) -> None:
@@ -343,6 +355,11 @@ class VoiceSession:
     def _on_stream_final(self, ev: TranscriptEvent) -> None:
         text = (ev.text or "").strip()
         if not text:
+            return
+        if is_filler(text):
+            # Noise, a cough or a hesitation ("uh", "mm-hmm") must not start a reply. Clear the caption.
+            vlog("turn_skipped", session_id=self.session_id, reason="filler")
+            self._emit({"type": "user_partial", "turn": self.turn + 1, "text": "", "first_word_ms": None})
             return
         try:
             self._start_turn(text=text, stt_ms=ev.commit_ms)
