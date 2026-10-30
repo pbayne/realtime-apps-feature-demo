@@ -33,11 +33,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal, Optional
 
+from admin import insights as admin_insights
 from admin import prefs as admin_prefs
 from config import get_settings
 from fastapi import FastAPI, Query, Request, Response, WebSocket, WebSocketDisconnect
@@ -338,6 +340,38 @@ async def put_prefs(body: PutPrefs, request: Request):
     except Exception as exc:  # noqa: BLE001
         log.warning("prefs write failed: %r", exc)
         raise ServiceError(503, "preferences could not be saved right now") from exc
+
+
+def _insights_for(svc: Services) -> admin_insights.Insights:
+    """Built on first use: the SQL warehouse comes from DATABRICKS_WAREHOUSE_ID; without it the page is empty."""
+    existing = getattr(svc, "insights", None)
+    if existing is None:
+        s = svc.settings
+        wh = s.databricks_warehouse_id
+        executor = admin_insights.make_sdk_executor(wh) if wh and s.mode == "databricks" else None
+        existing = admin_insights.Insights(s.history_catalog, s.history_schema, wh, s.insights_cache_s, executor)
+        svc.insights = existing
+    return existing
+
+
+def _admin_only(request: Request) -> None:
+    if not _is_admin(request):
+        raise ServiceError(403, "admin only")
+
+
+@app.get("/api/admin/insights")
+async def admin_insights_overview(request: Request, days: int = Query(default=7, ge=1, le=90)):
+    _admin_only(request)
+    return await _insights_for(_svc(request)).overview(days)
+
+
+@app.get("/api/admin/calls/{call_id}")
+async def admin_call_detail(call_id: str, request: Request):
+    """Drill-down from the insights page: transcript, cards and the post-call summary, from Delta."""
+    _admin_only(request)
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", call_id):
+        raise ServiceError(404, "unknown call")
+    return {"call_id": call_id, **(await _insights_for(_svc(request)).call_detail(call_id))}
 
 
 # ----------------------------------------------------------------- WebSockets
