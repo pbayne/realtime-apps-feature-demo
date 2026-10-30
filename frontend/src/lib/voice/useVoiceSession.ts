@@ -170,8 +170,7 @@ export function useVoiceSession() {
 
   const onSocketOpen = useCallback(async (g: number, sid: string, reconnected: boolean) => {
     if (g !== gen.current) return;
-    dispatch({ type: "status", status: "live", error: null });
-    callDispatch({ type: "status", status: "live" });
+    // Not live yet: the status turns "live" when the server's first frame arrives (onSocketStatus "open").
     if (modeRef.current === "hands_free") openStream();
     if (!reconnected) return;
     // The socket dropped mid-session: rebuild the conversation from the server snapshot.

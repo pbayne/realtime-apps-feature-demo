@@ -44,11 +44,11 @@ export function openVoiceSocket(sessionId: string, h: VoiceSocketHandlers): Voic
     h.onStatus(attempt === 0 ? "connecting" : "reconnecting");
     const sock = new WebSocket(wsUrl(`/ws/voice/${encodeURIComponent(sessionId)}`));
     ws = sock;
+    // Status stays connecting/reconnecting until the server speaks: an open socket alone is not "live".
+    let proven = false;
     sock.onopen = () => {
       const again = opened;
       opened = true;
-      attempt = 0;
-      h.onStatus("open");
       h.onOpen(again);
     };
     sock.onmessage = (msg) => {
@@ -57,6 +57,13 @@ export function openVoiceSocket(sessionId: string, h: VoiceSocketHandlers): Voic
         ev = JSON.parse(String(msg.data)) as AnyServerEvent;
       } catch {
         return; /* ignore malformed frames */
+      }
+      // The first frame of any type is proof of life. Only a proven connection resets the reconnect count,
+      // so a server that accepts and then drops still runs into the cap.
+      if (!proven) {
+        proven = true;
+        attempt = 0;
+        h.onStatus("open");
       }
       // The server ends a session by sending session_ended and then closing with 4410. Stop here; no reconnect.
       if (ev?.type === "session_ended") {

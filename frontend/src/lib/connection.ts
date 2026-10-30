@@ -42,16 +42,21 @@ export function openCallSocket(callId: string, h: CallHandlers): CallConnection 
     h.onStatus(attempt === 0 ? "connecting" : "reconnecting");
     const sock = new WebSocket(wsUrl(`/ws/call/${encodeURIComponent(callId)}`));
     ws = sock;
-    sock.onopen = () => {
-      attempt = 0;
-      h.onStatus("open");
-    };
+    // Status stays connecting/reconnecting until the server speaks: the first frame of any type proves the link.
+    let proven = false;
     sock.onmessage = (msg) => {
+      let ev: ServerEvent;
       try {
-        h.onEvent(JSON.parse(String(msg.data)) as ServerEvent);
+        ev = JSON.parse(String(msg.data)) as ServerEvent;
       } catch {
-        /* ignore malformed frames */
+        return; /* ignore malformed frames */
       }
+      if (!proven) {
+        proven = true;
+        attempt = 0;
+        h.onStatus("open");
+      }
+      h.onEvent(ev);
     };
     sock.onclose = (closed) => {
       if (ws === sock) ws = null;
