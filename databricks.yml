@@ -137,6 +137,18 @@ targets:
     variables:
       backbone: direct
 
+  prod:
+    # Production: direct backbone with ALWAYS-ON GPU endpoints, so there is no cold start (Kokoro measured
+    # 112 s from scale-to-zero). Both A10 endpoints bill continuously. Resources are not user-prefixed.
+    # Deploy: GPU_SCALE_TO_ZERO=false BUNDLE_TARGET=prod scripts/deploy.sh <profile>  (see README "Production").
+    mode: production
+    workspace:
+      # Restricted to the deployer (a Shared root would be writable by every workspace user).
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      backbone: direct
+      gpu_scale_to_zero: "false"
+
   kafka:
     mode: development
     variables:

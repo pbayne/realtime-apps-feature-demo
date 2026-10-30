@@ -13,6 +13,7 @@
 #
 # Environment:
 #   BACKBONE              direct (default) | kafka
+#   BUNDLE_TARGET         dev (default for direct) | prod (direct, always-on GPUs, restricted root, no name prefixes)
 #   ZEROBUS_ENDPOINT      <workspace-id>.zerobus.<region>.cloud.databricks.com (direct; written to the scope if set)
 #   ZEROBUS_CLIENT_ID     service principal application id (direct; written to the scope if set)
 #   ZEROBUS_CLIENT_SECRET service principal OAuth secret (direct; written to the scope if set; never printed)
@@ -52,7 +53,7 @@ profile=$1
 catalog=${2:-realtime_call_sidekick_catalog}
 backbone=${BACKBONE:-direct}
 case "$backbone" in
-  direct) target=dev; uc_schema=${3:-call_sidekick}; kafka_security=SASL_SSL_PLAIN ;;
+  direct) target=${BUNDLE_TARGET:-dev}; uc_schema=${3:-call_sidekick}; kafka_security=SASL_SSL_PLAIN ;;
   kafka)  target=kafka; uc_schema=call_sidekick; kafka_security=${3:-SASL_SSL_PLAIN} ;;
   *) echo "BACKBONE must be direct or kafka" >&2; exit 2 ;;
 esac
