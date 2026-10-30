@@ -148,6 +148,7 @@ class VoiceSession:
         self.closed = False
         self.opened = False
         self.dropped_events = 0
+        self._silenced_turns: set[int] = set()
         self.dropped_frames = 0
         self._pending_practice = False
         self._current: Optional[_Turn] = None   # the turn whose work may be interrupted
@@ -191,6 +192,8 @@ class VoiceSession:
         return "user" if self.role == "assistant" else "agent"
 
     def _emit(self, event: dict[str, Any]) -> None:
+        if event.get("type") == "audio" and event.get("turn") in self._silenced_turns:
+            return  # barge-in: this turn's audio is no longer wanted
         event.setdefault("emitted_at_ms", now_ms())
         if event.get("type") in LOSSY and self.out.qsize() >= self.settings.voice_out_queue_max:
             self.dropped_events += 1
@@ -371,7 +374,19 @@ class VoiceSession:
         turn_done(interrupted=true). A turn that has finished (or is finishing) is never interrupted, so an
         interrupt that arrives after turn_done is ignored."""
         if self.busy and self._current is not None and self._current.cancellable:
+            self._silence(self._current.turn)
             self._task.cancel()
+
+    def _silence(self, turn: int) -> None:
+        """Drop the interrupted turn's audio that is still queued for the socket, and any it would still emit."""
+        self._silenced_turns.add(turn)
+        kept: list[Any] = []
+        while not self.out.empty():
+            ev = self.out.get_nowait()
+            if not (isinstance(ev, dict) and ev.get("type") == "audio" and ev.get("turn") == turn):
+                kept.append(ev)
+        for ev in kept:
+            self.out.put_nowait(ev)
 
     def submit_text(self, text: str) -> None:
         text = (text or "").strip()

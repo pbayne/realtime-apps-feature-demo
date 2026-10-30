@@ -206,3 +206,25 @@ def test_logs_carry_session_and_turn_ids_and_never_the_transcript(caplog):
     assert any(s["event"] == "voice.turn_done" and s["turn"] == 1 for s in structured)
     info_text = " ".join(r.getMessage() for r in records if r.levelno >= logging.INFO)
     assert "private fee question" not in info_text
+
+
+
+def test_interrupt_purges_queued_audio_of_the_cut_turn():
+    """Barge-in on the deployed app still delivered 37 queued audio chunks; they must be dropped server-side."""
+
+    async def scenario():
+        llm = FakeVoiceLlm(["One. ", "Two. ", "Three. ", "Four. ", "Five."])
+        vs = make_voice_session(llm, tts=FakeTts(chunks=6, delay_for=lambda i, t: 0.05 * i))[0]
+        vs.submit_text("tell me a long story")
+        for _ in range(400):  # no socket reader: audio piles up in the outbound queue
+            await asyncio.sleep(0.005)
+            if sum(1 for e in list(vs.out._queue) if isinstance(e, dict) and e.get("type") == "audio") >= 3:
+                break
+        assert any(isinstance(e, dict) and e.get("type") == "audio" for e in list(vs.out._queue))
+        turn = vs._current.turn
+        vs.interrupt()
+        events = await until_turn_done(vs, turn)  # everything the socket would still send after the interrupt
+        assert not [e for e in events if e.get("type") == "audio" and e.get("turn") == turn]
+        assert any(e.get("type") == "turn_done" and e.get("interrupted") for e in events)
+
+    run(scenario())
