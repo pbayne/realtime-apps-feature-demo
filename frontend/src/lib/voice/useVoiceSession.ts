@@ -5,7 +5,7 @@
 // mic is open. Hands-free keeps the stream open; push-to-talk opens it on key down and flushes on key up; mute
 // discards the open utterance. `?stream=0` falls back to one WAV per turn (the client VAD decides the turn end).
 import { useCallback, useEffect, useReducer, useRef } from "react";
-import { createVoiceSession, endCall, getVoiceSnapshot } from "../api";
+import { beaconVoiceSessionEnd, createVoiceSession, endCall, endVoiceSession, getVoiceSnapshot } from "../api";
 import type { ConnStatus } from "../connection";
 import { openMockCall } from "../mock";
 import { TERMINAL_MESSAGES, type TerminalReason } from "../reconnectPolicy";
@@ -38,7 +38,8 @@ export function useVoiceSession() {
   const playerRef = useRef<PcmPlayer | null>(null);
   const micRef = useRef<MicEngine | null>(null);
   const mockCallRef = useRef<{ close(): void } | null>(null);
-  const sessionRef = useRef<{ role: string; callId: string | null; mock: boolean } | null>(null);
+  /** The live server session, or null once it has ended, been released, or was never created. */
+  const sessionRef = useRef<{ role: string; sessionId: string; callId: string | null; mock: boolean } | null>(null);
   // Mirrors of React state for the non-React audio callbacks.
   const busyRef = useRef(false);
   const modeRef = useRef<VoiceInputMode>("hands_free");
@@ -158,7 +159,11 @@ export function useVoiceSession() {
   const onSocketTerminal = useCallback(
     (g: number, reason: TerminalReason) => {
       if (g !== gen.current) return;
+      const info = sessionRef.current;
       sessionRef.current = null;
+      // A lost connection can leave the session open on the server: release it. A superseded socket is not ours
+      // to release (another tab owns the session), and session_ended means the server has already closed it.
+      if (reason === "lost" && info && !info.mock) void endVoiceSession(info.sessionId);
       teardown();
       const at = Date.now();
       const message = TERMINAL_MESSAGES[reason];
@@ -239,7 +244,7 @@ export function useVoiceSession() {
       if (!alive()) return;
 
       dispatch({ type: "session", sessionId, callId });
-      sessionRef.current = { role: opts.role, callId, mock: MOCK };
+      sessionRef.current = { role: opts.role, sessionId, callId, mock: MOCK };
       if (opts.role === "practice") {
         callDispatch({ type: "begin", callId, playbook: opts.playbook, mode: "mic", at: Date.now() });
       }
@@ -375,7 +380,10 @@ export function useVoiceSession() {
 
   const end = useCallback(async () => {
     const info = sessionRef.current;
+    sessionRef.current = null;
     teardown();
+    // Release the server session first; for practice, the DELETE also ends the call, and endCall below is kept as it was.
+    if (info && !info.mock) void endVoiceSession(info.sessionId);
     if (info && !info.mock && info.role === "practice" && info.callId) {
       try {
         await endCall(info.callId);
@@ -388,11 +396,24 @@ export function useVoiceSession() {
   }, [teardown]);
 
   const reset = useCallback(() => {
-    teardown();
+    // Leaving a session that is still open (the rep went back to the start screen): release it on the server.
+    const info = sessionRef.current;
     sessionRef.current = null;
+    if (info && !info.mock) void endVoiceSession(info.sessionId);
+    teardown();
     dispatch({ type: "reset" });
     callDispatch({ type: "reset" });
   }, [teardown]);
+
+  // Tab close or navigation away: the server session is released with a beacon while one is open.
+  useEffect(() => {
+    const onPageHide = () => {
+      const info = sessionRef.current;
+      if (info && !info.mock) beaconVoiceSessionEnd(info.sessionId);
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, []);
 
   /** Mic level for the orb: the real analyser, or a synthetic signal in mock mode while the rep is speaking. */
   const readMic = useCallback((out: Uint8Array<ArrayBuffer>) => {

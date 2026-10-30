@@ -229,6 +229,31 @@ export async function createVoiceSession(opts: {
   return { session_id: data.session_id, call_id: str(data.call_id) ?? null };
 }
 
+/**
+ * Release a voice session on the server (DELETE /api/voice/sessions/{id}). Best effort: never throws.
+ * The server also ends the call for a practice session.
+ */
+export async function endVoiceSession(sessionId: string): Promise<void> {
+  try {
+    await fetch(`/api/voice/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE", keepalive: true });
+  } catch {
+    /* best effort: the page is leaving or the server is unreachable */
+  }
+}
+
+/**
+ * Page-hide release. sendBeacon can only POST, so this uses POST /api/voice/sessions/{id}/end.
+ * Best effort: never throws, and a refused beacon is ignored.
+ */
+export function beaconVoiceSessionEnd(sessionId: string): void {
+  try {
+    if (typeof navigator === "undefined" || typeof navigator.sendBeacon !== "function") return;
+    navigator.sendBeacon(`/api/voice/sessions/${encodeURIComponent(sessionId)}/end`);
+  } catch {
+    /* best effort */
+  }
+}
+
 /** A turn as the snapshot reports it. Used to rebuild the conversation after a socket reconnect. */
 export interface VoiceSnapshotTurn {
   turn: number;
