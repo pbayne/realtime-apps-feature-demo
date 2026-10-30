@@ -107,6 +107,26 @@ playbooks (0.3 s vs 1.0 s p50) is not explained by enrichment (about 1 ms in bot
 retrieval and decide path (`retrieval backends` differ: embed in one run, keyword-only fallback in the other).
 Not investigated further.
 
+### 3.3 Measured on the deployed app (direct backbone, in region)
+
+MEASURED 2026-10-30, FEVM `realtime-call-sidekick` (AWS us-west-2, serverless), warm GPU endpoints, streamed speech
+from `scripts/voice_smoke.py` (macOS `say`, 16 kHz), small samples (n = 1–3 per row).
+
+| Stage | Value |
+|---|---|
+| End of speech → final transcript (Parakeet rolling window, includes the 700 ms endpoint silence) | 0.84–0.92 s |
+| Parakeet window decode round trip (from a laptop; in region is lower) | p50 312 ms |
+| Voice model first token, practice prompt | 0.41 s (0.52–0.65 s standalone; first call after idle ~3.2 s) |
+| Voice model first token, assistant prompt (+ KB retrieval) | 1.03 s |
+| Kokoro first audio per sentence | 107–144 ms |
+| **Turn start → first audible reply** | practice **0.60–0.69 s**, assistant **1.29 s** |
+| Kokoro cold start from scale-to-zero | 112 s |
+| Zerobus history | 41 queued / 41 written / 0 dropped / 0 failed |
+
+Transcript accuracy note: Parakeet word timestamps drift 160–400 ms between overlapping 12 s windows, so LocalAgreement
+aligns re-decoded windows on the committed text (see `src/app/stt/agreement.py`; regression fixture recorded from the
+deployed endpoint).
+
 ## 4. When to choose which
 
 **direct** (default) for demos, POCs, and most customers:

@@ -5,6 +5,23 @@ suggestion cards for the agent or advisor, pushed over WebSocket. Two-way voice 
 Contract: [`docs/SPEC.md`](docs/SPEC.md). Architecture, both backbones, latency budget and switching:
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
+## Try it
+
+Deployed (FEVM `realtime-call-sidekick`, AWS us-west-2, Databricks SSO):
+**https://call-sidekick-7474650324322090.aws.databricksapps.com**
+
+1. Put on headphones (otherwise Sidekick hears itself).
+2. GPU endpoints scale to zero: run `scripts/warmup_voice.py --profile realtime-call-sidekick` first, or let the app
+   warm them (opening a voice session pings both; the banner shows "Warming up voice" for up to ~2 minutes).
+3. Start screen → **Talk to Sidekick** → **Practice customer** → *fee objection* (the customer talks back while
+   Sidekick coaches you), or **Assistant** (ask it what to say next; it answers aloud and files outcomes).
+   Deep links: `/?autostart=1&voice=practice&scenario=fee_objection`, `/?autostart=1&voice=assistant`.
+4. While you talk: live caption, live read (sentiment, intent, objections), live suggestion chips (pin to keep).
+   After each turn: spoken reply, Outcomes (action items, follow-up questions and responses, next steps), copy as email.
+
+End-to-end check from a laptop (streams synthesized speech in and saves Sidekick's spoken reply as a WAV):
+`.venv/bin/python scripts/voice_smoke.py --profile realtime-call-sidekick [--role practice]`.
+
 ## Architecture
 
 The default backbone is **direct**: no Kafka. The app enriches each final in process, keeps live state in
@@ -61,8 +78,8 @@ cd src/app && MODE=local uvicorn main:app --port 8000        # direct backbone, 
 ```
 
 Local mode uses the in-memory store, the in-memory history sink, and no bus. Set `DATABRICKS_CONFIG_PROFILE`
-to a workspace profile to use its LLM endpoints (e2-demo in our tests). Without it, the LLM is off and cards use
-templates.
+to a workspace profile to use its LLM endpoints (`realtime-call-sidekick`). Without it, the LLM is off and cards use
+templates. Voice needs the Parakeet and Kokoro endpoints, so test it against the deployed app (`voice_smoke.py`).
 
 `BACKBONE=kafka MODE=local` runs the scale-mode code path locally: an in-memory bus stands in for Kafka and
 `enrich/direct.py`'s `BusEnricher` stands in for RTM.
@@ -147,16 +164,30 @@ and the Delta history job cluster. Real-Time Mode does not run on serverless.
 Parakeet (STT) and Kokoro (TTS) are Custom LLM Serving endpoints on A10G. `gpu_scale_to_zero` (bundle variable;
 `GPU_SCALE_TO_ZERO=true|false` for `deploy.sh`) controls scale-to-zero. **Default is `true` for dev cost.**
 
-- With scale-to-zero on, the first voice turn after idle waits for a cold GPU. We measured about 156 s for a cold whisper
-  endpoint on e2-demo. Run `scripts/warmup_voice.py --profile <p>` a few minutes before a demo. It pings both
-  endpoints and prints time-to-ready.
+- With scale-to-zero on, the first voice turn after idle waits for a cold GPU: Kokoro took **112 s** from zero on an A10
+  (Parakeet, which was warm, 0.9 s). Opening a voice session pre-warms TTS, STT and the voice model (at most once a
+  minute per app instance); turns retry a cold endpoint for up to `VOICE_WARMUP_BUDGET_S` (240 s). For a demo, run
+  `scripts/warmup_voice.py --profile <p>` a few minutes ahead; it prints time-to-ready.
 - For real demos and latency measurements, deploy with `GPU_SCALE_TO_ZERO=false`. Both endpoints then stay up and bill
   continuously. Target latencies (SPEC 9.5) assume warm endpoints.
 
 ## Latency
 
 Targets are in SPEC 7 and 9.5. Measured numbers and their labels are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3.
-On the direct backbone, live replay on e2-demo (2026-10-30) measured in-process enrichment p50 0 ms (max 3 ms).
+
+**Deployed app, in region (us-west-2), warm endpoints, 2026-10-30** (streamed speech via `voice_smoke.py`, small n):
+
+| Stage | Practice mode | Assistant mode |
+|---|---|---|
+| End of speech → final transcript (includes the 700 ms endpoint silence) | 0.84–0.90 s | 0.92 s |
+| Turn start → voice model first token (`databricks-claude-haiku-4-5`) | 0.41 s | 1.03 s (with KB retrieval) |
+| Kokoro first audio for a sentence | 107–137 ms | 123 ms |
+| **Turn start → first audible reply** | **0.60–0.69 s** | **1.29 s** |
+| History via Zerobus | 41/41 records written, 0 dropped | |
+
+The first request to the voice model after idle took ~3 s once; the session pre-warm covers it.
+
+Earlier live replay (direct backbone, e2-demo LLMs) measured in-process enrichment p50 0 ms (max 3 ms).
 Customer final to card.start was p50 301 ms (`advisor_coach/fee_objection`) and 1002 ms (`contact_center/billing_dispute`).
 Card.done was p50 1992 ms and 2299 ms. Small samples (n = 5–7 cards).
 
@@ -174,8 +205,8 @@ and `src/app/app.yaml` maps them to env vars with `valueFrom`.
 | `KAFKA_BOOTSTRAP_SERVERS`, `KAFKA_SECURITY`, `KAFKA_USERNAME`, `KAFKA_PASSWORD` | `kafka-*` | `kafka_*` (placeholders in direct) | kafka |
 | `STT_ENDPOINT`, `FAST_MODEL`, `SMART_MODEL`, `EMBED_MODEL`, `TTS_ENDPOINT`, `VOICE_MODEL` | serving endpoint resources | (bundle variables) | both |
 
-Defaults in `src/app/config.py`: `VOICE_MODEL=databricks-claude-haiku-4-5` (fastest first token measured on e2-demo;
-re-measure in region), `FAST_MODEL=databricks-claude-haiku-5-5`, `SMART_MODEL=databricks-claude-sonnet-5-5`.
+Defaults in `src/app/config.py`: `VOICE_MODEL=databricks-claude-haiku-4-5` (0.41–0.52 s first token in region),
+`FAST_MODEL=databricks-claude-haiku-5-5`, `SMART_MODEL=databricks-claude-sonnet-5-5`.
 
 ## Zerobus history (direct backbone)
 
@@ -236,14 +267,26 @@ Two-way voice in the same app: Parakeet for speech in, Claude for the reply, Kok
   way to the end-of-turn list when the turn ends.
 - **Keys.** Space: hold to talk (push-to-talk mode). M: mute. Esc: interrupt Sidekick.
 - **Cold endpoints.** A scaled-to-zero STT or TTS endpoint shows "Warming up voice (GPU starting)" with a clock and
-  retries with backoff (up to 90 s) instead of failing the turn.
+  retries with backoff (up to 240 s) instead of failing the turn.
 - **Limits.** 30 minutes per socket, 20 voice sessions per app instance (HTTP 429 beyond that), 30 s per turn.
-  `/healthz` reports endpoint readiness (cached 30 s).
+  `/api/health` reports endpoint readiness (cached 30 s). (`/healthz` also exists, but the Databricks Apps proxy
+  answers that path itself, so use `/api/health` on a deployed app.)
+- **Hesitations.** A streamed final that is only "uh" / "um" / "hmm" does not start a reply.
 - **Local mock.** `?mock=1&voice=assistant|practice&autostart=1` runs the whole console with simulated speech,
   partials, live analysis and suggestions (add `&warm=1` to see the warming banner).
 
 The wire contract is in `docs/SPEC.md` sections 9.2a, 9.6 and 9.7. Logs are JSON lines on `sidekick.voice`, keyed by
 session and turn, with no transcript text at INFO.
+
+## Troubleshooting (seen on a fresh serverless FEVM workspace)
+
+| Symptom | Cause | Fix in this repo |
+|---|---|---|
+| Register job: `MlflowException ... us-west-2.storage.cloud.databricks.com ... Max retries exceeded` for the Parakeet model | Uploading ~2.4 GB to the workspace-internal experiment store fails from serverless (300 MB works) | Register jobs log into an experiment whose artifact location is the bundle's UC volume (`artifact_volume`) |
+| Register job: `[Errno 5] Input/output error` reading `/Workspace/...` files | The /Workspace FUSE mount is intermittent on serverless; the Workspace API reads the same files | `copy_workspace_dir()` copies serving code through the API with retries |
+| App: `native postgres login is disabled for this endpoint` | Lakebase project without native login | `enable_pg_native_login: true` in `resources/lakebase.yml` |
+| Setup job: `module 'scramp' has no attribute 'make_channel_binding'` | scramp 1.5 removed it; pg8000 still calls it | `scramp==1.4.6` pinned in `init.py` |
+| Voice turn: `tts:warming` then `tts:failed` | Kokoro scaled to zero (112 s cold start) | pre-warm on session open, 240 s budget, `warmup_voice.py` |
 
 ## Repository layout
 
