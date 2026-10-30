@@ -18,13 +18,16 @@ Docs: https://docs.databricks.com/aws/en/ingestion/zerobus-ingest
 
 Hot-path contract: `emit()` is synchronous and only appends to a bounded deque (drop-oldest, counted,
 logged). A background task drains it in batches; SDK calls run in worker threads (`asyncio.to_thread`),
-so the event loop never waits on the network. Streams are one per target table, created lazily and
-reset on error. Fail-soft: missing config disables the sink (logged once); write failures are counted,
+so the event loop never waits on the network. Each blocking write has a time limit (`history_write_timeout_s`):
+`wait_for_offset` can hang, and a timed-out write resets its stream. Streams are one per target table, created
+lazily and reset on error. Fail-soft: missing config disables the sink (logged once); write failures are counted,
 logged, and the batch is retried on a fresh stream with exponential backoff (`history_retry_attempts`).
-Delivery is therefore at-least-once: a retry after a partial ack can duplicate rows. Every table has a natural
-key for downstream dedupe (calls.call_id, utterances/enrichments (call_id, seq), cards.card_id,
+Delivery is at-least-once for acknowledged writes: a retry after a partial ack can duplicate rows, so every table
+has a natural key for downstream dedupe (calls.call_id, utterances/enrichments (call_id, seq), cards.card_id,
 feedback (card_id, at_ms), voice_turns (session_id, turn), voice_items.item_id). A batch that still fails after
-the last attempt is counted as failed and logged; the call never waits on history.
+the last attempt is requeued once, at the front of the queue (bounded: a record is requeued at most once). If it
+fails again it is counted as failed and logged. Records can still be lost (queue overflow, or a second failure),
+so history is best effort, not a guarantee. The call never waits on history.
 """
 
 from __future__ import annotations
@@ -99,13 +102,14 @@ class ZerobusHistorySink:
         self._s = settings
         self._max = settings.history_queue_max
         self._batch_max = settings.history_batch_max
-        self._queue: deque[tuple[str, dict[str, Any]]] = deque()
+        self._queue: deque[tuple[str, dict[str, Any], bool]] = deque()   # (table, record, already requeued)
         self._sdk_factory = sdk_factory
         self._sdk: Any = None
         self._streams: dict[str, Any] = {}
         self._task: Optional[asyncio.Task[None]] = None
         self._wake: Optional[asyncio.Event] = None
-        self.counters = {"queued": 0, "written": 0, "dropped": 0, "failed": 0, "skipped": 0, "retried": 0}
+        self.counters = {"queued": 0, "written": 0, "dropped": 0, "failed": 0, "skipped": 0, "retried": 0,
+                         "requeued": 0, "timeouts": 0}
         self._last_warn = float("-inf")
         self.disabled_reason = config_problem(settings)
         if self.disabled_reason is None and sdk_factory is None:
@@ -155,7 +159,7 @@ class ZerobusHistorySink:
             if self.counters["dropped"] % _WARN_EVERY == 1:
                 log.warning("history queue full (%d): dropped oldest (total dropped %d)", self._max,
                             self.counters["dropped"])
-        self._queue.append((table, to_record(table, row)))
+        self._queue.append((table, to_record(table, row), False))
         self.counters["queued"] += 1
         if len(self._queue) >= self._batch_max and self._wake is not None:
             self._wake.set()
@@ -181,30 +185,50 @@ class ZerobusHistorySink:
             await self._flush_batch()
 
     async def _flush_batch(self) -> None:
-        batch: list[tuple[str, dict[str, Any]]] = []
+        batch: list[tuple[str, dict[str, Any], bool]] = []
         while self._queue and len(batch) < self._batch_max:
             batch.append(self._queue.popleft())
-        by_table: dict[str, list[dict[str, Any]]] = {}
-        for table, record in batch:
-            by_table.setdefault(table, []).append(record)
+        by_table: dict[str, list[tuple[dict[str, Any], bool]]] = {}
+        for table, record, requeued in batch:
+            by_table.setdefault(table, []).append((record, requeued))
         attempts = max(1, self._s.history_retry_attempts)
-        for table, records in by_table.items():
+        for table, entries in by_table.items():
+            records = [record for record, _ in entries]
             for attempt in range(attempts):
                 try:
-                    await asyncio.to_thread(self._write, table, records)   # _write resets the stream on error
+                    await asyncio.wait_for(asyncio.to_thread(self._write, table, records),
+                                           timeout=self._s.history_write_timeout_s)   # _write resets the stream on error
                     self.counters["written"] += len(records)
                     break
-                except Exception as exc:  # noqa: BLE001 - fail-soft: retry, then count and log
+                except Exception as exc:  # noqa: BLE001 - fail-soft: retry, then requeue once or count and log
+                    if isinstance(exc, asyncio.TimeoutError):
+                        # The worker thread may still hold the stream: drop it so the next attempt starts clean.
+                        self.counters["timeouts"] += 1
+                        self._reset_stream(table)
                     if attempt < attempts - 1:
                         self.counters["retried"] += len(records)
                         await asyncio.sleep(self._s.history_retry_base_s * (2 ** attempt))
                         continue
-                    self.counters["failed"] += len(records)
-                    now = time.monotonic()
-                    if now - self._last_warn >= _WARN_INTERVAL_S:
-                        self._last_warn = now
-                        log.warning("zerobus write to %s failed after %d attempts (%d records, total failed %d): %s",
-                                    table, attempts, len(records), self.counters["failed"], str(exc)[:300])
+                    self._give_up(table, entries, exc, attempts)
+
+    def _give_up(self, table: str, entries: list[tuple[dict[str, Any], bool]], exc: BaseException, attempts: int) -> None:
+        """A batch failed every attempt. Records not yet requeued go back to the FRONT of the queue once (bounded),
+        and only if there is room; the rest are counted as failed."""
+        room = max(0, self._max - len(self._queue))
+        candidates = [record for record, requeued in entries if not requeued]
+        requeue = candidates[:room]
+        for record in reversed(requeue):
+            self._queue.appendleft((table, record, True))
+        self.counters["requeued"] += len(requeue)
+        failed = len(entries) - len(requeue)
+        self.counters["failed"] += failed
+        if failed:
+            now = time.monotonic()
+            if now - self._last_warn >= _WARN_INTERVAL_S:
+                self._last_warn = now
+                log.warning("zerobus write to %s failed after %d attempts (%d records dropped, %d requeued, total "
+                            "failed %d): %s", table, attempts, failed, len(requeue), self.counters["failed"],
+                            str(exc)[:300])
 
     # -------------------------------------------------- blocking (thread) side
     def _write(self, table: str, records: list[dict[str, Any]]) -> None:

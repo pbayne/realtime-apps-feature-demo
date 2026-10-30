@@ -45,7 +45,8 @@ TABLE_DDL = [
       customer_id STRING,
       status STRING,
       mode STRING,
-      script STRING
+      script STRING,
+      owner STRING
     ) USING DELTA""",
     """CREATE TABLE IF NOT EXISTS utterances (
       call_id STRING,
@@ -134,6 +135,11 @@ spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}")
 for ddl in TABLE_DDL:
     spark.sql(qualify_ddl(ddl))
     print("ready:", ddl.split()[5])
+
+# Existing deployments: calls.owner was added later (SPEC 10). Delta has no ADD COLUMN IF NOT EXISTS, so check first.
+if "owner" not in [field.name for field in spark.table(qualified("calls")).schema.fields]:
+    spark.sql(f"ALTER TABLE {qualified('calls')} ADD COLUMNS (owner STRING)")
+    print("added column calls.owner")
 
 # COMMAND ----------
 

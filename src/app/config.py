@@ -76,6 +76,17 @@ class Settings(BaseSettings):
     voice_warm_window_s: float = 1200.0      # an endpoint that answered within this long counts as warm (scale-to-zero
                                              # idles out after ~30 min)
     gpu_scale_to_zero_hint: bool = True      # shown in the UI: whether the GPU endpoints can be cold
+
+    # --- session lifetime, ownership and input limits (SPEC 10, v0.6) ---
+    voice_detached_ttl_s: float = 90.0       # a voice session with no socket is closed this long after it was last attached
+                                             # (armed at creation, so a session that never connects is reaped too)
+    call_detached_ttl_s: float = 120.0       # a call with no socket (or voice attachment) is finished after this long
+    session_grace_s: float = 60.0            # closed or ended sessions stay readable this long, then they are dropped
+    session_reap_interval_s: float = 5.0     # reaper period
+    max_active_calls: int = 100              # live calls per app instance; more gets HTTP 429
+    max_active_calls_per_user: int = 5       # live calls per owner (X-Forwarded-Email); more gets HTTP 429
+    max_text_bytes: int = 2048               # typed turns, browser STT results and feedback text (UTF-8 bytes)
+    ws_msgs_per_s: float = 50.0              # per-socket message rate: sustained rate and burst size; extras are dropped
     live_debounce_ms: int = 600              # live analysis on stable partials: at most one run per window
     live_min_new_words: int = 4              # a partial must add this many words before it is analysed
     live_suggest_interval_s: float = 2.5     # live suggestion pass: at most one LLM call per session per interval
@@ -139,6 +150,7 @@ class Settings(BaseSettings):
     history_flush_timeout_s: float = 10.0      # shutdown drain budget
     history_retry_attempts: int = 3            # attempts per batch (fresh stream each time) before counting it failed
     history_retry_base_s: float = 0.5          # backoff: base * 2**attempt
+    history_write_timeout_s: float = 15.0      # one blocking SDK write (wait_for_offset can hang); then the stream is reset
 
     # --- Kafka (databricks mode, backbone=kafka) ---
     kafka_bootstrap_servers: Optional[str] = None
@@ -166,6 +178,8 @@ class Settings(BaseSettings):
     lakebase_sslmode: str = "require"       # asyncpg ssl arg; "disable" only for local Postgres tests
     lakebase_pool_min: int = 1
     lakebase_pool_max: int = 6
+    lakebase_command_timeout_s: float = 2.0  # every query: a stuck Lakebase must not hold a turn
+    lakebase_connect_timeout_s: float = 5.0  # pool acquire and connect: fail fast and run degraded
 
     @field_validator("stt_frame_s")
     @classmethod

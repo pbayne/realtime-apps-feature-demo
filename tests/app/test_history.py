@@ -144,7 +144,7 @@ async def test_transient_write_failure_is_retried_on_a_fresh_stream():
 
 
 @aio
-async def test_persistent_write_failure_is_counted_after_the_last_attempt():
+async def test_persistent_write_failure_is_requeued_once_then_counted():
     sdk = FakeSdk()
     sink = ZerobusHistorySink(_settings(history_retry_base_s=0.0, history_retry_attempts=3), sdk_factory=lambda s: sdk)
     await sink.start()
@@ -152,8 +152,11 @@ async def test_persistent_write_failure_is_counted_after_the_last_attempt():
     for seq in range(2):
         sink.emit("utterances", hs.utterance_row(_utt(seq)))
     await sink._drain_all()
-    assert sink.counters["failed"] == 2 and sink.counters["written"] == 0 and sink.counters["retried"] == 4
-    assert len(sdk.opened) == 3, "one fresh stream per attempt"
+    # Each batch fails 3 attempts, is requeued once at the front, fails 3 more, and is counted as failed.
+    assert sink.counters["requeued"] == 2 and sink.counters["failed"] == 2 and sink.counters["written"] == 0
+    assert sink.counters["retried"] == 8
+    assert len(sdk.opened) == 6, "one fresh stream per attempt"
+    assert len(sink._queue) == 0, "a requeued record is not requeued again"
     sdk.failures_left = 0
     sink.emit("utterances", hs.utterance_row(_utt(9)))
     await sink._drain_all()                    # the sink keeps working afterwards
@@ -292,3 +295,36 @@ def test_direct_build_uses_null_bus_not_kafka():
     import bus
     assert bus.build_bus(Settings(mode="databricks")).__class__.__name__ == "NullBus"
     assert bus.build_bus(Settings(backbone="kafka", mode="databricks")).__class__.__name__ == "KafkaBus"
+
+
+@aio
+async def test_a_timed_out_write_is_bounded_and_resets_its_stream():
+    """A blocking SDK write that never returns (wait_for_offset hang) must not stall the drain loop."""
+    import threading
+
+    release = threading.Event()
+
+    class HangingStream(FakeStream):
+        def wait_for_offset(self, offset):
+            release.wait(5)            # the worker thread blocks; the sink must not wait for it
+
+    class HangingSdk(FakeSdk):
+        def open(self, table_full_name):
+            stream = HangingStream(self, table_full_name)
+            self.streams.append(stream)
+            return stream
+
+    sdk = HangingSdk()
+    sink = ZerobusHistorySink(_settings(history_retry_base_s=0.0, history_retry_attempts=1,
+                                        history_write_timeout_s=0.05), sdk_factory=lambda s: sdk)
+    await sink.start()
+    sink.emit("utterances", hs.utterance_row(_utt(0)))
+    try:
+        await asyncio.wait_for(sink._drain_all(), timeout=2)
+    finally:
+        release.set()
+    assert sink.counters["timeouts"] >= 1
+    assert sink.counters["failed"] + sink.counters["requeued"] >= 1
+    assert "utterances" not in sink._streams or sink._streams["utterances"] is not sdk.streams[0], \
+        "the stream that timed out is dropped; the next attempt opens a fresh one"
+    await sink.stop()

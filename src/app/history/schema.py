@@ -17,6 +17,7 @@ TABLES: dict[str, list[tuple[str, str]]] = {
     "calls": [
         ("call_id", "STRING"), ("playbook", "STRING"), ("started_at", "BIGINT"), ("ended_at", "BIGINT"),
         ("customer_id", "STRING"), ("status", "STRING"), ("mode", "STRING"), ("script", "STRING"),
+        ("owner", "STRING"),
     ],
     "utterances": [
         ("call_id", "STRING"), ("seq", "INT"), ("speaker", "STRING"), ("text", "STRING"),
@@ -79,7 +80,7 @@ def call_row(record: Any) -> dict[str, Any]:
     return {
         "call_id": record.call_id, "playbook": record.playbook, "started_at": record.started_at_ms,
         "ended_at": record.ended_at_ms, "customer_id": record.customer_id, "status": record.status,
-        "mode": record.mode, "script": record.script,
+        "mode": record.mode, "script": record.script, "owner": getattr(record, "owner", None),
     }
 
 
