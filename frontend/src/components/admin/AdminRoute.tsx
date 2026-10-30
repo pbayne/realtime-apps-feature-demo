@@ -5,6 +5,7 @@ import type { AdminPage } from "../../lib/route";
 import { AdminShell } from "./AdminShell";
 import { ThemesPage } from "./ThemesPage";
 import { ArchitecturePage } from "./ArchitecturePage";
+import { InsightsPage } from "./InsightsPage";
 
 interface Props {
   page: AdminPage;
@@ -35,7 +36,7 @@ export function AdminRoute({ page }: Props) {
     <AdminShell page={page} isAdmin={me?.is_admin ?? false}>
       {page === "themes" && <ThemesPage active={theme} saving={saving} note={note} onPick={pick} />}
       {page === "architecture" && <ArchitecturePage />}
-      {page === "insights" && me && !me.is_admin && <p className="text-[var(--color-muted)]">Insights are for admins.</p>}
+      {page === "insights" && me && (me.is_admin ? <InsightsPage /> : <p className="text-[var(--color-muted)]">Insights are for admins.</p>)}
     </AdminShell>
   );
 }

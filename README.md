@@ -181,10 +181,10 @@ Targets are in SPEC 7 and 9.5. Measured numbers and their labels are in [`docs/A
 
 | Stage | Practice mode | Assistant mode |
 |---|---|---|
-| End of speech → final transcript (includes the 700 ms endpoint silence) | 0.84–0.90 s | 0.92 s |
+| End of speech → final transcript (includes the 700 ms endpoint silence) | 0.84–0.97 s | 0.84–0.97 s |
 | Turn start → voice model first token (`databricks-claude-haiku-4-5`) | 0.41 s | 1.03 s (with KB retrieval) |
-| Kokoro first audio for a sentence | 107–137 ms | 123 ms |
-| **Turn start → first audible reply** | **0.60–0.69 s** | **1.29 s** |
+| Kokoro first audio for a sentence | 107–167 ms | 107–167 ms |
+| **Turn start → first audible reply** | **0.60–0.69 s** | **0.82 s** (was 1.29 s before the per-turn Vector Search call was removed) |
 | History via Zerobus | 41/41 records written, 0 dropped | |
 
 The first request to the voice model after idle took ~3 s once; the session pre-warm covers it.

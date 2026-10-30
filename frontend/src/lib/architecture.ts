@@ -66,7 +66,7 @@ export const NODES: ArchNode[] = [
     role: "Turns a rolling 12 s window of audio into the transcript.",
     why: "A custom model registered in Unity Catalog and served on serverless GPU; the endpoint can scale to zero.",
     metrics: [
-      { label: "End of speech to final transcript", value: "0.84–0.92 s (includes 700 ms endpoint silence)", basis: "MEASURED" },
+      { label: "End of speech to final transcript", value: "0.84–0.97 s (includes 700 ms endpoint silence), 2026-10-30", basis: "MEASURED" },
       { label: "Window decode round trip", value: "p50 312 ms from a laptop", basis: "MEASURED" },
     ],
     doc: "docs/ARCHITECTURE.md section 3.3",
@@ -90,7 +90,7 @@ export const NODES: ArchNode[] = [
     role: "Speaks each reply sentence as soon as it is ready, so the first audio plays early.",
     why: "Served from Unity Catalog on GPU beside the app. Voice mode only.",
     metrics: [
-      { label: "First audio per sentence", value: "107–144 ms", basis: "MEASURED" },
+      { label: "First audio per sentence", value: "107–167 ms", basis: "MEASURED" },
       { label: "Cold start from scale-to-zero", value: "112 s", basis: "MEASURED" },
     ],
     doc: "docs/ARCHITECTURE.md sections 3.3 and 5",
@@ -209,7 +209,7 @@ export const STEPS: Step[] = [
     title: "Parakeet transcribes",
     text: "The rolling window is decoded and the final transcript is committed.",
     nodes: ["parakeet", "app"],
-    timings: [{ label: "End of speech to final transcript", value: "0.84–0.92 s", basis: "MEASURED" }],
+    timings: [{ label: "End of speech to final transcript", value: "0.84–0.97 s", basis: "MEASURED" }],
   },
   {
     title: "Enrich and store",
@@ -234,9 +234,9 @@ export const STEPS: Step[] = [
     text: "In voice mode the reply is spoken sentence by sentence as it is generated.",
     nodes: ["claude", "kokoro", "browser"],
     timings: [
-      { label: "Kokoro first audio per sentence", value: "107–144 ms", basis: "MEASURED" },
+      { label: "Kokoro first audio per sentence", value: "107–167 ms", basis: "MEASURED" },
       { label: "Turn to first audible reply, practice", value: "0.60–0.69 s", basis: "MEASURED" },
-      { label: "Turn to first audible reply, assistant", value: "1.29 s", basis: "MEASURED" },
+      { label: "Turn to first audible reply, assistant (after removing a failing Vector Search call per turn: was 1.29 s)", value: "0.82 s", basis: "MEASURED" },
     ],
   },
   {
