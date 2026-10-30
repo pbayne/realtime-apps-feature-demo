@@ -361,4 +361,8 @@ for key, val in [("lakebase_host", lakebase_host),
                  ("lakebase_user", role),
                  ("lakebase_endpoint", lakebase_endpoint)]:
     post("/api/2.0/secrets/put", {"scope": SCOPE, "key": key, "string_value": val})
-print(f"Wrote 4 Lakebase connection secrets to scope `{SCOPE}` (lakebase_password unchanged).")
+# The app reads one bundled JSON secret (Databricks Apps allow at most 20 app resources); jobs read the keys above.
+import json as _json
+post("/api/2.0/secrets/put", {"scope": SCOPE, "key": "lakebase_config", "string_value": _json.dumps(
+    {"host": lakebase_host, "db": db, "user": role, "password": role_password, "endpoint": lakebase_endpoint})})
+print(f"Wrote 4 Lakebase connection secrets + lakebase_config to scope `{SCOPE}` (lakebase_password unchanged).")

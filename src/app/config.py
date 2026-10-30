@@ -21,6 +21,49 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 APP_DIR = Path(__file__).resolve().parent            # src/app (bundled into the Databricks App)
 
 
+# Databricks Apps allow at most 20 app resources, so related deploy-time settings arrive as one JSON secret per
+# group (resources/app.yml). Expand them into the individual env names before Settings reads the environment.
+# An individual env var that is already set wins.
+BUNDLED_ENV = {
+    "LAKEBASE_CONFIG": {"host": "LAKEBASE_HOST", "db": "LAKEBASE_DB", "user": "LAKEBASE_USER",
+                        "password": "LAKEBASE_PASSWORD", "endpoint": "LAKEBASE_ENDPOINT"},
+    "APP_CONFIG": {"backbone": "BACKBONE", "history_catalog": "HISTORY_CATALOG", "history_schema": "HISTORY_SCHEMA",
+                   "kafka_security": "KAFKA_SECURITY"},
+    "ZEROBUS_CONFIG": {"endpoint": "ZEROBUS_ENDPOINT", "client_id": "ZEROBUS_CLIENT_ID",
+                       "client_secret": "ZEROBUS_CLIENT_SECRET"},
+    "KAFKA_CONFIG": {"bootstrap": "KAFKA_BOOTSTRAP_SERVERS", "username": "KAFKA_USERNAME", "password": "KAFKA_PASSWORD"},
+    "SMTP_CONFIG": {"host": "SMTP_HOST", "port": "SMTP_PORT", "username": "SMTP_USERNAME", "password": "SMTP_PASSWORD",
+                    "from": "SMTP_FROM", "timeout_s": "SMTP_TIMEOUT_S"},
+}
+
+
+def expand_bundled_env(environ=None) -> list[str]:
+    """Set individual env vars from the JSON bundles. Returns the names it set. Malformed JSON is ignored (logged by
+    the caller's health checks as missing settings), never raised: a bad secret must not crash the import."""
+    import json as _json
+    import os as _os
+
+    env = _os.environ if environ is None else environ
+    set_names = []
+    for bundle_name, mapping in BUNDLED_ENV.items():
+        raw = env.get(bundle_name)
+        if not raw:
+            continue
+        try:
+            data = _json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        for key, name in mapping.items():
+            if key in data and data[key] is not None and name not in env:
+                env[name] = str(data[key])
+                set_names.append(name)
+    return set_names
+
+
+expand_bundled_env()
+
 KAFKA_SECURITY_MODES = ("SASL_SSL_PLAIN", "SASL_SSL_SCRAM_SHA_256", "SASL_SSL_SCRAM_SHA_512")
 
 class Settings(BaseSettings):

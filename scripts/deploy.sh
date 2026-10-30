@@ -176,6 +176,24 @@ for key in lakebase_host lakebase_db lakebase_user lakebase_endpoint; do
   fi
 done
 
+# --- 1d. Bundled app config (Databricks Apps allow at most 20 app resources) ---
+# The app binds one JSON secret per group; config.py expands them (BUNDLED_ENV). Jobs keep the individual keys.
+get_secret() {  # get_secret <key>: decoded value on stdout (never printed by this script)
+  db secrets get-secret "$scope" "$1" -o json | jq -r '.value' | base64 --decode
+}
+secret_or() {   # secret_or <key> <fallback>
+  if have_secret "$1"; then get_secret "$1"; else printf '%s' "$2"; fi
+}
+put_secret app_config "$(jq -cn --arg backbone "$backbone" --arg c "$catalog" --arg s "$uc_schema" --arg k "$kafka_security" \
+  '{backbone: $backbone, history_catalog: $c, history_schema: $s, kafka_security: $k}')"
+put_secret zerobus_config "$(jq -cn --arg e "$(secret_or zerobus_endpoint "")" --arg i "$(secret_or zerobus_client_id "")" \
+  --arg x "$(secret_or zerobus_client_secret "")" '{endpoint: $e, client_id: $i, client_secret: $x}')"
+put_secret kafka_config "$(jq -cn --arg b "$(secret_or kafka_bootstrap unused-direct-backbone)" \
+  --arg u "$(secret_or kafka_app_api_key unused-direct-backbone)" --arg p "$(secret_or kafka_app_api_secret unused-direct-backbone)" \
+  '{bootstrap: $b, username: $u, password: $p}')"
+have_secret lakebase_config || put_secret lakebase_config '{"host":"placeholder"}'   # the setup job writes the real one
+echo "wrote bundled app config secrets (app_config, zerobus_config, kafka_config; values not printed)"
+
 # --- 2. Bundle variables, validate, deploy (phase 1) ----------------------
 export BUNDLE_VAR_catalog=$catalog
 export BUNDLE_VAR_uc_schema=$uc_schema

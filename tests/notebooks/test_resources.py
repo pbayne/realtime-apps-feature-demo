@@ -200,16 +200,17 @@ def test_app_serving_resources_cover_voice_mode():
 
 
 def test_app_binds_backbone_and_zerobus_from_secret_scope():
+    # One JSON secret per group (Databricks Apps allow at most 20 app resources); config.py expands them.
     doc = _load(ROOT / "resources" / "app.yml")
     res = {r["name"]: r for r in doc["resources"]["apps"]["call_sidekick_app"]["resources"]}
-    for name, key in (("backbone", "backbone"), ("zerobus-endpoint", "zerobus_endpoint"),
-                      ("zerobus-client-id", "zerobus_client_id"), ("zerobus-client-secret", "zerobus_client_secret"),
-                      ("history-catalog", "history_catalog"), ("history-schema", "history_schema")):
+    for name, key in (("app-config", "app_config"), ("lakebase-config", "lakebase_config"),
+                      ("zerobus-config", "zerobus_config"), ("kafka-config", "kafka_config")):
         assert res[name]["secret"]["key"] == key
+    assert len(res) <= 20
     env = {e["name"]: e for e in _load(ROOT / "src" / "app" / "app.yaml")["env"]}
-    assert env["BACKBONE"]["valueFrom"] == "backbone"
-    assert env["ZEROBUS_CLIENT_SECRET"]["valueFrom"] == "zerobus-client-secret"
-    assert env["HISTORY_CATALOG"]["valueFrom"] == "history-catalog"
+    assert env["APP_CONFIG"]["valueFrom"] == "app-config"
+    assert env["ZEROBUS_CONFIG"]["valueFrom"] == "zerobus-config"
+    assert env["LAKEBASE_CONFIG"]["valueFrom"] == "lakebase-config"
 
 
 def test_init_history_job_is_serverless_and_takes_the_principal():

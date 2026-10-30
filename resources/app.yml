@@ -17,66 +17,21 @@ resources:
       description: Live call sidekick - WebSocket UI, sidekick agent, suggestion cards.
       source_code_path: ../src/app
       resources:
-        - name: lakebase-host
-          description: Lakebase Postgres host
-          secret: {scope: "${var.secret_scope}", key: lakebase_host, permission: READ}
+        - name: app-config
+          description: "JSON: backbone, history_catalog, history_schema, kafka_security"
+          secret: {scope: "${var.secret_scope}", key: app_config, permission: READ}
 
-        - name: lakebase-db
-          description: Lakebase database name
-          secret: {scope: "${var.secret_scope}", key: lakebase_db, permission: READ}
+        - name: lakebase-config
+          description: "JSON: host, db, user, password (written by the setup job)"
+          secret: {scope: "${var.secret_scope}", key: lakebase_config, permission: READ}
 
-        - name: lakebase-user
-          description: Lakebase role
-          secret: {scope: "${var.secret_scope}", key: lakebase_user, permission: READ}
+        - name: zerobus-config
+          description: "JSON: endpoint, client_id, client_secret"
+          secret: {scope: "${var.secret_scope}", key: zerobus_config, permission: READ}
 
-        - name: lakebase-password
-          description: Lakebase role password
-          secret: {scope: "${var.secret_scope}", key: lakebase_password, permission: READ}
-
-        - name: backbone
-          description: Data path, direct (default) or kafka. Written by deploy.sh from the target.
-          secret: {scope: "${var.secret_scope}", key: backbone, permission: READ}
-
-        # Zerobus Ingest (direct backbone history). The service principal is the one init_history.py grants.
-        - name: zerobus-endpoint
-          description: Zerobus Ingest endpoint, <workspace-id>.zerobus.<region>.cloud.databricks.com
-          secret: {scope: "${var.secret_scope}", key: zerobus_endpoint, permission: READ}
-
-        - name: zerobus-client-id
-          description: Zerobus service principal client id (application id)
-          secret: {scope: "${var.secret_scope}", key: zerobus_client_id, permission: READ}
-
-        - name: zerobus-client-secret
-          description: Zerobus service principal OAuth client secret
-          secret: {scope: "${var.secret_scope}", key: zerobus_client_secret, permission: READ}
-
-        - name: history-catalog
-          description: UC catalog for the history tables
-          secret: {scope: "${var.secret_scope}", key: history_catalog, permission: READ}
-
-        - name: history-schema
-          description: UC schema for the history tables
-          secret: {scope: "${var.secret_scope}", key: history_schema, permission: READ}
-
-        # Kafka backbone only. Placeholders in the direct backbone (deploy.sh writes them if absent).
-        - name: kafka-bootstrap
-          description: Kafka bootstrap servers (Confluent endpoint or MSK IAM bootstrap string)
-          secret: {scope: "${var.secret_scope}", key: kafka_bootstrap, permission: READ}
-
-        - name: kafka-security
-          description: Kafka auth mode (SASL_SSL_PLAIN | SASL_SSL_SCRAM_SHA_256 | SASL_SSL_SCRAM_SHA_512)
-          secret: {scope: "${var.secret_scope}", key: kafka_security, permission: READ}
-
-        # The app's own Kafka identity (write-only on the topics). The jobs use the separate
-        # read-only kafka_api_key / kafka_api_secret. The app producer does not support
-        # SASL_SSL_MSK_IAM.
-        - name: kafka-api-key
-          description: App Kafka SASL username / API key (producer)
-          secret: {scope: "${var.secret_scope}", key: kafka_app_api_key, permission: READ}
-
-        - name: kafka-api-secret
-          description: App Kafka SASL password / API secret (producer)
-          secret: {scope: "${var.secret_scope}", key: kafka_app_api_secret, permission: READ}
+        - name: kafka-config
+          description: "JSON: bootstrap, username, password (placeholders in direct)"
+          secret: {scope: "${var.secret_scope}", key: kafka_config, permission: READ}
 
         - name: parakeet-stt
           description: GPU audio STT endpoint, Parakeet (created by register_parakeet.py; not route-optimized)

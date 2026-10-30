@@ -4,39 +4,16 @@ command: ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${DATABRICKS_APP_P
 env:
   - name: MODE
     value: databricks
-  # Data path (docs/ARCHITECTURE.md). direct: no Kafka, history via Zerobus. kafka: Kafka + RTM, history via jobs.
-  - name: BACKBONE
-    valueFrom: backbone
-  # Live state (both backbones): Lakebase.
-  - name: LAKEBASE_HOST
-    valueFrom: lakebase-host
-  - name: LAKEBASE_DB
-    valueFrom: lakebase-db
-  - name: LAKEBASE_USER
-    valueFrom: lakebase-user
-  - name: LAKEBASE_PASSWORD
-    valueFrom: lakebase-password
-  # History, direct backbone: Zerobus Ingest -> UC Delta (src/app/history/zerobus.py, SPEC 3.7).
-  - name: ZEROBUS_ENDPOINT
-    valueFrom: zerobus-endpoint
-  - name: ZEROBUS_CLIENT_ID
-    valueFrom: zerobus-client-id
-  - name: ZEROBUS_CLIENT_SECRET
-    valueFrom: zerobus-client-secret
-  - name: HISTORY_CATALOG
-    valueFrom: history-catalog
-  - name: HISTORY_SCHEMA
-    valueFrom: history-schema
-  # Kafka, kafka backbone only: KAFKA_SECURITY uses the notebook mode names (SASL_SSL_PLAIN for Confluent,
-  # SASL_SSL_SCRAM_SHA_256 for Redpanda Cloud). The username/password are the app's producer identity.
-  - name: KAFKA_BOOTSTRAP_SERVERS
-    valueFrom: kafka-bootstrap
-  - name: KAFKA_SECURITY
-    valueFrom: kafka-security
-  - name: KAFKA_USERNAME
-    valueFrom: kafka-api-key
-  - name: KAFKA_PASSWORD
-    valueFrom: kafka-api-secret
+  # Deploy-time settings arrive as one JSON secret per group (Apps allow at most 20 resources); config.py expands
+  # them into the individual env names (BACKBONE, LAKEBASE_*, ZEROBUS_*, HISTORY_*, KAFKA_*). See BUNDLED_ENV.
+  - name: APP_CONFIG
+    valueFrom: app-config
+  - name: LAKEBASE_CONFIG
+    valueFrom: lakebase-config
+  - name: ZEROBUS_CONFIG
+    valueFrom: zerobus-config
+  - name: KAFKA_CONFIG
+    valueFrom: kafka-config
   # Endpoint names come from the app's serving-endpoint resources.
   - name: STT_ENDPOINT
     valueFrom: parakeet-stt
