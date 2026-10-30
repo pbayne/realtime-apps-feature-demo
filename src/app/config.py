@@ -76,7 +76,11 @@ class Settings(BaseSettings):
     live_debounce_ms: int = 600              # live analysis on stable partials: at most one run per window
     live_min_new_words: int = 4              # a partial must add this many words before it is analysed
     live_suggest_interval_s: float = 2.5     # live suggestion pass: at most one LLM call per session per interval
-    live_suggest_timeout_s: float = 1.5      # live suggestion pass: fail-soft after this long
+    live_suggest_timeout_s: float = 2.5      # live suggestion pass: fail-soft after this long (= the interval,
+                                             # so at most one call is in flight)
+    # Model for the live suggestion pass. Default: the voice model (haiku-4-5, ~0.5 s first token in region);
+    # FAST_MODEL (haiku-5-5, ~1.2 s round trip) often missed a 1.5 s budget, so chips did not appear.
+    live_suggest_model: Optional[str] = None
     live_suggest_max_tokens: int = 220
     readiness_ttl_s: float = 30.0            # /healthz voice readiness (serving endpoint states) cache
 

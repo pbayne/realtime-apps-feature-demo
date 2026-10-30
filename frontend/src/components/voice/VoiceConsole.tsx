@@ -109,6 +109,11 @@ export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void 
         return;
       }
       if (inField(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "/") {
+        e.preventDefault();
+        document.querySelector<HTMLInputElement>("input[data-composer]")?.focus();
+        return;
+      }
       if ((e.key === "m" || e.key === "M") && !e.repeat) {
         e.preventDefault();
         setMuted(!muted);
@@ -306,6 +311,9 @@ function KeyHints({ ptt, running }: { ptt: boolean; running: boolean }) {
       </span>
       <span>
         <kbd className="key">Esc</kbd> interrupt
+      </span>
+      <span className="flex items-center gap-1.5">
+        <kbd className="key">/</kbd> type
       </span>
     </p>
   );

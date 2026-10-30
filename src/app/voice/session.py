@@ -165,7 +165,7 @@ class VoiceSession:
         self.live = LiveAnalyzer(
             session_id=session_id, role=role, playbook_title=playbook.title,
             methodology=[(m.key, m.label) for m in playbook.methodology], rules=rules,
-            llm=deps.llm, fast_model=deps.settings.fast_model, emit=self._emit,
+            llm=deps.llm, fast_model=deps.settings.live_suggest_model or deps.settings.voice_model, emit=self._emit,
             context=self._live_context, scenario=scenario.title if scenario else None,
             debounce_s=deps.settings.live_debounce_ms / 1000.0,
             min_new_words=deps.settings.live_min_new_words,

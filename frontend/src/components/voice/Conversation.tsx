@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowDown, Send } from "lucide-react";
 import { fmtMs } from "../../lib/format";
 import type { Exchange } from "../../lib/voice/state";
@@ -120,9 +120,8 @@ function AgentBubble({ ex, label }: { ex: Exchange; label: string }) {
 export function Composer({ disabled, onSend }: { disabled: boolean; onSend(text: string): void }) {
   const [text, setText] = useState("");
   const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (!disabled) ref.current?.focus({ preventScroll: true });
-  }, [disabled]);
+  // Not auto-focused: this console is voice-first, and a focused text box swallows the M / Space shortcuts.
+  // Press "/" to jump here (VoiceConsole).
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -135,6 +134,7 @@ export function Composer({ disabled, onSend }: { disabled: boolean; onSend(text:
   return (
     <form onSubmit={submit} className="flex items-center gap-2 border-t border-[var(--color-line)] p-3">
       <input
+          data-composer
         ref={ref}
         value={text}
         onChange={(e) => setText(e.target.value)}
