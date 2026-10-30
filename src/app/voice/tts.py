@@ -52,7 +52,12 @@ def voice_catalog() -> list[dict[str, str]]:
 
 
 class TtsUnavailable(RuntimeError):
-    """The TTS endpoint failed for this sentence. The text still goes out; only its audio is lost."""
+    """The TTS endpoint failed for this sentence. The text still goes out; only its audio is lost.
+    `cold` marks a failure of a warming (scale-to-zero) endpoint: voice mode retries those with backoff."""
+
+    def __init__(self, message: str = "", *, cold: bool = False) -> None:
+        super().__init__(message)
+        self.cold = cold
 
 
 @dataclass(frozen=True)
@@ -137,12 +142,14 @@ class KokoroTts:
                                            json=self.request_body(text, voice)) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread())[:200]
-                    raise TtsUnavailable(f"HTTP {resp.status_code}: {body!r}")
+                    raise TtsUnavailable(f"HTTP {resp.status_code}: {body!r}",
+                                         cold=resp.status_code in (429, 503, 504))
                 async for line in resp.aiter_lines():
                     for chunk in parser.feed(line):
                         yield chunk
         except httpx.HTTPError as exc:
-            raise TtsUnavailable(f"{type(exc).__name__}: {exc}"[:300]) from exc
+            cold = isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError))
+            raise TtsUnavailable(f"{type(exc).__name__}: {exc}"[:300], cold=cold) from exc
 
     async def aclose(self) -> None:
         await self._client.aclose()

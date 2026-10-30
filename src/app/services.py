@@ -31,7 +31,10 @@ from store import build_store
 from stt.parakeet import ParakeetTranscriber
 from stt.replay import ReplayScript, load_script
 from stt.vad import Vad, build_vad
+from voice.readiness import EndpointReadiness
+from voice.resilience import RetryPolicy
 from voice.session import VoiceDeps, VoiceSession
+from voice.stream import VoiceDecoder
 from voice.tts import KokoroTts
 
 log = logging.getLogger("sidekick.services")
@@ -75,10 +78,22 @@ class Services:
                                                timeout_s=settings.voice_stt_timeout_s,
                                                protocol=settings.stt_protocol)
         self.voice_sessions: dict[str, VoiceSession] = {}
+        policy = RetryPolicy(budget_s=settings.voice_warmup_budget_s, base_s=settings.voice_retry_base_s,
+                             cap_s=settings.voice_retry_cap_s)
+
+        def stream_decoder(emit):
+            return VoiceDecoder(self.llm, settings.stt_endpoint, emit_status=emit, policy=policy)
+
         self.voice_deps = VoiceDeps(
             settings=settings, llm=self.llm, tts=self.tts, stt=self.transcriber, store=self.store,
             retriever=self.retriever, calls=self.sessions, finish_call=self.finish_call,
             new_practice_call=self.new_practice_call, history=self.history,
+            stream_decoder=stream_decoder, vad=self.vad, rules_for=self.registry.rules_for,
+        )
+        self.readiness = EndpointReadiness(
+            {"stt": settings.stt_endpoint, "tts": settings.tts_endpoint},
+            self._endpoint_state_async if settings.mode == "databricks" else None,
+            ttl_s=settings.readiness_ttl_s,
         )
 
     # ------------------------------------------------------------ lifecycle
@@ -195,6 +210,8 @@ class Services:
         except KeyError as exc:
             raise ServiceError(404, str(exc)) from exc
         sc = None
+        if self.active_voice_sessions() >= self.settings.voice_max_concurrent_sessions:
+            raise ServiceError(429, "too many voice sessions on this app instance; try again shortly")
         if role == "practice":
             if call_id:
                 raise ServiceError(400, "a practice session creates its own call; do not pass call_id")
@@ -228,6 +245,33 @@ class Services:
         if s is None:
             raise ServiceError(404, "call not active in this process")
         return s
+
+    def active_voice_sessions(self) -> int:
+        return sum(1 for v in self.voice_sessions.values() if not v.closed)
+
+    def _endpoint_state(self, name: str) -> str:
+        """Serving endpoint state from the SDK (runs in a worker thread). ready | not_ready."""
+        from databricks.sdk import WorkspaceClient
+
+        ep = WorkspaceClient(config=self.llm.sdk_config()).serving_endpoints.get(name=name)
+        ready = getattr(getattr(ep, "state", None), "ready", None)
+        return "ready" if ready is not None and getattr(ready, "value", "") == "READY" else "not_ready"
+
+    async def _endpoint_state_async(self, name: str) -> str:
+        return await asyncio.to_thread(self._endpoint_state, name)
+
+    async def health_full(self) -> dict:
+        """health() plus voice readiness (SPEC 9.6). Readiness is cached (readiness_ttl_s) and never fails health."""
+        base = self.health()
+        base["voice"]["readiness"] = await self.readiness.snapshot()
+        base["voice"]["limits"] = {
+            "active_sessions": self.active_voice_sessions(),
+            "max_concurrent_sessions": self.settings.voice_max_concurrent_sessions,
+            "max_session_minutes": self.settings.voice_max_session_minutes,
+            "max_turn_audio_s": self.settings.voice_max_turn_audio_s,
+            "endpoint_silence_ms": self.settings.voice_endpoint_silence_ms,
+        }
+        return base
 
     def health(self) -> dict:
         return {

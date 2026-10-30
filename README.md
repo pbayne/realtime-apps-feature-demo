@@ -223,6 +223,28 @@ task slots.
 Kafka auth: `SASL_SSL_PLAIN` (Confluent), `SASL_SSL_SCRAM_SHA_256` / `_512` (Redpanda Cloud), `SASL_SSL_MSK_IAM`
 (MSK, jobs only; the app producer needs a user/password mode). `scripts/kafka_smoke.py <env-file>` checks connectivity and least privilege.
 
+## Voice mode (Sidekick, talk to it)
+
+Two-way voice in the same app: Parakeet for speech in, Claude for the reply, Kokoro for speech out. Two roles:
+**assistant** (ask Sidekick before, during or after a call) and **practice** (Sidekick plays the customer).
+
+- **Streamed input (default).** The mic sends 100 ms PCM16 frames while open. Partials appear as you speak, and the
+  endpoint (700 ms of silence) starts the reply. Push to talk flushes on release. Mute discards what you were saying.
+  `?stream=0` falls back to one WAV per turn.
+- **Live while you talk.** A sentiment gauge and sparkline (rules, no LLM), the methodology checklist in assistant mode,
+  and provisional suggestion chips from one fast-model pass per 2.5 s. Pin a chip to keep it as an outcome. Chips give
+  way to the end-of-turn list when the turn ends.
+- **Keys.** Space: hold to talk (push-to-talk mode). M: mute. Esc: interrupt Sidekick.
+- **Cold endpoints.** A scaled-to-zero STT or TTS endpoint shows "Warming up voice (GPU starting)" with a clock and
+  retries with backoff (up to 90 s) instead of failing the turn.
+- **Limits.** 30 minutes per socket, 20 voice sessions per app instance (HTTP 429 beyond that), 30 s per turn.
+  `/healthz` reports endpoint readiness (cached 30 s).
+- **Local mock.** `?mock=1&voice=assistant|practice&autostart=1` runs the whole console with simulated speech,
+  partials, live analysis and suggestions (add `&warm=1` to see the warming banner).
+
+The wire contract is in `docs/SPEC.md` sections 9.2a, 9.6 and 9.7. Logs are JSON lines on `sidekick.voice`, keyed by
+session and turn, with no transcript text at INFO.
+
 ## Repository layout
 
 ```
