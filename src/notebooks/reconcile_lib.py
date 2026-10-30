@@ -104,6 +104,34 @@ TABLES: tuple[TableSpec, ...] = (
         order="created_at_ms",
         watermark="created_at_ms",
     ),
+    # Actions (SPEC 12): one row per status change in Delta; the latest updated_at_ms per action_id survives.
+    TableSpec(
+        name="actions",
+        columns=(("action_id", "STRING"), ("session_id", "STRING"), ("call_id", "STRING"), ("playbook", "STRING"),
+                 ("owner", "STRING"), ("kind", "STRING"), ("summary", "STRING"), ("params", "STRING"),
+                 ("status", "STRING"), ("proposed_by", "STRING"), ("created_at_ms", "BIGINT"),
+                 ("updated_at_ms", "BIGINT"), ("decided_at_ms", "BIGINT"), ("decided_by", "STRING"),
+                 ("result", "STRING"), ("error", "STRING")),
+        keys=("action_id",),
+        order="COALESCE(updated_at_ms, created_at_ms) DESC NULLS LAST",
+        watermark="GREATEST(created_at_ms, COALESCE(updated_at_ms, 0), COALESCE(decided_at_ms, 0))",
+    ),
+    TableSpec(
+        name="contacts",
+        columns=(("contact_id", "STRING"), ("owner", "STRING"), ("first_name", "STRING"), ("last_name", "STRING"),
+                 ("email", "STRING"), ("phone", "STRING"), ("company", "STRING"), ("updated_at_ms", "BIGINT")),
+        keys=("contact_id",),
+        order="updated_at_ms DESC NULLS LAST",
+        watermark="updated_at_ms",
+    ),
+    TableSpec(
+        name="enrollments",
+        columns=(("enrollment_id", "STRING"), ("contact_id", "STRING"), ("program", "STRING"), ("owner", "STRING"),
+                 ("note", "STRING"), ("created_at_ms", "BIGINT")),
+        keys=("enrollment_id",),
+        order="created_at_ms",
+        watermark="created_at_ms",
+    ),
 )
 
 TABLE_BY_NAME = {spec.name: spec for spec in TABLES}

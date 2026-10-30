@@ -225,6 +225,12 @@ def test_row_builders_emit_exactly_the_table_columns():
         "voice_items": hs.voice_item_row("v-1", {"item_id": "i-1", "turn": 1, "kind": "action_item", "text": "call",
                                                  "owner": None, "due": None, "source_doc": None, "created_at_ms": 7}),
     }
+    rows["actions"] = hs.action_row({"action_id": "a-1", "session_id": "v-1", "call_id": None, "owner": "o",
+                                     "kind": "send_email", "summary": "s", "params": {"to": ["x@y.co"]},
+                                     "status": "done", "created_at_ms": 1, "result": {"mode": "outbox"}})
+    rows["contacts"] = hs.contact_row({"contact_id": "c-1", "owner": None, "first_name": "Dana", "updated_at_ms": 2})
+    rows["enrollments"] = hs.enrollment_row({"enrollment_id": "e-1", "contact_id": "c-1", "program": "Autopay",
+                                             "owner": "o", "created_at_ms": 3})
     assert set(rows) == set(hs.TABLES)
     for table, row in rows.items():
         assert list(hs.to_record(table, row)) == hs.column_names(table), table
@@ -232,6 +238,7 @@ def test_row_builders_emit_exactly_the_table_columns():
     assert enr["latency_ms"] == 250 and enr["enrichment_source"] == "direct"
     assert json.loads(hs.to_record("enrichments", rows["enrichments"])["risk_flags"]) == ["unsupported_claim"]
     assert json.loads(hs.to_record("cards", rows["cards"])["trace"]) == {"x": 1}
+    assert json.loads(hs.to_record("actions", rows["actions"])["params"]) == {"to": ["x@y.co"]}
 
 
 def _init_history_ddl():

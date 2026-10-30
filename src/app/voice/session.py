@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Awaitable, Callable, Optional
 
+from actions.proposals import parse_proposals
 from config import Settings
 from enrich.rules import Rules, load_rules
 from history import schema as hs
@@ -45,7 +46,7 @@ from store.base import Store
 from stt.base import TranscriptEvent
 from stt.vad import EnergyVad
 
-from voice.items import ReplySplitter, parse_items
+from voice.items import ReplySplitter, parse_items, split_sections
 from voice.live import LiveAnalyzer
 from voice.logs import vlog
 from voice.prompts import assistant_messages, call_text, practice_messages
@@ -95,6 +96,7 @@ class VoiceDeps:
     finish_call: Callable[[str], Awaitable[None]]
     new_practice_call: Callable[..., Awaitable[str]]          # (playbook, owner) -> call_id
     history: Any = None                        # HistorySink (SPEC 3.7); None in tests means no history
+    actions: Any = None                        # ActionService (SPEC 12); proposals from <<ACTIONS>> land here
     # Streaming input (SPEC 9.2): builds the decoder for one stream from a status emitter. None = streaming off.
     stream_decoder: Optional[Callable[[Callable[[dict[str, Any]], None]], Any]] = None
     vad: Any = None                            # voice-activity gate for streams; None = energy VAD
@@ -113,6 +115,7 @@ class _Turn:
     user_text: str = ""
     customer_injected: bool = False
     items: list[dict[str, Any]] = field(default_factory=list)
+    proposals: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     cancellable: bool = False       # True only while this turn's LLM/TTS/STT work is in flight
     started: bool = False           # False while the turn waits for the previous one to finish (queued)
     warm_tts: Optional[WarmState] = None
@@ -701,7 +704,10 @@ class VoiceSession:
             await asyncio.gather(*tts_tasks, emitter, return_exceptions=True)
             raise
         if splitter is not None and splitter.in_items:
-            rec.items = parse_items(splitter.items_raw, turn=rec.turn, session_id=self.session_id, now_ms=now_ms())
+            items_raw, actions_raw = split_sections(splitter.items_raw, splitter.first_delim)
+            rec.items = parse_items(items_raw, turn=rec.turn, session_id=self.session_id, now_ms=now_ms())
+            if self.role == "assistant":
+                rec.proposals = parse_proposals(actions_raw, program_names=self.playbook.programs)
 
     async def _speak(self, rec: _Turn, sentence: str, q: asyncio.Queue[Any]) -> None:
         """One sentence through Kokoro into its queue. A cold endpoint is retried before the first audio arrives
@@ -765,6 +771,13 @@ class VoiceSession:
         for item in rec.items:
             await self._persist_item(item)
             self._emit({"type": "item", "turn": rec.turn, "item": _wire_item(item)})
+        if rec.proposals and self.deps.actions is not None and self.owner:
+            # SPEC 12: proposals are stored as `proposed` actions and shown for approval. Nothing runs here.
+            try:
+                await self.deps.actions.propose(owner=self.owner, playbook=self.playbook.name,
+                                                session_id=self.session_id, proposals=rec.proposals)
+            except Exception:  # noqa: BLE001 - a bad proposal never breaks the turn
+                log.exception("action proposal failed session_id=%s", self.session_id)
         row = {"turn": rec.turn, "role": self.role, "user_text": rec.user_text, "agent_text": agent_text,
                "interrupted": interrupted, "timing": dict(rec.timing), "created_at_ms": now_ms()}
         if rec.user_text or rec.opening:

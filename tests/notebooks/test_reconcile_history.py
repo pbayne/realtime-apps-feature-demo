@@ -64,7 +64,8 @@ def test_table_map_matches_history_schema_names_order_and_types():
 
 def test_every_history_table_has_a_spec_and_only_those():
     assert set(rl.TABLE_BY_NAME) == set(SCHEMA_TABLES) == {
-        "calls", "utterances", "enrichments", "cards", "feedback", "voice_turns", "voice_items"}
+        "calls", "utterances", "enrichments", "cards", "feedback", "voice_turns", "voice_items",
+        "actions", "contacts", "enrollments"}
 
 
 @pytest.mark.parametrize("spec", rl.TABLES, ids=lambda s: s.name)
@@ -143,6 +144,9 @@ def test_watermark_window_per_table():
         "feedback": "(at_ms >= 123)",
         "voice_turns": "(created_at_ms >= 123)",
         "voice_items": "(created_at_ms >= 123)",
+        "actions": "(GREATEST(created_at_ms, COALESCE(updated_at_ms, 0), COALESCE(decided_at_ms, 0)) >= 123)",
+        "contacts": "(updated_at_ms >= 123)",
+        "enrollments": "(created_at_ms >= 123)",
     }
     for spec in rl.TABLES:
         pred = rl.window_predicate(spec, cutoff, LB, SCHEMA)

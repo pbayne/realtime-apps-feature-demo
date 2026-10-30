@@ -53,6 +53,17 @@ CREATE TABLE IF NOT EXISTS voice_turns (
 CREATE TABLE IF NOT EXISTS voice_items (
   item_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, turn INTEGER, kind TEXT, text TEXT,
   owner TEXT, due TEXT, source_doc TEXT, created_at_ms BIGINT);
+CREATE TABLE IF NOT EXISTS actions (
+  action_id TEXT PRIMARY KEY, session_id TEXT, call_id TEXT, playbook TEXT, owner TEXT NOT NULL,
+  kind TEXT NOT NULL, summary TEXT, params TEXT, status TEXT NOT NULL, proposed_by TEXT,
+  created_at_ms BIGINT NOT NULL, updated_at_ms BIGINT, decided_at_ms BIGINT, decided_by TEXT,
+  result TEXT, error TEXT);
+CREATE TABLE IF NOT EXISTS contacts (
+  contact_id TEXT PRIMARY KEY, owner TEXT, first_name TEXT, last_name TEXT, email TEXT, phone TEXT,
+  company TEXT, updated_at_ms BIGINT);
+CREATE TABLE IF NOT EXISTS enrollments (
+  enrollment_id TEXT PRIMARY KEY, contact_id TEXT NOT NULL, program TEXT NOT NULL, owner TEXT, note TEXT,
+  created_at_ms BIGINT NOT NULL);
 """
 
 
@@ -296,6 +307,74 @@ class LakebaseStore:
             item["item_id"], session_id, int(item["turn"]), item.get("kind"), item.get("text"), item.get("owner"),
             item.get("due"), item.get("source_doc"), int(item["created_at_ms"]),
         )
+
+    # ------------------------------------------------------- actions (SPEC 12)
+    _ACTION_COLS = ("action_id", "session_id", "call_id", "playbook", "owner", "kind", "summary", "params", "status",
+                    "proposed_by", "created_at_ms", "updated_at_ms", "decided_at_ms", "decided_by", "result", "error")
+
+    async def put_action(self, row: dict[str, Any]) -> None:
+        values = [_j(row.get(c)) if c in ("params", "result") else row.get(c) for c in self._ACTION_COLS]
+        placeholders = ",".join(f"${i + 1}" for i in range(len(self._ACTION_COLS)))
+        updates = ", ".join(f"{c}=EXCLUDED.{c}" for c in self._ACTION_COLS if c not in ("action_id", "owner", "kind",
+                                                                                          "created_at_ms"))
+        await self._pool.execute(
+            f"INSERT INTO actions ({', '.join(self._ACTION_COLS)}) VALUES ({placeholders}) "
+            f"ON CONFLICT (action_id) DO UPDATE SET {updates}", *values)
+
+    @staticmethod
+    def _action_out(rec: Any) -> dict[str, Any]:
+        d = dict(rec)
+        for k in ("params", "result"):
+            if isinstance(d.get(k), str):
+                d[k] = json.loads(d[k])
+        return d
+
+    async def get_action(self, action_id: str) -> Optional[dict[str, Any]]:
+        rec = await self._pool.fetchrow(f"SELECT {', '.join(self._ACTION_COLS)} FROM actions WHERE action_id=$1",
+                                        action_id)
+        return self._action_out(rec) if rec else None
+
+    async def list_actions(self, owner: str, *, session_id: Optional[str] = None,
+                           call_id: Optional[str] = None) -> list[dict[str, Any]]:
+        if session_id is not None:
+            rows = await self._pool.fetch(
+                f"SELECT {', '.join(self._ACTION_COLS)} FROM actions WHERE owner=$1 AND session_id=$2 "
+                "ORDER BY created_at_ms, action_id", owner, session_id)
+        elif call_id is not None:
+            rows = await self._pool.fetch(
+                f"SELECT {', '.join(self._ACTION_COLS)} FROM actions WHERE owner=$1 AND call_id=$2 "
+                "ORDER BY created_at_ms, action_id", owner, call_id)
+        else:
+            return []
+        return [self._action_out(r) for r in rows]
+
+    async def put_contact(self, row: dict[str, Any]) -> None:
+        await self._pool.execute(
+            "INSERT INTO contacts (contact_id, owner, first_name, last_name, email, phone, company, updated_at_ms) "
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (contact_id) DO UPDATE SET first_name=EXCLUDED.first_name, "
+            "last_name=EXCLUDED.last_name, email=EXCLUDED.email, phone=EXCLUDED.phone, company=EXCLUDED.company, "
+            "updated_at_ms=EXCLUDED.updated_at_ms",
+            row["contact_id"], row.get("owner"), row.get("first_name"), row.get("last_name"), row.get("email"),
+            row.get("phone"), row.get("company"), int(row.get("updated_at_ms") or now_ms()))
+
+    async def find_contact(self, owner: str, *, contact_id: Optional[str] = None,
+                           email: Optional[str] = None) -> Optional[dict[str, Any]]:
+        rec = await self._pool.fetchrow(
+            "SELECT contact_id, owner, first_name, last_name, email, phone, company, updated_at_ms FROM contacts "
+            "WHERE (owner=$1 OR owner IS NULL) AND ($2::text IS NULL OR contact_id=$2) "
+            "AND ($3::text IS NULL OR lower(email)=lower($3)) ORDER BY (owner IS NULL), updated_at_ms DESC LIMIT 1",
+            owner, contact_id, email)
+        return dict(rec) if rec else None
+
+    async def put_enrollment(self, row: dict[str, Any]) -> None:
+        await self._pool.execute(
+            "INSERT INTO enrollments (enrollment_id, contact_id, program, owner, note, created_at_ms) "
+            "VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (enrollment_id) DO NOTHING",
+            row["enrollment_id"], row["contact_id"], row["program"], row.get("owner"), row.get("note"),
+            int(row["created_at_ms"]))
+
+    async def delete_enrollment(self, enrollment_id: str) -> None:
+        await self._pool.execute("DELETE FROM enrollments WHERE enrollment_id=$1", enrollment_id)
 
     async def voice_snapshot(self, session_id: str) -> dict[str, Any]:
         turns = await self._pool.fetch(

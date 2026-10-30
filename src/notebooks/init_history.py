@@ -117,6 +117,42 @@ TABLE_DDL = [
       source_doc STRING,
       created_at_ms BIGINT
     ) USING DELTA""",
+    """CREATE TABLE IF NOT EXISTS actions (
+      action_id STRING,
+      session_id STRING,
+      call_id STRING,
+      playbook STRING,
+      owner STRING,
+      kind STRING,
+      summary STRING,
+      params STRING,
+      status STRING,
+      proposed_by STRING,
+      created_at_ms BIGINT,
+      updated_at_ms BIGINT,
+      decided_at_ms BIGINT,
+      decided_by STRING,
+      result STRING,
+      error STRING
+    ) USING DELTA""",
+    """CREATE TABLE IF NOT EXISTS contacts (
+      contact_id STRING,
+      owner STRING,
+      first_name STRING,
+      last_name STRING,
+      email STRING,
+      phone STRING,
+      company STRING,
+      updated_at_ms BIGINT
+    ) USING DELTA""",
+    """CREATE TABLE IF NOT EXISTS enrollments (
+      enrollment_id STRING,
+      contact_id STRING,
+      program STRING,
+      owner STRING,
+      note STRING,
+      created_at_ms BIGINT
+    ) USING DELTA""",
 ]
 
 # COMMAND ----------
@@ -151,7 +187,8 @@ if "owner" not in [field.name for field in spark.table(qualified("calls")).schem
 quoted = f"`{principal}`"
 spark.sql(f"GRANT USE CATALOG ON CATALOG `{catalog}` TO {quoted}")
 spark.sql(f"GRANT USE SCHEMA ON SCHEMA `{catalog}`.`{schema}` TO {quoted}")
-for table in [name for name in ("calls", "utterances", "enrichments", "cards", "feedback", "voice_turns", "voice_items")]:
+for table in [name for name in ("calls", "utterances", "enrichments", "cards", "feedback", "voice_turns", "voice_items",
+                                "actions", "contacts", "enrollments")]:
     spark.sql(f"GRANT MODIFY, SELECT ON TABLE `{catalog}`.`{schema}`.`{table}` TO {quoted}")
     print("granted MODIFY, SELECT on", table)
 
@@ -161,6 +198,7 @@ for table in [name for name in ("calls", "utterances", "enrichments", "cards", "
 
 # COMMAND ----------
 
-for table in ("calls", "utterances", "enrichments", "cards", "feedback", "voice_turns", "voice_items"):
+for table in ("calls", "utterances", "enrichments", "cards", "feedback", "voice_turns", "voice_items",
+               "actions", "contacts", "enrollments"):
     n = len(spark.sql(f"DESCRIBE TABLE {qualified(table)}").collect())
     print(f"{qualified(table)}: {n} rows in DESCRIBE")

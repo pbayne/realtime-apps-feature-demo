@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import time
 from typing import Any, Optional
 
@@ -19,6 +20,9 @@ class MemoryStore:
         self.voice_turns: dict[str, dict[int, dict[str, Any]]] = {}
         self.voice_items: dict[str, list[dict[str, Any]]] = {}
         self._waiters: dict[tuple[str, int], asyncio.Event] = {}
+        self.actions: dict[str, dict[str, Any]] = {}
+        self.contacts: dict[str, dict[str, Any]] = {}
+        self.enrollments: dict[str, dict[str, Any]] = {}
 
     async def start(self) -> None:
         return None
@@ -98,4 +102,44 @@ class MemoryStore:
             "turns": sorted(self.voice_turns.get(session_id, {}).values(), key=lambda t: t["turn"]),
             "items": list(self.voice_items.get(session_id, [])),
         }
+
+    async def put_action(self, row: dict[str, Any]) -> None:
+        self.actions[row["action_id"]] = copy.deepcopy(dict(row))
+
+    async def get_action(self, action_id: str) -> Optional[dict[str, Any]]:
+        row = self.actions.get(action_id)
+        return copy.deepcopy(row) if row is not None else None
+
+    async def list_actions(self, owner: str, *, session_id: Optional[str] = None,
+                           call_id: Optional[str] = None) -> list[dict[str, Any]]:
+        if session_id is None and call_id is None:
+            return []
+        rows = [
+            r for r in self.actions.values()
+            if r["owner"] == owner and ((session_id is not None and r.get("session_id") == session_id)
+                                        or (session_id is None and r.get("call_id") == call_id))
+        ]
+        return [copy.deepcopy(r) for r in sorted(rows, key=lambda r: (r["created_at_ms"], r["action_id"]))]
+
+    async def put_contact(self, row: dict[str, Any]) -> None:
+        self.contacts[row["contact_id"]] = copy.deepcopy(dict(row))
+
+    async def find_contact(self, owner: str, *, contact_id: Optional[str] = None,
+                           email: Optional[str] = None) -> Optional[dict[str, Any]]:
+        rows = [
+            c for c in self.contacts.values()
+            if c.get("owner") in (owner, None)
+            and (contact_id is None or c["contact_id"] == contact_id)
+            and (email is None or (c.get("email") or "").lower() == email.lower())
+        ]
+        if not rows:
+            return None
+        rows.sort(key=lambda c: c.get("owner") is None)     # the caller's own contact before the shared directory
+        return copy.deepcopy(rows[0])
+
+    async def put_enrollment(self, row: dict[str, Any]) -> None:
+        self.enrollments[row["enrollment_id"]] = copy.deepcopy(dict(row))
+
+    async def delete_enrollment(self, enrollment_id: str) -> None:
+        self.enrollments.pop(enrollment_id, None)
 

@@ -130,6 +130,7 @@ async def list_playbooks(request: Request):
             "kb_docs": [d.doc_id for d in pb.kb_docs],
             "replay_scripts": list(pb.replay_scripts),
             "scenarios": [sc.to_wire() for sc in pb.scenarios],
+            "programs": list(pb.programs),
         }
         for pb in svc.registry.all()
     ]}

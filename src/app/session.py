@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from actions.proposals import propose_for_call
 from bus.base import EventBus
 from config import Settings
 from enrich.direct import DirectEnricher
@@ -73,6 +74,7 @@ class Deps:
     vad: Vad
     history: Optional[HistorySink] = None      # SPEC 3.7: Zerobus (direct) or none (kafka)
     enricher: Optional[DirectEnricher] = None  # direct backbone: in-process enrichment
+    actions: Any = None                        # ActionService (SPEC 12): call-mode proposals
 
 
 @dataclass
@@ -112,6 +114,7 @@ class CallSession:
     socket: Any = None                                                    # the call socket that owns the events
     _socket_q: Any = None
     _socket_task: Optional[asyncio.Task[Any]] = None
+    _last_proposal_mono: Optional[float] = None                           # SPEC 12: call-mode proposal rate limit
 
     def __post_init__(self) -> None:
         self.playbook = self.deps.registry.get(self.record.playbook)
@@ -385,6 +388,8 @@ class CallSession:
         utt = Utterance(call_id=call_id, seq=ev.seq, speaker=ev.speaker, text=ev.text,
                         t_start_ms=ev.t_start_ms, t_end_ms=ev.t_end_ms, emitted_at_ms=emitted, playbook=pb.name)
         self._spawn(self._persist_utterance(utt))   # live state; a store outage never reaches the card path
+        if ev.speaker == "customer":
+            self._maybe_propose_actions(ev.text)
         self._history.emit("utterances", hs.utterance_row(utt))
         if not direct:
             await deps.bus.publish(self.settings.kafka_utterances_topic, call_id, {
@@ -467,6 +472,30 @@ class CallSession:
             ))
         elif not comp:
             self._emit_metrics(ev.seq, timing, None, None)
+
+    def _maybe_propose_actions(self, text: str) -> None:
+        """Call mode (SPEC 12): at most one fast-model proposal pass per action_propose_interval_s per call, on customer
+        finals of a replay or mic call. The pass runs in the background and is fail-soft."""
+        if self.deps.actions is None or self.record.mode not in ("replay", "mic") or self.ended or not self.owner:
+            return
+        now = time.monotonic()
+        if self._last_proposal_mono is not None and now - self._last_proposal_mono < self.settings.action_propose_interval_s:
+            return
+        self._last_proposal_mono = now
+        self._spawn(self._propose_actions(text))
+
+    async def _propose_actions(self, text: str) -> None:
+        proposals = await propose_for_call(
+            self.deps.llm, self.settings.fast_model, playbook_title=self.playbook.title,
+            programs=self.playbook.programs, customer_text=text, recent=list(self._customer_recent[-4:]),
+            timeout_s=self.settings.action_propose_timeout_s,
+        )
+        if proposals and not self.ended:
+            try:
+                await self.deps.actions.propose(owner=self.owner, playbook=self.playbook.name, call_id=self.call_id,
+                                                proposals=proposals)
+            except Exception:  # noqa: BLE001
+                log.exception("call action proposal failed call_id=%s", self.call_id)
 
     async def _persist_utterance(self, utt: Utterance) -> None:
         try:

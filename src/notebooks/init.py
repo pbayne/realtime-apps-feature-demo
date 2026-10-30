@@ -240,6 +240,44 @@ TABLE_DDL = [
         source_doc    TEXT,
         created_at_ms BIGINT
     )""",
+    # Actions (SPEC 12): proposed and executed actions. params, result are JSON held as TEXT.
+    """CREATE TABLE IF NOT EXISTS actions (
+        action_id     TEXT PRIMARY KEY,
+        session_id    TEXT,
+        call_id       TEXT,
+        playbook      TEXT,
+        owner         TEXT NOT NULL,
+        kind          TEXT NOT NULL,
+        summary       TEXT,
+        params        TEXT,
+        status        TEXT NOT NULL,
+        proposed_by   TEXT,
+        created_at_ms BIGINT NOT NULL,
+        updated_at_ms BIGINT,
+        decided_at_ms BIGINT,
+        decided_by    TEXT,
+        result        TEXT,
+        error         TEXT
+    )""",
+    # Contacts (SPEC 12). owner NULL = the shared demo directory every user can read (seeded below).
+    """CREATE TABLE IF NOT EXISTS contacts (
+        contact_id    TEXT PRIMARY KEY,
+        owner         TEXT,
+        first_name    TEXT,
+        last_name     TEXT,
+        email         TEXT,
+        phone         TEXT,
+        company       TEXT,
+        updated_at_ms BIGINT
+    )""",
+    """CREATE TABLE IF NOT EXISTS enrollments (
+        enrollment_id TEXT PRIMARY KEY,
+        contact_id    TEXT NOT NULL,
+        program       TEXT NOT NULL,
+        owner         TEXT,
+        note          TEXT,
+        created_at_ms BIGINT NOT NULL
+    )""",
     "CREATE INDEX IF NOT EXISTS cards_call_seq_idx ON cards (call_id, seq)",
     "CREATE INDEX IF NOT EXISTS feedback_card_idx ON feedback (card_id)",
     # Trigger: the app LISTENs on enrichment_ready and pushes `enrichment` events.
@@ -253,6 +291,13 @@ TABLE_DDL = [
     """CREATE TRIGGER enrichments_notify
         AFTER INSERT OR UPDATE ON enrichments
         FOR EACH ROW EXECUTE FUNCTION notify_enrichment_ready()""",
+]
+
+# Shared demo directory for the action executors (SPEC 12). Fictitious people on example.com; idempotent.
+DEMO_CONTACTS = [
+    ("demo-dana-lee", "Dana", "Lee", "dana.lee@example.com", "+1 555 010 0101", "Lee Family Trust"),
+    ("demo-marcus-chen", "Marcus", "Chen", "marcus.chen@example.com", "+1 555 010 0102", "Chen Consulting"),
+    ("demo-priya-raman", "Priya", "Raman", "priya.raman@example.com", "+1 555 010 0103", "Raman Dental Group"),
 ]
 
 with dbapi.connect(
@@ -271,9 +316,17 @@ with dbapi.connect(
     ] + TABLE_DDL:
         cur.execute(stmt)
     # Table-level grants for both the sink writer and the app (same role in this build).
-    for t in ("calls", "utterances", "enrichments", "cards", "feedback", "voice_turns", "voice_items"):
+    for t in ("calls", "utterances", "enrichments", "cards", "feedback", "voice_turns", "voice_items",
+              "actions", "contacts", "enrollments"):
         cur.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON {t} TO "{role}"')
     cur.execute(f'GRANT EXECUTE ON FUNCTION notify_enrichment_ready() TO "{role}"')
+    # Demo directory for the actions (SPEC 12): idempotent, owner NULL, so every user can read and update a copy.
+    for contact_id, first, last, email, phone, company in DEMO_CONTACTS:
+        cur.execute(
+            "INSERT INTO contacts (contact_id, owner, first_name, last_name, email, phone, company, updated_at_ms) "
+            "VALUES (%s, NULL, %s, %s, %s, %s, %s, 1767225600000) ON CONFLICT (contact_id) DO NOTHING",
+            (contact_id, first, last, email, phone, company),
+        )
 print(f"Role {role} ready; SPEC section 3 tables, indexes, and enrichment_ready trigger in place.")
 
 # COMMAND ----------
