@@ -151,7 +151,9 @@ function upsert(list: Exchange[], turn: number, patch: (e: Exchange) => Exchange
 }
 
 export function isThinking(state: VoiceState): boolean {
-  return state.exchanges.some((e) => !e.done);
+  // A reply the user cut off is over for them, even before the server confirms the cancel. Counting it kept the
+  // console "busy", so the next Space or typed turn was taken as another barge-in and the orb stuck on Interrupted.
+  return state.exchanges.some((e) => !e.done && !e.interrupted);
 }
 
 /** Matches the voice socket's event types. `error` is shared with the call socket and is told apart by `stage`. */

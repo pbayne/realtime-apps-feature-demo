@@ -19,7 +19,9 @@ VOICE_RULES = (
     "you write is read aloud by a text-to-speech voice. Speak in plain sentences, with no emoji, markdown, lists, "
     "headings, tables or links. Keep replies to one to three short sentences unless the user asks for more. "
     "Write numbers, dates, symbols and abbreviations the way they are said, for example twenty dollars, not $20. "
-    "If you didn't catch or understand what the user said, ask them to say it again."
+    "If you didn't catch or understand what the user said, ask them to say it again. "
+    "Start with the answer itself: never open with praise or filler such as great question, good question, "
+    "absolutely, sure, or happy to help."
 )
 
 ITEMS_RULES = (

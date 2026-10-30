@@ -210,7 +210,11 @@ async def run(args) -> int:
             checks["live sentiment reading"] = seen_tone is not None
             checks["sentiment updates while still speaking"] = tone_while_speaking is not None
             checks["suggestion chip appeared and was pinned"] = pinned is not None
-            await asyncio.sleep(2.5)
+            timeline = []
+            for _ in range(25):                                   # orb after Esc, every 100 ms
+                timeline.append((await cdp.js(PROBE) or {}).get("orb", "?"))
+                await asyncio.sleep(0.1)
+            notes["orb after Esc"] = " > ".join(o for i, o in enumerate(timeline) if i == 0 or o != timeline[i - 1])
             s = await cdp.js(PROBE) or {}
             if pinned:
                 checks["pinned chip is filed as an outcome"] = pinned[:40] in s.get("outcomes", "")
