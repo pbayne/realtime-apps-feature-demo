@@ -118,6 +118,7 @@ resources:
               uc_schema: ${var.uc_schema}
               model_name: ${var.parakeet_model}
               endpoint_name: ${var.parakeet_endpoint}
+              artifact_volume: /Volumes/${resources.volumes.sidekick_checkpoints.catalog_name}/${resources.volumes.sidekick_checkpoints.schema_name}/${resources.volumes.sidekick_checkpoints.name}
               workload_type: GPU_MEDIUM
               workload_size: Small
               gpu_scale_to_zero: ${var.gpu_scale_to_zero}
@@ -142,6 +143,7 @@ resources:
               uc_schema: ${var.uc_schema}
               uc_model: ${var.kokoro_model}
               endpoint_name: ${var.kokoro_endpoint}
+              artifact_volume: /Volumes/${resources.volumes.sidekick_checkpoints.catalog_name}/${resources.volumes.sidekick_checkpoints.schema_name}/${resources.volumes.sidekick_checkpoints.name}
               workload_type: GPU_MEDIUM
               workload_size: Small
               gpu_scale_to_zero: ${var.gpu_scale_to_zero}

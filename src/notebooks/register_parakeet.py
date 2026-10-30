@@ -35,6 +35,7 @@ dbutils.widgets.text("uc_catalog", "main")
 dbutils.widgets.text("uc_schema", "call_sidekick")
 dbutils.widgets.text("model_name", "parakeet_tdt_v3")
 dbutils.widgets.text("endpoint_name", "sidekick-parakeet")
+dbutils.widgets.text("artifact_volume", "")      # /Volumes/<cat>/<schema>/<vol>: MLflow artifact store
 dbutils.widgets.dropdown("workload_type", "GPU_MEDIUM", ["GPU_SMALL", "GPU_MEDIUM", "GPU_LARGE", "MULTIGPU_MEDIUM"])
 dbutils.widgets.text("workload_size", "Small")
 dbutils.widgets.dropdown("gpu_scale_to_zero", "true", ["true", "false"])   # false = always on (demos, latency)
@@ -221,6 +222,17 @@ os.environ["MLFLOW_USE_DATABRICKS_SDK_MODEL_ARTIFACTS_REPO_FOR_UC"] = "true"
 os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] = "600"
 os.environ["MLFLOW_ARTIFACT_UPLOAD_DOWNLOAD_TIMEOUT"] = "600"
 mlflow.set_registry_uri("databricks-uc")
+
+# Large artifacts (Parakeet is ~2.4 GB) fail to upload to the workspace-internal experiment store from serverless
+# on some workspaces, while a UC volume artifact location works. Log into an experiment backed by the bundle volume.
+ARTIFACT_VOLUME = dbutils.widgets.get("artifact_volume").rstrip("/")
+if ARTIFACT_VOLUME:
+    _user = WorkspaceClient().current_user.me().user_name
+    _exp_name = f"/Users/{_user}/sidekick-{SERVED_MODEL_NAME.split('.')[0]}-uc"
+    if mlflow.get_experiment_by_name(_exp_name) is None:
+        mlflow.create_experiment(_exp_name, artifact_location=f"dbfs:{ARTIFACT_VOLUME}/mlflow-artifacts/{SERVED_MODEL_NAME.split('.')[0]}")
+    mlflow.set_experiment(_exp_name)
+    print("experiment", _exp_name, "->", mlflow.get_experiment_by_name(_exp_name).artifact_location)
 
 # The endpoint runs the server, so this class is never called. MLflow still needs a model class to log.
 class Placeholder(ChatModel):
