@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# sidekick — command-line shortcuts for the deployed Sidekick app.
+#
+#   sidekick on        demo mode: GPU voice endpoints always-on (no cold start; they bill while on) — ~8 min
+#   sidekick off       back to scale-to-zero (saves cost; next voice turn after idle may wait 2-6 min) — ~7 min
+#   sidekick status    endpoint readiness + scale-to-zero setting
+#   sidekick warm      wake both voice endpoints now (use a few minutes before talking)
+#   sidekick open      open the app in your browser
+#   sidekick health    the app's health report (store, history, voice readiness)
+#   sidekick test      end-to-end voice check (speaks into the app, saves the spoken reply, plays it)
+#   sidekick logs      recent app logs
+#   sidekick deploy    redeploy (scripts/deploy.sh)
+#
+# Env: SIDEKICK_PROFILE (default realtime-call-sidekick), SIDEKICK_APP (default call-sidekick).
+# Install: ln -s <repo>/scripts/sidekick ~/.local/bin/sidekick
+set -euo pipefail
+
+src=${BASH_SOURCE[0]}
+while [[ -L "$src" ]]; do                                   # follow the ~/.local/bin symlink to the repo
+  dir=$(cd "$(dirname "$src")" && pwd); src=$(readlink "$src"); [[ "$src" != /* ]] && src="$dir/$src"
+done
+repo=$(cd "$(dirname "$src")/.." && pwd)
+py="$repo/.venv/bin/python"
+profile=${SIDEKICK_PROFILE:-realtime-call-sidekick}
+app=${SIDEKICK_APP:-call-sidekick}
+
+[[ -x "$py" ]] || { echo "sidekick: no venv at $repo/.venv (uv venv --python 3.11 .venv && uv pip install -r src/app/requirements.txt)" >&2; exit 2; }
+
+app_url() { databricks apps get "$app" --profile "$profile" -o json | "$py" -c "import sys,json; print(json.load(sys.stdin)['url'])"; }
+
+cmd=${1:-help}
+case "$cmd" in
+  on)     echo "Demo mode ON: voice GPUs always-on (billing continuously until 'sidekick off'). ~8 minutes…"
+          exec "$py" "$repo/scripts/demo_mode.py" on --profile "$profile" ;;
+  off)    echo "Demo mode OFF: back to scale-to-zero. ~7 minutes…"
+          exec "$py" "$repo/scripts/demo_mode.py" off --profile "$profile" ;;
+  status) exec "$py" "$repo/scripts/demo_mode.py" status --profile "$profile" ;;
+  warm)   exec "$py" "$repo/scripts/warmup_voice.py" --profile "$profile" ;;
+  open)   url=$(app_url); echo "$url"; open "$url" ;;
+  health) url=$(app_url)
+          "$py" - "$url" "$profile" <<'PY'
+import json, sys, httpx
+from databricks.sdk import WorkspaceClient
+url, profile = sys.argv[1], sys.argv[2]
+w = WorkspaceClient(profile=profile)
+d = httpx.get(url.rstrip("/") + "/api/health", headers=w.config.authenticate(), timeout=60).json()
+v = d.get("voice", {})
+print(json.dumps({"status": d.get("status"), "store": d.get("store"), "backbone": d.get("backbone"),
+                  "history": {k: d.get("history", {}).get(k) for k in ("written", "retried", "failed", "dropped")},
+                  "voice_ready": v.get("readiness", {}).get("ready"), "active_voice_sessions": v.get("active_sessions")},
+                 indent=1))
+PY
+          ;;
+  test)   out=/tmp/sidekick-test-reply.wav
+          "$py" "$repo/scripts/voice_smoke.py" --profile "$profile" --out "$out" && afplay "$out" ;;
+  logs)   databricks apps logs "$app" --profile "$profile" --tail-lines "${2:-80}" ;;
+  deploy) shift; cd "$repo" && exec scripts/deploy.sh "$profile" "$@" ;;
+  help|-h|--help) sed -n '2,15p' "$src" | sed 's/^# \{0,1\}//' ;;
+  *) echo "sidekick: unknown command '$cmd' (try: sidekick help)" >&2; exit 2 ;;
+esac

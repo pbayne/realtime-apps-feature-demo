@@ -5,6 +5,17 @@ suggestion cards for the agent or advisor, pushed over WebSocket. Two-way voice 
 Contract: [`docs/SPEC.md`](docs/SPEC.md). Architecture, both backbones, latency budget and switching:
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
+## Command line: `sidekick`
+
+```bash
+ln -s "$PWD/scripts/sidekick" ~/.local/bin/sidekick   # once
+sidekick on       # demo mode: voice GPUs always-on, no cold start (bills while on) — ~8 min to apply
+sidekick off      # back to scale-to-zero — ~7 min
+sidekick status   # readiness + scale-to-zero per endpoint
+sidekick warm     # wake the voice endpoints now
+sidekick open     # open the app;  sidekick health | test | logs | deploy
+```
+
 ## Try it
 
 Deployed (FEVM `realtime-call-sidekick`, AWS us-west-2, Databricks SSO):
