@@ -103,23 +103,8 @@ resources:
           description: Voice mode model (haiku, thinking disabled)
           serving_endpoint: {name: "${var.voice_model}", permission: CAN_QUERY}
 
-        # Actions (SPEC 12): SMTP relay. deploy.sh writes "unset" until these are real; "unset" means outbox mode.
-        - name: smtp-host
-          description: SMTP relay host (STARTTLS on SMTP_PORT)
-          secret: {scope: "${var.secret_scope}", key: smtp_host, permission: READ}
-
-        - name: smtp-port
-          description: SMTP relay port (587 for STARTTLS)
-          secret: {scope: "${var.secret_scope}", key: smtp_port, permission: READ}
-
-        - name: smtp-username
-          description: SMTP relay login (optional)
-          secret: {scope: "${var.secret_scope}", key: smtp_username, permission: READ}
-
-        - name: smtp-password
-          description: SMTP relay password (optional)
-          secret: {scope: "${var.secret_scope}", key: smtp_password, permission: READ}
-
-        - name: smtp-from
-          description: From address for sent mail and invites
-          secret: {scope: "${var.secret_scope}", key: smtp_from, permission: READ}
+        # Actions (SPEC 12): one JSON secret for the SMTP relay (host, port, username, password, from, timeout_s).
+        # deploy.sh writes {"host":"unset","from":"unset"} until a relay is set: "unset" means outbox mode.
+        - name: smtp-config
+          description: SMTP relay settings as JSON (host, port, username, password, from, timeout_s)
+          secret: {scope: "${var.secret_scope}", key: smtp_config, permission: READ}

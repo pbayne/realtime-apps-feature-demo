@@ -53,14 +53,6 @@ env:
     valueFrom: smart-llm
   - name: EMBED_MODEL
     valueFrom: embedding
-  # Actions (SPEC 12): SMTP relay. Unset ("unset" placeholder) = outbox mode, nothing is sent.
-  - name: SMTP_HOST
-    valueFrom: smtp-host
-  - name: SMTP_PORT
-    valueFrom: smtp-port
-  - name: SMTP_USERNAME
-    valueFrom: smtp-username
-  - name: SMTP_PASSWORD
-    valueFrom: smtp-password
-  - name: SMTP_FROM
-    valueFrom: smtp-from
+  # Actions (SPEC 12): SMTP relay as one JSON secret. Unset ("unset" placeholder) = outbox mode, nothing is sent.
+  - name: SMTP_CONFIG
+    valueFrom: smtp-config
