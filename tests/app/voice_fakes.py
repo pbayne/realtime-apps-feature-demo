@@ -264,7 +264,7 @@ def make_voice_session(llm, *, tts=None, stt=None, role="assistant", call_id=Non
     async def no_finish(_):
         return None
 
-    async def no_new(_):
+    async def no_new(*_args):
         raise AssertionError("no practice call in this test")
 
     words = list(stream_words or [])

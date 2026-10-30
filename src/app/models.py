@@ -17,6 +17,14 @@ def new_id() -> str:
     return str(uuid.uuid4())
 
 
+def cap_text(text: str, limit: int, what: str = "text") -> str:
+    """Typed turns, browser STT results and feedback text are capped in UTF-8 bytes (SPEC 10). Raises ValueError,
+    which the socket handlers report back to the client without closing the socket."""
+    if len(text.encode("utf-8")) > limit:
+        raise ValueError(f"{what} is too long (max {limit} bytes)")
+    return text
+
+
 @dataclass
 class Utterance:
     call_id: str
@@ -67,6 +75,7 @@ class CallRecord:
     ended_at_ms: Optional[int] = None
     customer_id: Optional[str] = None
     status: str = "active"       # active | ended
+    owner: Optional[str] = None  # the user who created the call (X-Forwarded-Email; "local" in MODE=local)
 
     def to_wire(self) -> dict[str, Any]:
         return asdict(self)

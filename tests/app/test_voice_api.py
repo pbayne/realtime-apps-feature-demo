@@ -71,6 +71,7 @@ def test_practice_session_creates_its_call_and_defaults_to_first_scenario(client
 def test_typed_turn_over_socket_then_snapshot_rehydrates(client):
     sid = client.post("/api/voice/sessions", json={"role": "assistant", "playbook": "advisor_coach"}).json()["session_id"]
     with client.websocket_connect(f"/ws/voice/{sid}") as ws:
+        assert ws.receive_json()["type"] == "hello"
         ws.send_json({"type": "text", "text": "what are the fees"})
         events = _until_turn_done(ws)
     assert events[0]["type"] == "user_text" and events[0]["turn"] == 1 and events[0]["stt_ms"] == 0
@@ -87,6 +88,7 @@ def test_typed_turn_over_socket_then_snapshot_rehydrates(client):
 def test_wav_frame_over_socket_runs_stt_and_bad_frame_is_reported_not_fatal(client):
     sid = client.post("/api/voice/sessions", json={"role": "assistant", "playbook": "advisor_coach"}).json()["session_id"]
     with client.websocket_connect(f"/ws/voice/{sid}") as ws:
+        assert ws.receive_json()["type"] == "hello"
         ws.send_bytes(b"definitely not wav")
         err = ws.receive_json()
         assert err["type"] == "error" and "WAV" in err["message"]
@@ -98,6 +100,7 @@ def test_wav_frame_over_socket_runs_stt_and_bad_frame_is_reported_not_fatal(clie
 def test_malformed_and_unknown_messages_get_an_error_event(client):
     sid = client.post("/api/voice/sessions", json={"role": "assistant", "playbook": "advisor_coach"}).json()["session_id"]
     with client.websocket_connect(f"/ws/voice/{sid}") as ws:
+        assert ws.receive_json()["type"] == "hello"
         ws.send_text("{not json")
         assert ws.receive_json()["type"] == "error"
         ws.send_json({"type": "dance"})
@@ -109,6 +112,7 @@ def test_malformed_and_unknown_messages_get_an_error_event(client):
 def test_interrupt_with_no_turn_running_is_a_no_op(client):
     sid = client.post("/api/voice/sessions", json={"role": "assistant", "playbook": "advisor_coach"}).json()["session_id"]
     with client.websocket_connect(f"/ws/voice/{sid}") as ws:
+        assert ws.receive_json()["type"] == "hello"
         ws.send_json({"type": "interrupt"})
         ws.send_json({"type": "text", "text": "hello"})
         events = _until_turn_done(ws)
@@ -118,6 +122,7 @@ def test_interrupt_with_no_turn_running_is_a_no_op(client):
 def test_practice_socket_forwards_call_events_and_accepts_card_feedback(client):
     sid = client.post("/api/voice/sessions", json={"role": "practice", "playbook": "advisor_coach"}).json()["session_id"]
     with client.websocket_connect(f"/ws/voice/{sid}") as ws:
+        assert ws.receive_json()["type"] == "hello"
         first = ws.receive_json()
         assert first["type"] == "coverage"          # the call's checklist arrives on the voice socket first
         ws.send_json({"type": "feedback", "card_id": "missing-card", "action": "accept"})

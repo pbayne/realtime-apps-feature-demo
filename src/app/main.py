@@ -3,22 +3,29 @@
 Run locally:  MODE=local uvicorn main:app --port 8000   (from src/app)
 Deployed via app.yaml with ${DATABRICKS_APP_PORT:-8000}.
 
+Ownership (SPEC 10): every call and voice session belongs to the user the Databricks Apps proxy identifies
+(X-Forwarded-Email, then X-Forwarded-User; MODE=local: "local"). Any other caller gets 404, REST and WebSocket alike.
+
 REST:
-  GET  /healthz
+  GET  /healthz  (and /api/health)
   GET  /api/playbooks
   GET  /api/scripts?playbook=<name>
   POST /api/calls            {"playbook","mode":"replay|mic","script","speed","customer_id"}
   GET  /api/calls/{id}       snapshot: call, transcript, cards, coverage, feedback, decisions (live)
   POST /api/calls/{id}/end
+  GET  /api/voices          Kokoro voice presets
+  POST /api/voice/sessions   {"role":"assistant|practice","playbook","scenario"?,"call_id"?,"voice"?}
+  GET  /api/voice/sessions/{id}   turns and items (live sessions only)
+  DELETE /api/voice/sessions/{id}  end the session now (POST .../end is the same, for navigator.sendBeacon)
 WebSocket:
   /ws/call/{id}              server -> client events; client -> server feedback | browser_stt
   /ws/audio/{id}?channel=agent|customer   binary PCM16 16 kHz frames, or text browser results
-  POST /api/voice/sessions   {"role":"assistant|practice","playbook","scenario"?,"call_id"?,"voice"?}
-  GET  /api/voice/sessions/{id}   turns and items
-  GET  /api/voices          Kokoro voice presets
   /ws/voice/{id}             binary: WAV turns (RIFF) or streamed PCM16 frames after stream_start;
                              text: interrupt | text | config | stream_start | stream_stop | pin | dismiss
-                             (events per SPEC 9.2, 9.2a, 9.7)
+                             (events per SPEC 9.2, 9.2a, 9.7). The first event is `hello`.
+Close codes (SPEC 10): 4400 bad request, 4403 no caller identity, 4404 not found / not yours / not active,
+4409 superseded by a newer socket for the same session, 4410 the session ended (a `session_ended` event
+precedes it). The client does not reconnect after any of these.
 """
 
 from __future__ import annotations
@@ -32,11 +39,11 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from config import get_settings
-from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, Query, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 from models import now_ms
 from pydantic import BaseModel, Field
+from ratelimit import TokenBucket
 from services import ServiceError, Services
 from stt.base import Frame
 from stt.parakeet import ParakeetDecoder
@@ -47,6 +54,11 @@ log = logging.getLogger("sidekick.main")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 SAMPLE_RATE = 16000
+CLOSE_BAD_REQUEST = 4400
+CLOSE_NO_IDENTITY = 4403
+CLOSE_NOT_FOUND = 4404
+CLOSE_SUPERSEDED = 4409
+CLOSE_ENDED = 4410
 
 
 @asynccontextmanager
@@ -65,6 +77,14 @@ app = FastAPI(title="Realtime call sidekick", lifespan=lifespan)
 
 def _svc(request_or_ws: Any) -> Services:
     return request_or_ws.app.state.services
+
+
+def _caller(request_or_ws: Any) -> Optional[str]:
+    """The user the Databricks Apps proxy identified (SPEC 10). MODE=local has one user, "local"."""
+    if _svc(request_or_ws).settings.mode == "local":
+        return "local"
+    headers = request_or_ws.headers
+    return (headers.get("x-forwarded-email") or headers.get("x-forwarded-user") or "").strip() or None
 
 
 class CreateCall(BaseModel):
@@ -130,7 +150,10 @@ async def list_scripts(request: Request, playbook: Optional[str] = Query(default
 @app.post("/api/calls", status_code=201)
 async def create_call(body: CreateCall, request: Request):
     svc = _svc(request)
-    session = await svc.create_call(body.playbook, body.mode, body.script, body.speed, body.customer_id)
+    caller = _caller(request)
+    if caller is None:
+        raise ServiceError(403, "the app could not identify the caller")
+    session = await svc.create_call(body.playbook, body.mode, body.script, body.speed, body.customer_id, caller)
     return {
         "call_id": session.call_id,
         "playbook": session.record.playbook,
@@ -151,11 +174,22 @@ def _coverage_from_enrichments(keys: list[tuple[str, str]], enrichments: list[di
 @app.get("/api/calls/{call_id}")
 async def get_call(call_id: str, request: Request):
     svc = _svc(request)
-    snap = await svc.store.snapshot(call_id)
+    caller = _caller(request)
     session = svc.sessions.get(call_id)
-    if snap.get("call") is None and session is None:
+    try:
+        snap = await svc.store.snapshot(call_id)
+        degraded = False
+    except Exception:  # noqa: BLE001 - Lakebase down or slow: an in-memory call is still readable
+        log.warning("snapshot unavailable; serving the in-memory call call_id=%s", call_id)
+        snap = {"call": None, "utterances": [], "enrichments": [], "cards": [], "feedback": []}
+        degraded = True
+    stored = snap.get("call")
+    if stored is None and session is None:
         raise ServiceError(404, "unknown call")
-    pb_name = (snap.get("call") or {}).get("playbook") or session.record.playbook
+    record_owner = session.owner if session is not None else (stored or {}).get("owner")
+    if caller is None or record_owner != caller:
+        raise ServiceError(404, "unknown call")
+    pb_name = (stored or {}).get("playbook") or session.record.playbook
     pb = svc.registry.get(pb_name)
     if session is not None:
         live = session.live_state()
@@ -164,15 +198,38 @@ async def get_call(call_id: str, request: Request):
         coverage = _coverage_from_enrichments([(m.key, m.label) for m in pb.methodology], snap.get("enrichments", []))
         decisions = []
     return {
-        "call": snap.get("call"),
+        "call": stored if stored is not None else session.record.to_wire(),
         "playbook": pb_name,
         "transcript": snap.get("utterances", []),
         "cards": snap.get("cards", []),
         "feedback": snap.get("feedback", []),
         "coverage": coverage,
         "decisions": decisions,
-        "as_of_ms": snap.get("as_of_ms"),
+        "as_of_ms": snap.get("as_of_ms") or now_ms(),
+        "degraded": degraded,
     }
+
+
+@app.post("/api/calls/{call_id}/end")
+async def end_call(call_id: str, request: Request):
+    svc = _svc(request)
+    session = _owned_call(svc, call_id, _caller(request))
+    await session.finish()
+    return {"call_id": call_id, "ended": True}
+
+
+def _owned_call(svc: Services, call_id: str, caller: Optional[str]):
+    session = svc.sessions.get(call_id)
+    if session is None or caller is None or session.owner != caller:
+        raise ServiceError(404, "call not active in this process")
+    return session
+
+
+def _owned_voice(svc: Services, session_id: str, caller: Optional[str]):
+    vs = svc.voice_sessions.get(session_id)
+    if vs is None or caller is None or vs.owner != caller:
+        raise ServiceError(404, "unknown voice session")
+    return vs
 
 
 @app.get("/api/voices")
@@ -197,7 +254,10 @@ async def voice_warmup(request: Request):
 @app.post("/api/voice/sessions", status_code=201)
 async def create_voice_session(body: CreateVoiceSession, request: Request):
     svc = _svc(request)
-    vs = await svc.create_voice_session(body.role, body.playbook, body.scenario, body.call_id, body.voice)
+    caller = _caller(request)
+    if caller is None:
+        raise ServiceError(403, "the app could not identify the caller")
+    vs = await svc.create_voice_session(body.role, body.playbook, body.scenario, body.call_id, body.voice, caller)
     return {
         "session_id": vs.session_id, "call_id": vs.call_id, "role": vs.role, "playbook": vs.playbook.name,
         "scenario": vs.scenario.key if vs.scenario else None, "voice": vs.voice,
@@ -206,38 +266,52 @@ async def create_voice_session(body: CreateVoiceSession, request: Request):
 
 @app.get("/api/voice/sessions/{session_id}")
 async def get_voice_session(session_id: str, request: Request):
-    svc = _svc(request)
-    vs = svc.voice_sessions.get(session_id)
-    if vs is not None:
-        return vs.snapshot()
-    snap = await svc.store.voice_snapshot(session_id)
-    if not snap["turns"] and not snap["items"]:
-        raise ServiceError(404, "unknown voice session")
-    # Not active in this process: turns and items come from Lakebase. Session metadata (role, playbook,
-    # call_id) is kept in memory only, so it is null here.
-    return {"session_id": session_id, "role": None, "playbook": None, "call_id": None,
-            "turns": snap["turns"], "items": snap["items"], "sentiment": [], "suggestions": [],
-            "streaming": False, "active": False}
+    """Live sessions only. Turns and items of an ended or unknown session are not readable: the owner check
+    needs the in-memory session."""
+    vs = _owned_voice(_svc(request), session_id, _caller(request))
+    return vs.snapshot()
 
 
-@app.post("/api/calls/{call_id}/end")
-async def end_call(call_id: str, request: Request):
-    svc = _svc(request)
-    session = svc.session(call_id)
-    await session.finish()
-    return {"call_id": call_id, "ended": True}
+async def _end_voice_session(session_id: str, request: Request) -> Response:
+    vs = _owned_voice(_svc(request), session_id, _caller(request))
+    await vs.close(reason="closed")
+    return Response(status_code=204)
+
+
+@app.delete("/api/voice/sessions/{session_id}", status_code=204)
+async def delete_voice_session(session_id: str, request: Request):
+    return await _end_voice_session(session_id, request)
+
+
+@app.post("/api/voice/sessions/{session_id}/end", status_code=204)
+async def end_voice_session(session_id: str, request: Request):
+    """POST twin of DELETE: navigator.sendBeacon (used on page hide) can only send POST."""
+    return await _end_voice_session(session_id, request)
 
 
 # ----------------------------------------------------------------- WebSockets
+
+def _limiter(svc: Services) -> TokenBucket:
+    return TokenBucket(rate=svc.settings.ws_msgs_per_s, burst=svc.settings.ws_msgs_per_s)
+
+
+async def _evict(ws: Any) -> None:
+    """Close a socket that a newer one has taken over (SPEC 10). It may already be dead: that is fine."""
+    try:
+        await ws.close(code=CLOSE_SUPERSEDED)
+    except Exception:  # noqa: BLE001
+        pass
+
 
 @app.websocket("/ws/call/{call_id}")
 async def ws_call(ws: WebSocket, call_id: str):
     svc = _svc(ws)
     await ws.accept()
     session = svc.sessions.get(call_id)
-    if session is None:
+    caller = _caller(ws)
+    if session is None or caller is None or session.owner != caller:
         await ws.send_json({"type": "error", "message": "call not active in this process"})
-        await ws.close(code=4404)
+        await ws.close(code=CLOSE_NOT_FOUND)
         return
     q = svc.hub.subscribe(call_id)
     if session.ended:
@@ -253,8 +327,11 @@ async def ws_call(ws: WebSocket, call_id: str):
             await ws.send_json(ev)
 
     async def pump_in() -> None:
+        bucket = _limiter(svc)
         while True:
             msg = await ws.receive_json()
+            if not bucket.allow():
+                continue                       # over the per-socket rate: dropped, not answered
             kind = msg.get("type")
             try:
                 if kind == "feedback":
@@ -269,6 +346,9 @@ async def ws_call(ws: WebSocket, call_id: str):
 
     out_task = asyncio.ensure_future(pump_out())
     in_task = asyncio.ensure_future(pump_in())
+    evicted = session.claim_socket(ws, q, out_task)
+    if evicted is not None:
+        await _evict(evicted)
     try:
         done, pending = await asyncio.wait({out_task, in_task}, return_when=asyncio.FIRST_COMPLETED)
         for t in pending:
@@ -276,9 +356,11 @@ async def ws_call(ws: WebSocket, call_id: str):
         for t in done:
             exc = t.exception() if not t.cancelled() else None
             if exc is not None and not isinstance(exc, (WebSocketDisconnect, ValueError, KeyError)):
-                log.warning("ws/call error: %r", exc)
+                log.warning("ws/call error call_id=%s: %r", call_id, exc)
     finally:
-        svc.hub.unsubscribe(call_id, q)
+        out_task.cancel()
+        in_task.cancel()
+        session.release_socket(ws, q)  # False when this socket was evicted: the successor keeps the call
 
 
 @app.websocket("/ws/audio/{call_id}")
@@ -286,13 +368,14 @@ async def ws_audio(ws: WebSocket, call_id: str, channel: Literal["agent", "custo
     svc = _svc(ws)
     await ws.accept()
     session = svc.sessions.get(call_id)
-    if session is None or session.ended:
+    caller = _caller(ws)
+    if session is None or session.ended or caller is None or session.owner != caller:
         await ws.send_json({"type": "error", "message": "call not active"})
-        await ws.close(code=4404)
+        await ws.close(code=CLOSE_NOT_FOUND)
         return
     if session.record.mode != "mic":
         await ws.send_json({"type": "error", "message": "audio socket is only used for mode=mic calls"})
-        await ws.close(code=4400)
+        await ws.close(code=CLOSE_BAD_REQUEST)
         return
 
     frames: asyncio.Queue[Optional[Frame]] = asyncio.Queue(maxsize=500)
@@ -305,13 +388,17 @@ async def ws_audio(ws: WebSocket, call_id: str, channel: Literal["agent", "custo
                 return
             yield f
 
+    session.attach()
     stt_task = session.start_mic(channel, frame_source(), decoder)
+    bucket = _limiter(svc)
     t_ms = 0.0
     try:
         while True:
             msg = await ws.receive()
             if msg["type"] == "websocket.disconnect":
                 break
+            if not bucket.allow():
+                continue
             if msg.get("bytes"):
                 pcm = msg["bytes"]
                 dur_ms = (len(pcm) / 2) / SAMPLE_RATE * 1000.0
@@ -330,11 +417,35 @@ async def ws_audio(ws: WebSocket, call_id: str, channel: Literal["agent", "custo
     except WebSocketDisconnect:
         pass
     finally:
-        frames.put_nowait(None)
+        _end_frames(frames)
         try:
             await asyncio.wait_for(stt_task, timeout=10)
         except (asyncio.TimeoutError, asyncio.CancelledError, Exception):  # noqa: BLE001
-            stt_task.cancel()
+            pass
+        finally:
+            stt_task.cancel()   # always: a stuck STT task must not outlive its socket
+            session.detach()
+
+
+def _end_frames(frames: "asyncio.Queue[Optional[Frame]]") -> None:
+    """Signal end-of-audio even when the queue is full: the oldest frame makes room (the call is ending anyway)."""
+    while True:
+        try:
+            frames.put_nowait(None)
+            return
+        except asyncio.QueueFull:
+            try:
+                frames.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+
+
+async def _pump_voice_out(ws: WebSocket, vs: Any) -> None:
+    while True:
+        ev = await vs.out.get()
+        if ev is None:
+            return
+        await ws.send_json(ev)
 
 
 @app.websocket("/ws/voice/{session_id}")
@@ -342,27 +453,29 @@ async def ws_voice(ws: WebSocket, session_id: str):
     svc = _svc(ws)
     await ws.accept()
     vs = svc.voice_sessions.get(session_id)
-    if vs is None or vs.closed:
+    caller = _caller(ws)
+    if vs is None or vs.closed or caller is None or vs.owner != caller:
         await ws.send_json({"type": "error", "message": "voice session not active in this process"})
-        await ws.close(code=4404)
+        await ws.close(code=CLOSE_NOT_FOUND)
         return
-    vs.attach_call_events(svc.hub)
+    out_task = asyncio.ensure_future(_pump_voice_out(ws, vs))
+    evicted = vs.claim_socket(ws, out_task)
+    if evicted is not None:
+        await _evict(evicted)
+    vs.hello()
+    vs.attach_call_events(svc.hub)   # idempotent: a re-attach replaces the earlier subscription
     vs.arm_deadline(svc.settings.voice_max_session_minutes * 60.0)
     if vs.role == "practice":
         vs.start_opening()
 
-    async def pump_out() -> None:
-        while True:
-            ev = await vs.out.get()
-            if ev is None:
-                break
-            await ws.send_json(ev)
-
     async def pump_in() -> None:
+        bucket = _limiter(svc)
         while True:
             msg = await ws.receive()
             if msg["type"] == "websocket.disconnect":
                 return
+            if not bucket.allow():
+                continue
             try:
                 if msg.get("bytes"):
                     data = msg["bytes"]
@@ -406,7 +519,6 @@ async def ws_voice(ws: WebSocket, session_id: str):
                 # A bad message is reported, not allowed to tear down the voice socket.
                 await ws.send_json({"type": "error", "message": str(exc)[:200]})
 
-    out_task = asyncio.ensure_future(pump_out())
     in_task = asyncio.ensure_future(pump_in())
     try:
         done, pending = await asyncio.wait({out_task, in_task}, return_when=asyncio.FIRST_COMPLETED)
@@ -415,31 +527,26 @@ async def ws_voice(ws: WebSocket, session_id: str):
         for t in done:
             exc = t.exception() if not t.cancelled() else None
             if exc is not None and not isinstance(exc, (WebSocketDisconnect, ValueError, KeyError)):
-                log.warning("ws/voice error: %r", exc)
+                log.warning("ws/voice error session_id=%s: %r", session_id, exc)
+        if out_task in done and not out_task.cancelled() and vs.closed:
+            try:
+                await ws.close(code=CLOSE_ENDED)     # the session ended: its last event was session_ended
+            except Exception:  # noqa: BLE001 - the client may already be gone
+                pass
     finally:
         out_task.cancel()
         in_task.cancel()
-        vs.abort_stream()              # the mic is gone: discard any open utterance
-        vs.detach_call_events()
-        if vs.role == "practice":
-            await vs.close()           # a practice call lives with its socket
-        else:
-            vs.interrupt()             # an assistant session survives a reconnect
+        if vs.release_socket(ws):
+            # The mic is gone: discard any open utterance. The session itself lives on for the reattach grace
+            # (SPEC 10): an assistant session keeps its context, a practice session keeps its call. The reaper
+            # closes it after voice_detached_ttl_s.
+            vs.abort_stream()
+            vs.detach_call_events()
+            if vs.role == "assistant":
+                vs.interrupt()
 
 
 def msg_card_id(payload: dict) -> str:
     return str(payload.get("card_id", ""))
 
 
-# ----------------------------------------------------------------- static UI
-
-if (STATIC_DIR / "index.html").exists():
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
-else:
-    @app.get("/", response_class=HTMLResponse)
-    async def placeholder() -> str:
-        return (
-            "<!doctype html><title>Call sidekick</title><h1>Call sidekick</h1>"
-            "<p>API is running. The UI has not been built into src/app/static yet.</p>"
-            "<p><a href='/docs'>API docs</a> &middot; <a href='/healthz'>healthz</a></p>"
-        )

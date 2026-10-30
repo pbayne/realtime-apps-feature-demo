@@ -1,4 +1,5 @@
-command: ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${DATABRICKS_APP_PORT:-8000}"]
+# --ws-max-size: one WebSocket message at most 1 MiB (SPEC 10). Larger frames are refused by the server.
+command: ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${DATABRICKS_APP_PORT:-8000} --ws-max-size 1048576"]
 
 env:
   - name: MODE

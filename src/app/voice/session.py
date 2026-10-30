@@ -38,7 +38,7 @@ from config import Settings
 from enrich.rules import Rules, load_rules
 from history import schema as hs
 from llm import LlmClient, LlmUnavailable
-from models import now_ms
+from models import cap_text, now_ms
 from sidekick.playbooks import Playbook, PracticeScenario
 from sidekick.retrieval import Hit, Retriever
 from store.base import Store
@@ -59,6 +59,7 @@ log = logging.getLogger("sidekick.voice")
 VOICE_RE = re.compile(r"^[a-z]{2}_[a-z]+$")
 MAX_SESSION_TURNS = 500
 KB_BUDGET_S = 1.5
+SNAPSHOT_BUDGET_S = 0.5     # the call transcript for an assistant turn: fail-soft after this, never a stalled turn
 RATE = 16000
 FRAME_MS = 100
 # Events a slow socket may lose: captions and analysis are refreshed constantly, so dropping one is harmless.
@@ -92,7 +93,7 @@ class VoiceDeps:
     retriever: Retriever
     calls: dict[str, Any]                      # call_id -> CallSession (services.sessions)
     finish_call: Callable[[str], Awaitable[None]]
-    new_practice_call: Callable[[str], Awaitable[str]]
+    new_practice_call: Callable[..., Awaitable[str]]          # (playbook, owner) -> call_id
     history: Any = None                        # HistorySink (SPEC 3.7); None in tests means no history
     # Streaming input (SPEC 9.2): builds the decoder for one stream from a status emitter. None = streaming off.
     stream_decoder: Optional[Callable[[Callable[[dict[str, Any]], None]], Any]] = None
@@ -113,6 +114,7 @@ class _Turn:
     customer_injected: bool = False
     items: list[dict[str, Any]] = field(default_factory=list)
     cancellable: bool = False       # True only while this turn's LLM/TTS/STT work is in flight
+    started: bool = False           # False while the turn waits for the previous one to finish (queued)
     warm_tts: Optional[WarmState] = None
 
 
@@ -134,8 +136,10 @@ def is_filler(text: str) -> bool:
 
 class VoiceSession:
     def __init__(self, *, session_id: str, role: str, playbook: Playbook, voice: str, deps: VoiceDeps,
-                 call_id: Optional[str] = None, scenario: Optional[PracticeScenario] = None) -> None:
+                 call_id: Optional[str] = None, scenario: Optional[PracticeScenario] = None,
+                 owner: Optional[str] = None) -> None:
         self.session_id = session_id
+        self.owner = owner
         self.role = role
         self.playbook = playbook
         self.voice = voice
@@ -148,12 +152,21 @@ class VoiceSession:
         self.turns: list[dict[str, Any]] = []
         self.items: list[dict[str, Any]] = []
         self.closed = False
+        self.closed_mono: Optional[float] = None   # set by close(); the reaper drops the session after a grace period
         self.opened = False
+        # Socket ownership (SPEC 10): one socket at a time. `socket` is the WebSocket that currently owns the
+        # session, `_out_task` its outbound pump. detached_at is armed at creation, so a session that never
+        # connects is reaped too.
+        self.socket: Any = None
+        self._out_task: Optional[asyncio.Task[None]] = None
+        self.detached_at = time.monotonic()
+        self._attached_call: Any = None
         self.dropped_events = 0
         self._silenced_turns: set[int] = set()
         self.dropped_frames = 0
         self._pending_practice = False
         self._current: Optional[_Turn] = None   # the turn whose work may be interrupted
+        self._latest: Optional[_Turn] = None    # the newest turn (queued, running or finishing)
         self._task: Optional[asyncio.Task[None]] = None
         self._hub_q: Optional[asyncio.Queue[Optional[dict[str, Any]]]] = None
         self._hub: Any = None
@@ -226,13 +239,44 @@ class VoiceSession:
     def _live_context(self) -> str:
         return "\n".join(f"{m['role']}: {m['content']}" for m in self.history[-6:])
 
+    def hello(self) -> None:
+        """First event on every voice socket: the client shows "live" only after it (or any other event)."""
+        self._emit({"type": "hello", "session_id": self.session_id, "role": self.role, "call_id": self.call_id})
+
+    def claim_socket(self, ws: Any, out_task: asyncio.Task[None]) -> Any:
+        """`ws` now owns this session and `out_task` is its only consumer of `out`. A previous owner (a half-open
+        socket, or another tab) is evicted: its pump is cancelled here, so two pumps never read one queue.
+        Returns the evicted WebSocket so the caller can close it with 4409."""
+        prev_ws, prev_task = self.socket, self._out_task
+        if prev_task is not None and prev_task is not out_task:
+            prev_task.cancel()
+        # Events queued while nobody listened are stale: a reconnect rebuilds from the snapshot, and `hello` must be
+        # the first event this socket sees.
+        while not self.out.empty():
+            self.out.get_nowait()
+        self.socket, self._out_task = ws, out_task
+        # Rebinding the call events happens in attach_call_events (it replaces the old subscription).
+        return prev_ws if prev_ws is not ws else None
+
+    def release_socket(self, ws: Any) -> bool:
+        """`ws` detaches. True only if it still owned the session, so an evicted socket never cleans up the new one."""
+        if self.socket is not ws:
+            return False
+        self.socket, self._out_task = None, None
+        self.detached_at = time.monotonic()
+        return True
+
     def attach_call_events(self, hub: Any) -> None:
-        """Practice (or a linked assistant call): forward the call's events on this session's socket."""
+        """Practice (or a linked assistant call): forward the call's events on this session's socket. Idempotent:
+        a re-attach replaces the earlier subscription, so events are never delivered twice."""
         if not self.call_id:
             return
+        self.detach_call_events()
         call = self.deps.calls.get(self.call_id)
         if call is not None:
             self._emit(call.coverage_event())
+            call.attach()
+            self._attached_call = call
         self._hub = hub
         self._hub_q = hub.subscribe(self.call_id)
         self._hub_task = asyncio.ensure_future(self._forward(self._hub_q))
@@ -249,6 +293,9 @@ class VoiceSession:
             self._hub.unsubscribe(self.call_id, self._hub_q)
         if self._hub_task is not None:
             self._hub_task.cancel()
+        if self._attached_call is not None:
+            self._attached_call.detach()
+            self._attached_call = None
         self._hub_q = None
         self._hub_task = None
 
@@ -260,9 +307,7 @@ class VoiceSession:
     async def _expire_after(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
         vlog("limit_hit", session_id=self.session_id, limit="max_session_minutes")
-        self._emit({"type": "session_ended", "reason": "max_session_minutes"})
-        await self.close()
-        self.out.put_nowait(None)
+        await self.close(reason="max_session_minutes")
 
     # ------------------------------------------------------------- inputs
     def submit_audio(self, wav: bytes) -> None:
@@ -380,12 +425,18 @@ class VoiceSession:
             self._error(self.turn + 1, "llm", exc)
 
     def interrupt(self) -> None:
-        """Barge-in: cancel the running turn while its work is in flight. Its cleanup emits
+        """Barge-in: cancel the newest turn while it is queued or in flight. Its cleanup emits
         turn_done(interrupted=true). A turn that has finished (or is finishing) is never interrupted, so an
         interrupt that arrives after turn_done is ignored."""
-        if self.busy and self._current is not None and self._current.cancellable:
-            self._silence(self._current.turn)
+        latest = self._latest
+        if latest is not None and self._interruptible(latest):
+            self._silence(latest.turn)
             self._task.cancel()
+
+    @staticmethod
+    def _interruptible(rec: _Turn) -> bool:
+        """Queued (waiting for the previous turn) or in flight. A turn that is finishing is not."""
+        return rec.cancellable or not rec.started
 
     def _silence(self, turn: int) -> None:
         """Drop the interrupted turn's audio that is still queued for the socket, and any it would still emit."""
@@ -402,6 +453,7 @@ class VoiceSession:
         text = (text or "").strip()
         if not text:
             raise ValueError("text turn is empty")
+        cap_text(text, self.settings.max_text_bytes, "text turn")
         self._start_turn(text=text)
 
     def start_opening(self) -> None:
@@ -409,7 +461,8 @@ class VoiceSession:
         if self.role != "practice" or self.opened or self.scenario is None:
             return
         self.opened = True
-        self._task = asyncio.ensure_future(self._run(0, self._task, opening=self.scenario.opening))
+        rec = self._new_turn(0, opening=True)
+        self._start(rec, opening=self.scenario.opening)
 
     def configure(self, voice: Optional[str] = None, role: Optional[str] = None,
                   scenario_key: Optional[str] = None) -> None:
@@ -430,7 +483,7 @@ class VoiceSession:
     async def ensure_practice_call(self, hub: Any) -> None:
         """After a role switch to practice: create the call the rep's and customer's turns go into."""
         if self._pending_practice and self.call_id is None:
-            self.call_id = await self.deps.new_practice_call(self.playbook.name)
+            self.call_id = await self.deps.new_practice_call(self.playbook.name, self.owner)
             self._pending_practice = False
             self.attach_call_events(hub)
 
@@ -452,18 +505,32 @@ class VoiceSession:
                     stt_ms: Optional[float] = None) -> None:
         if self.turn >= MAX_SESSION_TURNS:
             raise ValueError("turn limit reached for this session")
-        prev = self._task
-        if prev is not None and not prev.done() and self._current is not None and self._current.cancellable:
-            prev.cancel()          # a new turn while one is speaking is a barge-in
+        latest = self._latest
+        if latest is not None and self._task is not None and not self._task.done() and self._interruptible(latest):
+            self._task.cancel()    # a newer turn supersedes a turn that is speaking or still queued (barge-in)
         self.turn += 1
-        self._task = asyncio.ensure_future(self._run(self.turn, prev, wav=wav, text=text, stt_ms=stt_ms))
+        self._start(self._new_turn(self.turn, opening=False), wav=wav, text=text, stt_ms=stt_ms)
 
-    async def close(self) -> None:
-        """Socket closed (or the session limit was hit): stop the running turn, detach, and end a practice call
-        (it lives with the socket)."""
+    def _new_turn(self, turn_no: int, *, opening: bool) -> _Turn:
+        rec = _Turn(turn=turn_no, opening=opening)
+        rec.timing = {"stt_ms": None, "llm_first_token_ms": None, "tts_first_audio_ms": None,
+                      "first_audio_ms": None, "total_ms": None}
+        rec.warm_tts = self._warm("tts", turn_no)
+        return rec
+
+    def _start(self, rec: _Turn, **kwargs: Any) -> None:
+        prev = self._task
+        self._latest = rec
+        self._task = asyncio.ensure_future(self._run(rec, prev, **kwargs))
+
+    async def close(self, reason: Optional[str] = None) -> None:
+        """The session ends: stop the running turn, detach, and end a practice call (it lives with the session).
+        `reason` (time limit, or closed by the user) is sent as a `session_ended` event first; the attached socket,
+        if any, sees the end of its queue and closes with 4410."""
         if self.closed:
             return
         self.closed = True
+        self.closed_mono = time.monotonic()
         vlog("session_closed", session_id=self.session_id, role=self.role, turns=self.turn,
              dropped_events=self.dropped_events, dropped_frames=self.dropped_frames)
         self.live.close()
@@ -478,20 +545,21 @@ class VoiceSession:
             try:
                 await self.deps.finish_call(self.call_id)
             except Exception:  # noqa: BLE001
-                log.exception("ending practice call failed")
+                log.exception("ending practice call failed session_id=%s call_id=%s", self.session_id, self.call_id)
+        if reason is not None:
+            self._emit({"type": "session_ended", "reason": reason})
+        self.out.put_nowait(None)
 
-    async def _run(self, turn_no: int, prev: Optional[asyncio.Task[None]], *, wav: Optional[bytes] = None,
+    async def _run(self, rec: _Turn, prev: Optional[asyncio.Task[None]], *, wav: Optional[bytes] = None,
                    text: Optional[str] = None, opening: Optional[str] = None,
                    stt_ms: Optional[float] = None) -> None:
         t0 = time.monotonic()
-        rec = _Turn(turn=turn_no, opening=opening is not None)
-        rec.timing = {"stt_ms": None, "llm_first_token_ms": None, "tts_first_audio_ms": None,
-                      "first_audio_ms": None, "total_ms": None}
-        rec.warm_tts = self._warm("tts", turn_no)
+        turn_no = rec.turn
         interrupted = False
         try:
             if prev is not None:
                 await asyncio.gather(prev, return_exceptions=True)   # the previous turn cleans up first
+            rec.started = True
             rec.cancellable = True
             self._current = rec
             if opening is not None:
@@ -511,7 +579,7 @@ class VoiceSession:
         except asyncio.CancelledError:
             interrupted = True
         except Exception as exc:  # noqa: BLE001 - a bad turn must not kill the session
-            log.exception("voice turn %s failed", turn_no)
+            log.exception("voice turn %s failed session_id=%s", turn_no, self.session_id)
             self._error(turn_no, "llm", exc)
         finally:
             rec.cancellable = False
@@ -533,7 +601,7 @@ class VoiceSession:
                                              self._policy(), sleep=asyncio.sleep)
                 user_text = (raw or "").strip()
             except Exception as exc:  # noqa: BLE001 - STT failure: no reply this turn, the session goes on
-                log.warning("voice STT failed: %s", type(exc).__name__)
+                log.warning("voice STT failed: %s session_id=%s", type(exc).__name__, self.session_id)
                 self._error(rec.turn, "stt", exc)
                 user_text = ""
             rec.timing["stt_ms"] = _ms(t)
@@ -552,9 +620,9 @@ class VoiceSession:
         if not self.call_id:
             return ""
         try:
-            snap = await self.deps.store.snapshot(self.call_id)
-        except Exception:  # noqa: BLE001 - store outage: answer without the transcript
-            log.exception("call snapshot for voice context failed")
+            snap = await asyncio.wait_for(self.deps.store.snapshot(self.call_id), SNAPSHOT_BUDGET_S)
+        except Exception:  # noqa: BLE001 - store outage or slow store: answer without the transcript
+            log.warning("call snapshot for voice context unavailable session_id=%s call_id=%s", self.session_id, self.call_id)
             snap = {}
         call = self.deps.calls.get(self.call_id)
         coverage = call.coverage_event()["items"] if call is not None else []
@@ -683,7 +751,7 @@ class VoiceSession:
         try:
             await self.deps.store.put_voice_item(self.session_id, item)
         except Exception:  # noqa: BLE001 - persistence is best effort during the session
-            log.exception("voice item persist failed")
+            log.exception("voice item persist failed session_id=%s", self.session_id)
         if self.deps.history is not None:
             self.deps.history.emit("voice_items", hs.voice_item_row(self.session_id, item))
 
@@ -704,7 +772,7 @@ class VoiceSession:
             try:
                 await self.deps.store.put_voice_turn(self.session_id, row)
             except Exception:  # noqa: BLE001
-                log.exception("voice turn persist failed")
+                log.exception("voice turn persist failed session_id=%s", self.session_id)
             if self.deps.history is not None:
                 self.deps.history.emit("voice_turns", hs.voice_turn_row(self.session_id, row))
         if self.role == "practice" and spoken and not interrupted:

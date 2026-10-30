@@ -58,6 +58,7 @@ def turn_done(turn):
 def test_streamed_pcm_over_the_socket_gives_partials_and_a_reply(client):
     sid = new_session(client)
     with client.websocket_connect(f"/ws/voice/{sid}") as ws:
+        assert ws.receive_json()["type"] == "hello"
         ws.send_json({"type": "stream_start", "sample_rate": 16000})
         for _ in range(15):
             ws.send_bytes(pcm_ms(100, True))            # raw PCM: no RIFF header, so it is a stream frame
@@ -74,6 +75,7 @@ def test_streamed_pcm_over_the_socket_gives_partials_and_a_reply(client):
 def test_live_events_and_suggestions_arrive_while_the_user_is_talking(client):
     sid = new_session(client)
     with client.websocket_connect(f"/ws/voice/{sid}") as ws:
+        assert ws.receive_json()["type"] == "hello"
         ws.send_json({"type": "stream_start"})
         # 2.5 s of speech: with the 250 ms decode lag, all four words are visible, which the 4-word floor needs.
         for _ in range(25):
@@ -88,6 +90,7 @@ def test_live_events_and_suggestions_arrive_while_the_user_is_talking(client):
 def test_pin_persists_the_chip_as_an_outcome_and_dismiss_removes_another(client):
     sid = new_session(client)
     with client.websocket_connect(f"/ws/voice/{sid}") as ws:
+        assert ws.receive_json()["type"] == "hello"
         ws.send_json({"type": "stream_start"})
         for _ in range(25):
             ws.send_bytes(pcm_ms(100, True))
@@ -108,6 +111,7 @@ def test_pin_persists_the_chip_as_an_outcome_and_dismiss_removes_another(client)
 def test_stream_stop_without_a_stream_is_a_no_op_and_bad_frames_are_reported(client):
     sid = new_session(client)
     with client.websocket_connect(f"/ws/voice/{sid}") as ws:
+        assert ws.receive_json()["type"] == "hello"
         ws.send_json({"type": "stream_stop", "flush": True})
         ws.send_bytes(pcm_ms(100, True))                # no stream open
         err = ws.receive_json()
@@ -121,6 +125,7 @@ def test_stream_stop_without_a_stream_is_a_no_op_and_bad_frames_are_reported(cli
 def test_mute_discards_the_utterance_over_the_socket(client):
     sid = new_session(client)
     with client.websocket_connect(f"/ws/voice/{sid}") as ws:
+        assert ws.receive_json()["type"] == "hello"
         ws.send_json({"type": "stream_start"})
         for _ in range(6):
             ws.send_bytes(pcm_ms(100, True))
@@ -137,6 +142,7 @@ def test_session_deadline_ends_the_socket_with_a_reason(monkeypatch):
     with build_client(monkeypatch, llm, voice_max_session_minutes=0.001) as c:
         sid = new_session(c)
         with c.websocket_connect(f"/ws/voice/{sid}") as ws:
+            assert ws.receive_json()["type"] == "hello"
             ev = read_until(ws, lambda evs: any(e["type"] == "session_ended" for e in evs))
             assert ev[-1]["reason"] == "max_session_minutes"
 

@@ -31,7 +31,7 @@ from history.base import HistorySink
 from history.memory import NullHistorySink
 from hub import Hub
 from llm import LlmClient
-from models import CallRecord, Card, Utterance, new_id, now_ms
+from models import CallRecord, Card, Utterance, cap_text, new_id, now_ms
 from sidekick.compose import compose_body, truncate_words
 from sidekick.decide import (
     Candidate,
@@ -106,6 +106,12 @@ class CallSession:
     coverage_open: dict[str, int] = field(default_factory=dict)
     decisions: list[dict[str, Any]] = field(default_factory=list)
     ended: bool = False
+    ended_mono: Optional[float] = None                                    # set by finish(); drives the grace period
+    attached: int = 0                                                     # sockets and voice sessions on this call
+    detached_at: float = field(default_factory=time.monotonic)            # armed at creation (SPEC 10, reaper)
+    socket: Any = None                                                    # the call socket that owns the events
+    _socket_q: Any = None
+    _socket_task: Optional[asyncio.Task[Any]] = None
 
     def __post_init__(self) -> None:
         self.playbook = self.deps.registry.get(self.record.playbook)
@@ -144,6 +150,41 @@ class CallSession:
     @property
     def settings(self) -> Settings:
         return self.deps.settings
+
+    @property
+    def owner(self) -> Optional[str]:
+        return self.record.owner
+
+    def attach(self) -> None:
+        """A socket (call or audio) or a voice session is listening to this call."""
+        self.attached += 1
+
+    def detach(self) -> None:
+        self.attached = max(0, self.attached - 1)
+        if self.attached == 0:
+            self.detached_at = time.monotonic()
+
+    def claim_socket(self, ws: Any, q: Any, out_task: "asyncio.Task[Any]") -> Any:
+        """Same rule as VoiceSession.claim_socket: one call socket reads this call's events. A previous socket is
+        evicted (its subscription is removed and its pump cancelled); returns it so the caller can close it (4409)."""
+        prev_ws, prev_q, prev_task = self.socket, self._socket_q, self._socket_task
+        if prev_q is not None and prev_q is not q:
+            self.deps.hub.unsubscribe(self.call_id, prev_q)
+        if prev_task is not None and prev_task is not out_task:
+            prev_task.cancel()
+        if prev_ws is None:
+            self.attach()
+        self.socket, self._socket_q, self._socket_task = ws, q, out_task
+        return prev_ws if prev_ws is not ws else None
+
+    def release_socket(self, ws: Any, q: Any) -> bool:
+        """True only if `ws` still owned the call; an evicted socket never tears down its successor."""
+        if self.socket is not ws:
+            return False
+        self.socket, self._socket_q, self._socket_task = None, None, None
+        self.deps.hub.unsubscribe(self.call_id, q)
+        self.detach()
+        return True
 
     def start(self) -> None:
         self._workers = [
@@ -189,7 +230,7 @@ class CallSession:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
-            log.exception("STT channel %s failed", session.speaker)
+            log.exception("STT channel %s failed call_id=%s", session.speaker, self.call_id)
             self.deps.hub.emit(self.call_id, {"type": "error", "scope": "stt", "speaker": session.speaker,
                                               "message": str(exc)[:200]})
 
@@ -211,6 +252,8 @@ class CallSession:
         """Browser Web Speech result (WS text message `browser_stt` or /ws/audio text frame)."""
         if speaker not in ("agent", "customer"):
             raise ValueError("speaker must be agent or customer")
+        if isinstance(msg.get("text"), str):
+            cap_text(msg["text"], self.settings.max_text_bytes, "browser result")
         bp = self._browser.get(speaker)
         if bp is None:
             bp = self._browser[speaker] = BrowserPassthrough(speaker, self.next_seq)
@@ -274,11 +317,12 @@ class CallSession:
             self.ended = True
             ended_at = now_ms()
             self.record.ended_at_ms, self.record.status = ended_at, "ended"
+            self.ended_mono = time.monotonic()
             self._history.emit("calls", hs.call_row(self.record))
             try:
                 await self.deps.store.end_call(self.call_id, ended_at)
             except Exception:  # noqa: BLE001
-                log.exception("end_call failed")
+                log.exception("end_call failed call_id=%s", self.call_id)
             self.deps.hub.emit(self.call_id, {"type": "call.ended"})
             self.deps.hub.close(self.call_id)
 
@@ -428,7 +472,7 @@ class CallSession:
         try:
             await self.deps.store.put_utterance(utt)
         except Exception:  # noqa: BLE001 - store outage must not stop the sidekick
-            log.exception("put_utterance failed")
+            log.exception("put_utterance failed call_id=%s", utt.call_id)
 
     async def _persist_enrichment(self, fields: dict[str, Any]) -> None:
         """direct backbone: the in-process enrichment row goes to Lakebase (live state) and to history."""
@@ -436,7 +480,7 @@ class CallSession:
         try:
             await self.deps.store.put_enrichment(call_id, seq, fields)
         except Exception:  # noqa: BLE001
-            log.exception("put_enrichment failed")
+            log.exception("put_enrichment failed call_id=%s", call_id)
         self._history.emit("enrichments", hs.enrichment_row(
             call_id, seq, fields["speaker"], fields["text"], fields, fields["emitted_at_ms"],
             fields["enriched_at_ms"], fields.get("source", "direct")))
@@ -601,7 +645,7 @@ class CallSession:
             self._history.emit("cards", hs.card_row(card, trace))
             await self.deps.bus.publish(self.settings.kafka_cards_topic, self.call_id, card.to_wire())
         except Exception:  # noqa: BLE001 - persistence is best-effort during the call
-            log.exception("persisting card failed")
+            log.exception("persisting card failed call_id=%s", self.call_id)
         self._emit_metrics(seq, timing, card_ms, card_done_ms, compose_mode=result.mode, card_path=path)
 
     def _emit_perception(self, seq: int, perc: Perception) -> None:
@@ -617,8 +661,14 @@ class CallSession:
     async def feedback(self, card_id: str, action: str, text: Optional[str]) -> None:
         if action not in ("accept", "reject", "edit"):
             raise ValueError("action must be accept|reject|edit")
+        if text is not None:
+            cap_text(str(text), self.settings.max_text_bytes, "feedback text")
         at_ms = now_ms()
-        await self.deps.store.add_feedback(card_id, self.call_id, action, text, at_ms)
+        try:
+            await self.deps.store.add_feedback(card_id, self.call_id, action, text, at_ms)
+        except Exception:  # noqa: BLE001 - reported to the client; the socket stays up
+            log.exception("feedback save failed call_id=%s", self.call_id)
+            raise ValueError("feedback could not be saved; try again") from None
         self._history.emit("feedback", hs.feedback_row(card_id, self.call_id, action, text, at_ms))
 
     # ----------------------------------------------------------- metrics
