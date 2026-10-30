@@ -208,6 +208,48 @@ and `src/app/app.yaml` maps them to env vars with `valueFrom`.
 Defaults in `src/app/config.py`: `VOICE_MODEL=databricks-claude-haiku-4-5` (0.41–0.52 s first token in region),
 `FAST_MODEL=databricks-claude-haiku-5-5`, `SMART_MODEL=databricks-claude-sonnet-5-5`.
 
+Deploy notes (v0.6): `pg_password` is no longer a job parameter or bundle variable. `deploy.sh` writes
+`lakebase_password` to the secret scope only when the key is absent, or when you set `ROTATE_PG_PASSWORD=1`. The setup
+job reads it with `dbutils.secrets.get`. A rotation restarts the app, because secret-backed env vars resolve at process
+start.
+
+## Security and ownership
+
+- **Who owns a call or voice session.** The Databricks Apps proxy sets `X-Forwarded-Email` (fallback `X-Forwarded-User`).
+  Each call and voice session records that caller, and the `calls` table has an `owner` column. In `MODE=local` the
+  owner is `local`. Every REST route and WebSocket answers 404 (close 4404 on sockets) for any other caller. A call id
+  is not a capability. A voice session cannot link a call that belongs to someone else.
+- **Calls without an owner** (rows written before v0.6) are not readable through the API. Run the `ALTER TABLE` in
+  `init.py` or `init_history.py` (both idempotent), then the rows still have no owner, so they stay hidden. That is the
+  intended result.
+- **Input limits.** Typed turns, browser STT results and feedback text are capped at `MAX_TEXT_BYTES` (2048 bytes). Each
+  socket has a token bucket (`WS_MSGS_PER_S`, default 50 per second): excess messages are dropped and counted, not
+  answered. `uvicorn --ws-max-size 1048576` caps one WebSocket message at 1 MiB. Active calls are capped per user
+  (`MAX_ACTIVE_CALLS_PER_USER`, default 5) and per instance (`MAX_ACTIVE_CALLS`, default 100); beyond that the API
+  answers 429.
+- **One socket per session.** A new socket takes over a session and closes the old one with 4409. The client does not
+  reconnect after 4409.
+- **Health output.** `/api/health` reports the exception type of the last LLM error, never its text.
+- **Secrets.** The Lakebase password is only in the secret scope (see the deploy notes above). It is not a job
+  parameter, and `deploy.sh` never prints it.
+
+## Operations
+
+- **Session lifetime.** A reaper runs every `SESSION_REAP_INTERVAL_S` (5 s). A voice session with no socket is closed
+  after `VOICE_DETACHED_TTL_S` (90 s), counted from creation if it never connected. A call with no socket or voice
+  attachment is finished after `CALL_DETACHED_TTL_S` (120 s). Closed and ended entries stay readable for
+  `SESSION_GRACE_S` (60 s) and are then dropped. The browser ends a voice session with `DELETE /api/voice/sessions/{id}`
+  (or `POST .../end` from `sendBeacon` on page hide).
+- **Close codes.** 4400 bad request, 4403 no identity, 4404 not found, not yours or not active, 4409 superseded by a
+  newer socket, 4410 the session ended (a `session_ended` event comes first). Clients do not reconnect after any 44xx.
+- **Degraded store.** If Lakebase is unreachable at startup, the app still starts. It retries in the background with
+  backoff (2 s doubling to 30 s), `/api/health` reports `status: degraded` and `store_ready: false`, and live calls keep
+  working in memory. `GET /api/calls/{id}` answers from memory with `degraded: true`. Queries time out after
+  `LAKEBASE_COMMAND_TIMEOUT_S` (2 s), and connects after `LAKEBASE_CONNECT_TIMEOUT_S` (5 s).
+- **Upgrade steps.** Run `init.py` (or the ALTER TABLE in it) for Lakebase, and `init_history.py` for the history `calls`
+  table, before the new app serves traffic. A rotation of `ROTATE_PG_PASSWORD=1` is optional; see the deploy notes.
+- **Zerobus.** A blocking SDK write is limited to `HISTORY_WRITE_TIMEOUT_S` (15 s). A timed-out write resets its stream.
+
 ## Zerobus history (direct backbone)
 
 The app writes history with the official **Zerobus Ingest** Python SDK (`databricks-zerobus-ingest-sdk`, `zerobus.sdk.sync`).
@@ -227,7 +269,7 @@ Sources: [Zerobus Ingest](https://docs.databricks.com/aws/en/ingestion/zerobus-i
 
 The sink (`src/app/history/zerobus.py`) never blocks the call. `emit()` appends to a bounded queue (10 000 records,
 drop-oldest, counted). A background task flushes batches (500 records or 0.5 s) through worker threads, one stream
-per table. Missing credentials disable the sink with one log line. On a write error a failed batch is retried on a fresh stream with exponential backoff (`HISTORY_RETRY_ATTEMPTS`, default 3; `retried` counts), and only counted in `failed` after the last attempt. Delivery is at-least-once: a retry after a partial ack can duplicate rows, so dedupe downstream on the natural keys (calls.call_id, utterances/enrichments (call_id, seq), cards.card_id, feedback (card_id, at_ms), voice_turns (session_id, turn), voice_items.item_id).
+per table. Missing credentials disable the sink with one log line. On a write error a failed batch is retried on a fresh stream with exponential backoff (`HISTORY_RETRY_ATTEMPTS`, default 3; `retried` counts), and requeued once at the front of the queue after the last attempt, then counted in `failed`. Acknowledged writes are at-least-once: a retry after a partial ack can duplicate rows, so dedupe downstream on the natural keys (calls.call_id, utterances/enrichments (call_id, seq), cards.card_id, feedback (card_id, at_ms), voice_turns (session_id, turn), voice_items.item_id).
 `/api/health` reports `history.queue_depth`, `dropped`, `retried`, `failed`, and `written`.
 
 ## Kafka backbone: RTM restrictions (verified)

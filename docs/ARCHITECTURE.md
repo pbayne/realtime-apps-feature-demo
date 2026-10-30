@@ -164,7 +164,7 @@ deployed endpoint).
 | History writes | Zerobus (service principal, MODIFY+SELECT on 7 tables) | Kafka producer + bronze job |
 | Secrets | Lakebase, Zerobus client id and secret, endpoint | the above plus Kafka secrets |
 | Failure surface | Zerobus queue (bounded, drop-oldest, counted); Lakebase (background) | broker, RTM job, checkpoint, topic ACLs |
-| On a failed history write | retried on a fresh stream (3 attempts, backoff), then counted; at-least-once; the call continues | the bronze job retries from the checkpoint |
+| On a failed history write | retried on a fresh stream (3 attempts, backoff), requeued once, then counted; acknowledged writes are at-least-once; the call continues | the bronze job retries from the checkpoint |
 
 ### GPU endpoints and scale-to-zero (both backbones)
 
@@ -184,7 +184,7 @@ two always-on A10G endpoints.
   columns are STRING.
 - One stream per table. Batches are flushed every 0.5 s or 500 records. The queue holds 10 000 records and
   drops the oldest when full (counted in `/healthz` → `history.dropped`).
-- Acks mean durable, not queryable (the docs). On a write error a failed batch is retried on a fresh stream with exponential backoff (`HISTORY_RETRY_ATTEMPTS`, default 3; `retried` counts), and only counted in `failed` after the last attempt. Delivery is at-least-once: a retry after a partial ack can duplicate rows, so dedupe downstream on the natural keys (calls.call_id, utterances/enrichments (call_id, seq), cards.card_id, feedback (card_id, at_ms), voice_turns (session_id, turn), voice_items.item_id).
+- Acks mean durable, not queryable (the docs). On a write error a failed batch is retried on a fresh stream with exponential backoff (`HISTORY_RETRY_ATTEMPTS`, default 3; `retried` counts), and requeued once at the front of the queue after the last attempt, then counted in `failed`. Acknowledged writes are at-least-once: a retry after a partial ack can duplicate rows, so dedupe downstream on the natural keys (calls.call_id, utterances/enrichments (call_id, seq), cards.card_id, feedback (card_id, at_ms), voice_turns (session_id, turn), voice_items.item_id).
 - Sources: Zerobus Ingest docs (<https://docs.databricks.com/aws/en/ingestion/zerobus-ingest>), message blocking
   and acknowledgment (<https://docs.databricks.com/aws/en/ingestion/zerobus-message-blocking>), and the Python
   SDK README (<https://github.com/databricks/zerobus-sdk/blob/main/python/README.md>). SDK 1.10.0,
@@ -222,3 +222,16 @@ BACKBONE=kafka scripts/deploy.sh <profile> <catalog> SASL_SSL_PLAIN
   deployed region before a commitment.
 - Zerobus has not been exercised against a live workspace from this repo. The sink is tested with a fake SDK,
   and the SDK's signatures were checked against the installed package.
+
+## 9. Session lifetime, ownership and limits (v0.6)
+
+- Every call and voice session records its owner (`X-Forwarded-Email`, else `X-Forwarded-User`; `local` in MODE=local).
+  Routes and sockets return 404 or 4404 to anyone else.
+- A reaper (`services.reap_once`) closes voice sessions with no socket after `VOICE_DETACHED_TTL_S` and finishes calls
+  with no attachment after `CALL_DETACHED_TTL_S`. Ended and closed entries are dropped after `SESSION_GRACE_S`.
+- One socket per session: a newer socket evicts the older one (close 4409). The first voice-socket event is `hello`.
+- Sockets have a message rate limit (token bucket), text is capped in bytes, and the app runs with a 1 MiB
+  WebSocket message cap.
+- Lakebase is optional at startup. The store retries in the background, and the app runs degraded until it connects.
+- The LLM circuit breaker is per model; warm-up pings do not count.
+

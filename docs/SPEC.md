@@ -1,4 +1,4 @@
-# Realtime Call Sidekick — Build Spec (v0.5)
+# Realtime Call Sidekick — Build Spec (v0.6)
 
 Live call → sub-second transcription → enrichment → Lakebase → sidekick agent → suggestion cards
 pushed to the rep/agent UI over WebSocket. Two backbones (docs/ARCHITECTURE.md):
@@ -8,8 +8,8 @@ pushed to the rep/agent UI over WebSocket. Two backbones (docs/ARCHITECTURE.md):
 - **kafka** (scale mode): utterances to Kafka, Spark Real-Time Mode enrichment into Lakebase, history to Delta
   through Kafka jobs.
 
-v0.5 records what the code does (2026-10-30). Changes from v0.4 are marked **[v0.5]**. Earlier changes are
-**[v0.2]**, **[v0.3]** and **[v0.4]**.
+v0.6 records what the code does (2026-10-30). Changes from v0.5 are marked **[v0.6]**. Earlier changes are
+**[v0.2]** to **[v0.5]**.
 
 ## 1. Hard constraints (verified)
 - **Backbone [v0.4].** `BACKBONE=direct` (default) or `kafka`. Direct: no bus (`bus/null.py`), enrichment in
@@ -183,12 +183,15 @@ Response: SSE `chat.completion.chunk`. First `delta.content` is a header
 
 | Method and path | Response |
 |---|---|
-| `GET /healthz` | `{status, mode, backbone, bus, store, history, vad, retrieval, llm, active_calls, playbooks, enrich_rules, voice}`. `history` = sink stats (`backend, enabled, queue_depth, queued, written, dropped, failed, skipped`) [v0.4] |
+| `GET /healthz` | `{status, mode, backbone, bus, store, store_ready, history, vad, retrieval, llm, active_calls, playbooks, enrich_rules, voice}`. `status` is `degraded` while the store is not ready [v0.6]. `llm.last_error` is the exception type name only [v0.6]. `history` = sink stats (`backend, enabled, queue_depth, queued, written, dropped, failed, skipped`) [v0.4] |
 | `GET /api/playbooks` | `{"playbooks": [{name, title, persona, card_weights, methodology:[{key,label}], objections:[key], compliance:[key], kb_docs:[doc_id], replay_scripts:[name]}]}`. The UI maps `title` → label. |
 | `GET /api/scripts?playbook=<name>` | JSON array of replay script names for that playbook. 404 for an unknown playbook. Without `playbook`: `{<playbook>: [names]}`. |
 | `POST /api/calls` | body `{playbook, mode: replay\|mic, script?, speed?, customer_id?}` → 201 `{call_id, playbook, mode, script, started_at_ms}` |
 | `GET /api/calls/{id}` | snapshot `{call, playbook, transcript, cards, feedback, coverage, decisions, as_of_ms}`. `decisions` holds the live trace (last 50) while the call is active in this process. |
-| `POST /api/calls/{id}/end` | `{call_id, ended: true}`; emits `call.ended` |
+| `POST /api/calls/{id}/end` | `{call_id, ended: true}`; emits `call.ended`. Owner only (404 otherwise). [v0.6] |
+| `GET /api/calls/{id}` (v0.6) | adds `degraded: true` when the store is down and the call is served from memory |
+| `DELETE /api/voice/sessions/{id}` [v0.6] | 204; ends the session now (`session_ended` reason `closed`, then close 4410). Owner only. |
+| `POST /api/voice/sessions/{id}/end` [v0.6] | 204; the same as DELETE, for `navigator.sendBeacon`, which can only POST |
 
 ### 3.6 UI WebSocket `/ws/call/{call_id}` (server → client events)
 Every event carries `emitted_at_ms`. On connect the server sends a `coverage` event (or `call.ended` if the call is over).
@@ -343,8 +346,8 @@ Databricks serving, Kokoro TTS). Two roles, switchable per session:
 
 ### 9.1 Session REST
 `POST /api/voice/sessions {"role":"assistant|practice","playbook":"advisor_coach","scenario":"fee_objection"?,"call_id":"<link>"?,"voice":"af_heart"?}`
-→ `{"session_id","call_id"}` (practice always creates a call_id; assistant may link one).
-`GET /api/voice/sessions/{id}` → snapshot (turns, items). `GET /api/voices` → TTS voice list.
+→ `{"session_id","call_id"}` (practice always creates a call_id; assistant may link one). The linked call must belong to the caller (404 otherwise) [v0.6].
+`GET /api/voice/sessions/{id}` → snapshot (turns, items), live sessions of the caller only [v0.6]. Ended sessions are not readable. `GET /api/voices` → TTS voice list.
 `GET /api/playbooks` gains `scenarios` per playbook (practice personas, from playbook YAML `practice:`).
 
 ### 9.2 WebSocket `/ws/voice/{session_id}`
@@ -504,13 +507,13 @@ notebook's DDL has the same columns and types.
   counted in `dropped`, warning logged). A background task flushes batches of up to `HISTORY_BATCH_MAX` records
   every `HISTORY_FLUSH_INTERVAL_S`, in worker threads.
 - Acks: the sink waits on the last offset of each batch, then flushes. Acks mean durable, not yet queryable.
-- Failures: the stream is closed and a failed batch is retried on a fresh stream with exponential backoff (`HISTORY_RETRY_ATTEMPTS`, default 3; `retried` counts), and only counted in `failed` after the last attempt. Delivery is at-least-once: a retry after a partial ack can duplicate rows, so dedupe downstream on the natural keys (calls.call_id, utterances/enrichments (call_id, seq), cards.card_id, feedback (card_id, at_ms), voice_turns (session_id, turn), voice_items.item_id).
+- Failures: the stream is closed and a failed batch is retried on a fresh stream with exponential backoff (`HISTORY_RETRY_ATTEMPTS`, default 3; `retried` counts), and requeued once at the front of the queue after the last attempt, then counted in `failed` [v0.6]. Acknowledged writes are at-least-once: a retry after a partial ack can duplicate rows, so dedupe downstream on the natural keys (calls.call_id, utterances/enrichments (call_id, seq), cards.card_id, feedback (card_id, at_ms), voice_turns (session_id, turn), voice_items.item_id).
 - Fail-soft: missing endpoint, client id or secret, or host disables the sink (one warning; `skipped` counts).
   The call keeps running.
 - Shutdown drains the queue up to `HISTORY_FLUSH_TIMEOUT_S`.
 
 ### Delivery guarantee
-At most once per record from the app's side. History is for analytics and post-call scoring, not a system of record.
+Best effort [v0.6]. Acknowledged writes are at-least-once (dedupe on the natural keys). A batch that still fails after one requeue is dropped and counted in `failed`, and a full queue drops its oldest records. History is for analytics and post-call scoring, not a system of record.
 Live state is in Lakebase.
 
 Sources: https://docs.databricks.com/aws/en/ingestion/zerobus-ingest ,
@@ -541,3 +544,28 @@ https://github.com/databricks/zerobus-sdk/blob/main/python/README.md
 - UI (not a contract change): the console shows a live caption, the live read (sentiment gauge and sparkline), the live
   lane, separate mic and Sidekick levels on the orb, a warming banner, and keys M (mute), Esc (interrupt) and Space
   (push-to-talk). `?stream=0` is the WAV-per-turn fallback. The mock (`?mock=1`) simulates all of it.
+
+## 12. Changes from v0.5 **[v0.6]** (summary)
+- **Ownership.** Calls and voice sessions record their owner (`X-Forwarded-Email`, then `X-Forwarded-User`; `local` in
+  MODE=local). `calls.owner` is a nullable column in the Lakebase DDL and the history schema. Other callers get 404 on REST
+  and close 4404 on WebSockets. A voice session cannot link a call owned by someone else.
+- **Close codes.** 4400 bad request, 4403 no caller identity, 4404 not found, not yours or not active, 4409 superseded by a newer socket
+  for the same session, 4410 the session ended (`session_ended` is sent first). Clients stop reconnecting on any 44xx code and
+  after `session_ended`.
+- **Voice socket `hello`.** The first event on `/ws/voice/{id}` is `{"type":"hello","session_id","role","call_id"}`. Events queued
+  while no socket was attached are discarded at attach; a reconnect rebuilds from the snapshot.
+- **Lifetime.** A reaper closes voice sessions with no socket after `VOICE_DETACHED_TTL_S` (90 s, armed at creation) and
+  finishes calls with no attachment after `CALL_DETACHED_TTL_S` (120 s). Closed and ended entries are dropped after
+  `SESSION_GRACE_S` (60 s). Practice sessions survive a socket blip for the same grace period.
+- **Input limits.** Text (typed turns, browser STT, feedback) is capped at `MAX_TEXT_BYTES` (2048). Each socket has a token
+  bucket (`WS_MSGS_PER_S`, default 50); excess messages are dropped and counted. `--ws-max-size 1048576` on uvicorn.
+  Active calls are capped per user (5) and per instance (100), with 429 beyond.
+- **Store degraded mode.** Lakebase unreachable at startup does not stop the app. The store retries with backoff, `/healthz`
+  reports `status: degraded` and `store_ready: false`, and `GET /api/calls/{id}` serves in-memory calls with `degraded: true`.
+  Queries time out after `LAKEBASE_COMMAND_TIMEOUT_S` (2 s), and connects after `LAKEBASE_CONNECT_TIMEOUT_S` (5 s).
+- **Circuit breakers.** One per model (or endpoint). Warm-up pings do not count. `/healthz` shows the exception type of the last error only.
+- **Queued turns** are superseded like running turns by a newer turn or an interrupt.
+- **Zerobus.** Blocking writes are limited to `HISTORY_WRITE_TIMEOUT_S` (15 s). A batch that fails every attempt is requeued once.
+- **Secrets.** `lakebase_password` is read from the secret scope only. It is no longer a job parameter or bundle variable.
+  `ROTATE_PG_PASSWORD=1` rotates it and restarts the app.
+
