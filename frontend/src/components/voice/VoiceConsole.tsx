@@ -76,6 +76,8 @@ export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void 
   const { state, callState } = api;
   const practice = state.role === "practice";
   const running = state.status === "live" || state.status === "reconnecting" || state.status === "connecting";
+  /** Stopped for good with a reason (session ended, superseded, or connection lost): the banner offers a new session. */
+  const stopped = state.status === "ended" && !!state.error;
   const now = useNow(running || !!state.warming);
   const elapsed = state.startedAt ? (state.endedAt ?? now) - state.startedAt : 0;
   const warmingFor = state.warming ? now - state.warming.since : 0;
@@ -214,6 +216,14 @@ export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void 
       {state.notice && (
         <div role="alert" className="flex items-center gap-2 border-b border-amber-400/20 bg-amber-400/10 px-5 py-2 text-[12.5px] text-amber-100">
           <Headphones className="size-3.5" /> {state.notice}
+        </div>
+      )}
+      {stopped && (
+        <div role="alert" className="flex flex-wrap items-center gap-3 border-b border-amber-400/20 bg-amber-400/10 px-5 py-2 text-[12.5px] text-amber-100">
+          <span className="min-w-0 flex-1">{state.error}</span>
+          <button type="button" onClick={onNew} className="btn btn-primary py-1 text-[12px]">
+            Start a new session
+          </button>
         </div>
       )}
       {hint && (

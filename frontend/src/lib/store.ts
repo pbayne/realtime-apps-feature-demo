@@ -74,7 +74,7 @@ export type Action =
   | { type: "status"; status: CallStatus }
   | { type: "event"; ev: ServerEvent; at: number }
   | { type: "resolve"; cardId: string; resolution: Resolution; text?: string }
-  | { type: "ended"; at: number }
+  | { type: "ended"; at: number; message?: string }
   | { type: "error"; message: string }
   | { type: "reset" };
 
@@ -227,7 +227,9 @@ export function reducer(state: CallState, action: Action): CallState {
       };
     }
     case "ended":
-      return { ...state, status: "ended", endedAt: state.endedAt ?? action.at };
+      // Idempotent: a socket that gives up after call.ended must not replace the normal end with a notice.
+      if (state.status === "ended") return state;
+      return { ...state, status: "ended", endedAt: state.endedAt ?? action.at, error: action.message ?? state.error };
     case "error":
       return { ...state, status: "error", error: action.message };
     case "reset":

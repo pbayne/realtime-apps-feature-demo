@@ -1,5 +1,6 @@
 // /ws/voice/{session_id} (SPEC §9.2). Exponential-backoff reconnect like the call socket.
 import { wsUrl, type ConnStatus } from "../connection";
+import { MAX_RECONNECT_ATTEMPTS, reasonForClose, reconnectDelay, isPermanentClose, type TerminalReason } from "../reconnectPolicy";
 import type { AnyServerEvent, VoiceClientMessage } from "../types";
 
 /** Audio is dropped, not queued, once this much is unsent: a stalled link must not grow an unbounded backlog. */
@@ -17,14 +18,27 @@ export interface VoiceSocketHandlers {
   onStatus(status: ConnStatus): void;
   /** Fired on every successful open. `reconnected` is true after the first open. */
   onOpen(reconnected: boolean): void;
+  /** The socket has stopped for good and will not reconnect. Fired at most once. */
+  onTerminal(reason: TerminalReason): void;
 }
 
 export function openVoiceSocket(sessionId: string, h: VoiceSocketHandlers): VoiceTransport {
   let ws: WebSocket | null = null;
   let closedByUs = false;
+  let stopped = false;
   let attempt = 0;
   let opened = false;
   let timer: number | undefined;
+
+  /** Stop for good: no reconnect, socket closed, and the owner told why. */
+  const stop = (reason: TerminalReason) => {
+    if (stopped) return;
+    stopped = true;
+    window.clearTimeout(timer);
+    ws?.close();
+    ws = null;
+    h.onTerminal(reason);
+  };
 
   const connect = () => {
     h.onStatus(attempt === 0 ? "connecting" : "reconnecting");
@@ -38,18 +52,29 @@ export function openVoiceSocket(sessionId: string, h: VoiceSocketHandlers): Voic
       h.onOpen(again);
     };
     sock.onmessage = (msg) => {
+      let ev: AnyServerEvent;
       try {
-        h.onEvent(JSON.parse(String(msg.data)) as AnyServerEvent);
+        ev = JSON.parse(String(msg.data)) as AnyServerEvent;
       } catch {
-        /* ignore malformed frames */
+        return; /* ignore malformed frames */
       }
+      // The server ends a session by sending session_ended and then closing with 4410. Stop here; no reconnect.
+      if (ev?.type === "session_ended") {
+        h.onEvent(ev);
+        stop("session_ended");
+        return;
+      }
+      h.onEvent(ev);
     };
-    sock.onclose = () => {
+    sock.onclose = (closed) => {
       if (ws === sock) ws = null;
       if (closedByUs) return h.onStatus("closed");
+      if (stopped) return;
+      if (isPermanentClose(closed.code)) return stop(reasonForClose(closed.code));
       attempt += 1;
+      if (attempt > MAX_RECONNECT_ATTEMPTS) return stop("lost");
       h.onStatus("reconnecting");
-      timer = window.setTimeout(connect, Math.min(8000, 500 * 2 ** attempt));
+      timer = window.setTimeout(connect, reconnectDelay(attempt));
     };
   };
 

@@ -5,6 +5,7 @@ import { openAudioSocket } from "./connection";
 import { openCallSocket, type CallConnection, type ConnStatus } from "./connection";
 import { browserSttSupported, startBrowserStt, type BrowserStt } from "./browserStt";
 import { openMockCall } from "./mock";
+import { TERMINAL_MESSAGES, type TerminalReason } from "./reconnectPolicy";
 import { initialCallState, reducer, type Resolution } from "./store";
 import type { ClientMessage, Mode, ServerEvent, Speaker } from "./types";
 
@@ -70,6 +71,15 @@ export function useCallSession() {
     dispatch({ type: "status", status: statusFromConn(s) });
   }, []);
 
+  /** The call socket stopped for good (rejected, superseded, or reconnect cap): release media and show why. */
+  const handleTerminal = useCallback(
+    (reason: TerminalReason) => {
+      teardownMedia();
+      dispatch({ type: "ended", at: Date.now(), message: TERMINAL_MESSAGES[reason] });
+    },
+    [teardownMedia],
+  );
+
   const start = useCallback(
     async (opts: SessionOptions) => {
       setNotice(null);
@@ -96,7 +106,7 @@ export function useCallSession() {
         const { call_id } = await createCall({ playbook: opts.playbook, mode: opts.mode, script: opts.script });
         callIdRef.current = call_id;
         dispatch({ type: "begin", callId: call_id, playbook: opts.playbook, mode: opts.mode, script: opts.script, at: Date.now() });
-        connRef.current = openCallSocket(call_id, { onEvent: handleEvent, onStatus: handleStatus });
+        connRef.current = openCallSocket(call_id, { onEvent: handleEvent, onStatus: handleStatus, onTerminal: handleTerminal });
 
         if (wantsMic) {
           openAudioFor(call_id, channelRef.current);
@@ -106,7 +116,7 @@ export function useCallSession() {
         dispatch({ type: "error", message: err instanceof Error ? err.message : String(err) });
       }
     },
-    [handleEvent, handleStatus, teardownMedia],
+    [handleEvent, handleStatus, handleTerminal, teardownMedia],
   );
 
   /** Switch which channel the mic represents (agent or customer). */

@@ -77,6 +77,7 @@ export function PostCallSummary({ state, onNewCall }: { state: CallState; onNewC
           </section>
         </div>
 
+        {state.error && <p className="mt-8 text-center text-[14px] text-amber-200">{state.error}</p>}
         <div className="mt-8 flex justify-center">
           <button type="button" onClick={onNewCall} className="btn btn-primary px-5 py-2.5 text-[14px]">
             <RotateCcw className="size-4" /> Start another call

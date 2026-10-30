@@ -120,7 +120,7 @@ export type VoiceAction =
   | { type: "set"; patch: Partial<Pick<VoiceState, "mode" | "muted" | "voice">> }
   | { type: "chip_remove"; itemId: string }
   | { type: "caption_clear" }
-  | { type: "ended"; at: number }
+  | { type: "ended"; at: number; message?: string }
   | { type: "reset" };
 
 /** Finds the exchange for a server turn: exact turn match, else the oldest unnumbered one, else a new one. */
@@ -246,7 +246,14 @@ export function voiceReducer(state: VoiceState, action: VoiceAction): VoiceState
       return { ...state, ...action.patch };
 
     case "ended":
-      return { ...state, status: "ended", endedAt: state.endedAt ?? action.at, userSpeaking: false, agentSpeaking: false };
+      return {
+        ...state,
+        status: "ended",
+        endedAt: state.endedAt ?? action.at,
+        error: action.message ?? state.error,
+        userSpeaking: false,
+        agentSpeaking: false,
+      };
 
     case "reset":
       return initialVoiceState;

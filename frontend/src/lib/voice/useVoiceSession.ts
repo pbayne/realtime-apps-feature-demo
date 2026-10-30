@@ -8,6 +8,7 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import { createVoiceSession, endCall, getVoiceSnapshot } from "../api";
 import type { ConnStatus } from "../connection";
 import { openMockCall } from "../mock";
+import { TERMINAL_MESSAGES, type TerminalReason } from "../reconnectPolicy";
 import { initialCallState, reducer as callReducer, type CallStatus, type Resolution } from "../store";
 import { MOCK, MOCK_SPEED } from "../useCallSession";
 import type { AnyServerEvent, ServerEvent, VoiceClientMessage, VoiceStartOptions } from "../types";
@@ -153,6 +154,20 @@ export function useVoiceSession() {
     callDispatch({ type: "status", status });
   }, []);
 
+  /** The voice socket stopped for good: release the mic and playback, and say why. Ignored for a stale session. */
+  const onSocketTerminal = useCallback(
+    (g: number, reason: TerminalReason) => {
+      if (g !== gen.current) return;
+      sessionRef.current = null;
+      teardown();
+      const at = Date.now();
+      const message = TERMINAL_MESSAGES[reason];
+      dispatch({ type: "ended", at, message });
+      callDispatch({ type: "ended", at, message });
+    },
+    [teardown],
+  );
+
   const onSocketOpen = useCallback(async (g: number, sid: string, reconnected: boolean) => {
     if (g !== gen.current) return;
     dispatch({ type: "status", status: "live", error: null });
@@ -249,6 +264,7 @@ export function useVoiceSession() {
         onEvent: onServer,
         onStatus: (s) => onSocketStatus(g, s),
         onOpen: (again) => void onSocketOpen(g, sessionId, again),
+        onTerminal: (reason) => onSocketTerminal(g, reason),
       });
 
       const sink = STREAMING ? (pcm: ArrayBuffer) => void transportRef.current?.sendAudio(pcm) : undefined;
@@ -264,7 +280,7 @@ export function useVoiceSession() {
       }
       if (alive() && modeRef.current === "hands_free") openStream();
     },
-    [envNow, onLocal, onServer, onSocketOpen, onSocketStatus, openStream, teardown],
+    [envNow, onLocal, onServer, onSocketOpen, onSocketStatus, onSocketTerminal, openStream, teardown],
   );
 
   const sendText = useCallback(
