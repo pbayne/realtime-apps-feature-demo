@@ -50,6 +50,33 @@ resources:
               uc_schema: ${var.uc_schema}
               zerobus_principal: ${var.zerobus_principal}
 
+    call_sidekick_reconcile_history:
+      name: call-sidekick-reconcile-history
+      description: Lakebase (source of truth) -> Zerobus history Delta tables. MERGEs missing and changed rows by natural key, collapses Zerobus duplicates. Every 15 minutes, 48 h watermark. dedupe_existing and full_sync are one-off backfill switches (see README).
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: "0 0/15 * * * ?"
+        timezone_id: UTC
+        pause_status: UNPAUSED
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "6"
+      tasks:
+        - task_key: reconcile_history
+          environment_key: default
+          notebook_task:
+            notebook_path: ../src/notebooks/reconcile_history.py
+            base_parameters:
+              uc_catalog: ${var.catalog}
+              uc_schema: ${var.uc_schema}
+              lakebase_catalog: ${var.lakebase_catalog}
+              lakebase_schema: public
+              watermark_hours: "48"
+              full_sync: "false"
+              dedupe_existing: "false"
+              grant_to: ${workspace.current_user.userName}
+
     call_sidekick_kb_index:
       name: call-sidekick-kb-index
       description: src/app/playbooks/kb markdown -> Delta chunks -> Vector Search delta-sync index. Re-run when KB content changes.

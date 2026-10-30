@@ -32,7 +32,7 @@
 #   1. secret scope; direct: Zerobus secrets; kafka: Kafka secrets (must exist before the setup job)
 #   2. bundle validate; bundle deploy (phase 1)
 #   3. setup job (Lakebase role and tables; Kafka topics in kafka mode)
-#   4. direct: init_history job (Zerobus tables and grants)
+#   4. direct: init_history job (Zerobus tables and grants), then reconcile_history once (Lakebase -> Delta)
 #   5. GPU endpoints, when requested (serverless GPU, blocking). Phase 1 may have failed on app
 #      serving-endpoint bindings if the endpoints did not exist yet; that is expected on a first deploy.
 #   6. bundle deploy (phase 2) so the app binds the endpoints, then the app; restart the app if the
@@ -199,6 +199,10 @@ db bundle run call_sidekick_setup --target "$target"
 # --- 4. History tables and Zerobus grants (direct) -------------------------
 if [[ "$backbone" == "direct" && "${SKIP_ZEROBUS:-0}" != "1" ]]; then
   db bundle run call_sidekick_init_history --target "$target"
+  # Lakebase -> Delta reconcile (the job is also scheduled every 15 min). Its Lakebase catalog is registered by the
+  # bundle (postgres_catalogs), so it runs after the bundle deploy above. Defaults only: the one-time backfill
+  # (dedupe_existing, full_sync) is a manual command, see README "Zerobus history".
+  db bundle run call_sidekick_reconcile_history --target "$target"
 fi
 
 # --- 5. GPU endpoints (opt-in, before the app deploy) ----------------------
@@ -241,7 +245,7 @@ fi
 cat <<EOM
 
 Deployment complete (backbone=$backbone, bundle target=$target).
-- Setup job, app, KB index finished. Post-call scoring is scheduled every 30 minutes (UTC).
+- Setup job, app, KB index finished. Post-call scoring is scheduled every 30 minutes (UTC). reconcile_history runs every 15 minutes (UTC).
 $(if [[ "$backbone" == "direct" ]]; then echo "- Direct backbone: no RTM cluster or Kafka job. History goes to Zerobus tables in $catalog.$uc_schema."; else echo "- Kafka backbone: RTM enrichment and Delta history are running (--no-wait). Requires a classic workspace."; fi)
 - The Postgres password is in secret scope '$scope' under lakebase_password. It is kept across deploys;
   set ROTATE_PG_PASSWORD=1 to rotate it (the setup job re-ALTERs the role and the app is restarted).

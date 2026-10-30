@@ -13,6 +13,16 @@ resources:
         autoscaling_limit_max_cu: 2
         no_suspension: true
 
+  # Registers the Lakebase database in Unity Catalog (read-only). reconcile_history reads it as
+  # <lakebase_catalog>.public.<table> on serverless compute. Idempotent: the bundle owns it.
+  postgres_catalogs:
+    sidekick_lakebase_catalog:
+      catalog_id: ${var.lakebase_catalog}
+      branch: projects/${var.project_id}/branches/${var.branch_name}
+      postgres_database: ${var.database_name}
+      lifecycle:
+        prevent_destroy: true
+
   schemas:
     sidekick_schema:
       catalog_name: ${var.catalog}

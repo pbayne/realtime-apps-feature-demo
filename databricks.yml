@@ -32,6 +32,9 @@ variables:
   database_name:
     description: Postgres database inside the Lakebase project.
     default: databricks_postgres
+  lakebase_catalog:
+    description: Unity Catalog catalog that registers the Lakebase database (postgres_catalogs in resources/lakebase.yml). reconcile_history reads the Lakebase tables through it.
+    default: call_sidekick_lakebase
   pg_role:
     description: Postgres role used by the app (and the RTM sink in kafka mode).
     default: sidekick_writer
