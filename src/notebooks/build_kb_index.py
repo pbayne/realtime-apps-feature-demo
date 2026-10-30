@@ -186,7 +186,7 @@ except Exception:
 
 res = vsc.get_index(endpoint_name=vs_endpoint, index_name=INDEX).similarity_search(
     query_text="client objects to the advisory fee",
-    columns=["chunk_id", "doc_id", "clause"],
+    columns=["chunk_id", "playbook", "doc_id", "section"],
     num_results=3,
 )
 print(res.get("result", {}).get("data_array", []))

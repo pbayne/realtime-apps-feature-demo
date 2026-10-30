@@ -45,7 +45,7 @@ flowchart LR
   APP -->|utterances, cards, feedback, calls| LB
   HS -->|Zerobus Ingest, JSON| UC[(UC Delta history<br/>calls, utterances, enrichments,<br/>cards, feedback, voice_turns, voice_items)]
   APP -->|perception, compose, embeddings| LLM[(Claude and gte on Model Serving)]
-  VS[(Vector Search KB index)] -->|top-k retrieval| APP
+  VS[(Vector Search KB index, opt-in)] -.->|RETRIEVAL_BACKEND=vector_search| APP
   UC -->|every 30 min| PCS[post_call_scoring.py<br/>ai_query, serverless]
 ```
 
@@ -349,7 +349,7 @@ src/notebooks/
   init_history.py              Zerobus history tables and grants (serverless)
   register_parakeet.py         Parakeet audio serving (Custom LLM task) → UC → GPU endpoint (serverless GPU)
   register_kokoro.py           Kokoro-82M TTS serving → UC → GPU endpoint (serverless GPU)
-  build_kb_index.py            playbooks/kb → Delta → Vector Search index
+  build_kb_index.py            playbooks/kb/<playbook>/*.md → Delta → one Vector Search index (opt-in retrieval)
   post_call_scoring.py         ai_query scoring → gold_call_scores (history tables; bronze in kafka mode)
   rtm_enrich.py, rtm_lib.py    kafka mode only: RTM job and its shared expressions
   delta_history.py             kafka mode only: Kafka → bronze Delta (micro-batch, not RTM)

@@ -27,7 +27,7 @@ Only the path from a final utterance to enrichment, and the path to history, cha
                       ┌──────────────────────────────────────────────────┘
                       │ 1. store.put_utterance (background)  ─────────────────────►  Lakebase  utterances
                       │ 2. enrich in process, ~1 ms (enrich/direct.py)  ──────────►  Lakebase  enrichments
-                      │ 3. customer final: perception (haiku, budget 2.5 s) + KB retrieval (Vector Search)
+                      │ 3. customer final: perception (haiku, budget 2.5 s) + KB retrieval (in-app gte embeddings; Vector Search opt-in)
                       │ 4. decide (candidates → rank → guardrails), compose (sonnet, streamed)
                       │ 5. card.start / card.delta / card.done over WS  ─► UI
                       │ 6. HistorySink.emit()  (sync, bounded queue, never blocks)
