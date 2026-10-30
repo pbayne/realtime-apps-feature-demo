@@ -3,6 +3,8 @@ resources:
     sidekick_lakebase:
       project_id: ${var.project_id}
       display_name: Call sidekick
+      # The app and the setup job log in with a Postgres password role (scope secrets).
+      enable_pg_native_login: true
       pg_version: 17
       # Always-on: the RTM sink and the app both need a warm endpoint. Suspending
       # it adds a cold-start to the first enrichment write.

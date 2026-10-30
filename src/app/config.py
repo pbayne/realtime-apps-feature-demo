@@ -21,6 +21,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 APP_DIR = Path(__file__).resolve().parent            # src/app (bundled into the Databricks App)
 
 
+KAFKA_SECURITY_MODES = ("SASL_SSL_PLAIN", "SASL_SSL_SCRAM_SHA_256", "SASL_SSL_SCRAM_SHA_512")
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
 
@@ -68,7 +70,9 @@ class Settings(BaseSettings):
     voice_out_queue_max: int = 2000          # outbound events per socket; live events are dropped beyond this
     voice_retry_base_s: float = 1.0          # cold STT/TTS retry: first backoff, doubling
     voice_retry_cap_s: float = 8.0           # cold STT/TTS retry: largest single backoff
-    voice_warmup_budget_s: float = 90.0      # total time one STT or TTS call keeps retrying a cold endpoint
+    voice_warmup_budget_s: float = 240.0     # total time one STT or TTS call keeps retrying a cold endpoint
+                                             # (Kokoro measured 112 s from scale-to-zero on an A10)
+    voice_prewarm_interval_s: float = 60.0   # opening a voice session pings both GPU endpoints at most this often
     live_debounce_ms: int = 600              # live analysis on stable partials: at most one run per window
     live_min_new_words: int = 4              # a partial must add this many words before it is analysed
     live_suggest_interval_s: float = 2.5     # live suggestion pass: at most one LLM call per session per interval
@@ -131,7 +135,9 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: Optional[str] = None
     # Same mode names as the notebooks (rtm_lib.KAFKA_SECURITY_MODES). When set, it overrides
     # kafka_security_protocol / kafka_sasl_mechanism below.
-    kafka_security: Optional[Literal["SASL_SSL_PLAIN", "SASL_SSL_SCRAM_SHA_256", "SASL_SSL_SCRAM_SHA_512"]] = None
+    # Validated only when backbone=kafka: with backbone=direct the deployed app still binds the Kafka secret
+    # keys, which deploy.sh fills with a placeholder.
+    kafka_security: Optional[str] = None
     kafka_security_protocol: str = "SASL_SSL"
     kafka_sasl_mechanism: str = "PLAIN"
     kafka_username: Optional[str] = None
@@ -163,6 +169,8 @@ class Settings(BaseSettings):
     def _check_backbone(self) -> "Settings":
         if self.backbone == "direct" and self.bus_backend == "kafka":
             raise ValueError("BACKBONE=direct does not use Kafka; set BACKBONE=kafka to use BUS_BACKEND=kafka")
+        if self.backbone == "kafka" and self.kafka_security not in (None, *KAFKA_SECURITY_MODES):
+            raise ValueError(f"KAFKA_SECURITY must be one of {KAFKA_SECURITY_MODES}, got {self.kafka_security!r}")
         if self.backbone == "kafka" and self.history_backend == "zerobus":
             raise ValueError("HISTORY_BACKEND=zerobus is the direct-mode history path; in kafka mode history "
                              "flows over Kafka to delta_history.py (use auto or none)")

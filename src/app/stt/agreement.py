@@ -3,8 +3,14 @@
 Each decode produces a full hypothesis over the rolling window. A word is committed
 once it appears in the same position in two consecutive hypotheses (the agreement),
 and the last `hold_words` words of each hypothesis are never committed (they are
-still moving). Words that start before the last committed word's end are ignored,
-so overlapping windows cannot re-commit or duplicate text.
+still moving).
+
+Re-decoding an overlapping window moves word timestamps by a few hundred ms (measured on
+Parakeet: the same word drifted 160-400 ms between consecutive 12 s windows), so a time cut
+alone either re-commits words ("a a couple") or drops them. Instead, look back generously and
+align the hypothesis on the committed text: find where the committed tail (up to 5 words)
+reappears near the start of the hypothesis and keep only what follows it. Genuine repeats
+survive ("in four" + "four four two" keeps the second "four").
 """
 
 from __future__ import annotations
@@ -14,8 +20,11 @@ import re
 from .base import Word
 
 _NORM = re.compile(r"[^\w']+")
-_TIME_SLACK_MS = 50
-_DRIFT_MS = 1000  # how far past the committed boundary a re-decoded run may start and still be a repeat
+_TIME_SLACK_MS = 50     # fallback cut when the committed tail is not found in the hypothesis
+_LOOKBACK_MS = 1000     # how far before the committed boundary a drifted re-decode may start
+_MAX_NGRAM = 5          # longest committed tail used for alignment
+_MAX_OFFSET = 6         # how deep into the look-back region the committed tail may reappear
+_MAX_OFFSET_SINGLE = 2  # a one-word match is weak evidence: only accept it near the start
 
 
 def norm(word: str) -> str:
@@ -43,22 +52,16 @@ class LocalAgreement2:
         if not self.committed:
             return list(hyp)
         boundary = self.committed[-1].e
-        cut = boundary - _TIME_SLACK_MS
-        fresh = [w for w in hyp if w.s >= cut]
-        # Boundary guard: if timestamps drift between windows, a committed run can reappear just
-        # after the boundary. Drop a leading run that repeats the committed tail.
-        near = 0
-        while near < len(fresh) and fresh[near].s < boundary + _DRIFT_MS:
-            near += 1
-        tail = self.committed[-8:]
-        for k in range(min(len(tail), near), 0, -1):
-            if [norm(w.w) for w in tail[-k:]] == [norm(w.w) for w in fresh[:k]]:
-                # A lone repeated word is usually real speech ("four four", "no no"); treat it
-                # as a re-decode only if it overlaps the committed word in time.
-                if k == 1 and fresh[0].s >= tail[-1].e:
-                    return fresh
-                return fresh[k:]
-        return fresh
+        region = [w for w in hyp if w.s >= boundary - _LOOKBACK_MS]
+        toks = [norm(w.w) for w in region]
+        tail = [norm(w.w) for w in self.committed[-_MAX_NGRAM:]]
+        for k in range(min(_MAX_NGRAM, len(tail)), 0, -1):
+            suffix = tail[-k:]
+            deepest = _MAX_OFFSET if k > 1 else _MAX_OFFSET_SINGLE
+            for i in range(0, min(deepest, len(toks) - k) + 1):
+                if toks[i:i + k] == suffix:
+                    return region[i + k:]
+        return [w for w in region if w.s >= boundary - _TIME_SLACK_MS]
 
     def update(self, hyp: list[Word]) -> list[Word]:
         """Feed one decode. Returns the newly committed words (possibly empty)."""

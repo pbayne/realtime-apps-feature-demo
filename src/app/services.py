@@ -9,9 +9,12 @@ In local kafka mode the in-memory bus stands in for Kafka and BusEnricher stands
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import re
+import time
 import uuid
+import wave
 from pathlib import Path
 from typing import Optional
 
@@ -38,6 +41,19 @@ from voice.stream import VoiceDecoder
 from voice.tts import KokoroTts
 
 log = logging.getLogger("sidekick.services")
+
+
+def _silent_wav(ms: int = 300) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\x00\x00" * (16 * ms))
+    return buf.getvalue()
+
+
+_SILENT_WAV = _silent_wav()  # Parakeet warm-up ping
 VOICE_RE = re.compile(r"^[a-z]{2}_[a-z]+$")
 
 
@@ -78,6 +94,8 @@ class Services:
                                                timeout_s=settings.voice_stt_timeout_s,
                                                protocol=settings.stt_protocol)
         self.voice_sessions: dict[str, VoiceSession] = {}
+        self._last_prewarm = float("-inf")
+        self._background: set[asyncio.Task] = set()
         policy = RetryPolicy(budget_s=settings.voice_warmup_budget_s, base_s=settings.voice_retry_base_s,
                              cap_s=settings.voice_retry_cap_s)
 
@@ -232,7 +250,44 @@ class Services:
         vs = VoiceSession(session_id=str(uuid.uuid4()), role=role, playbook=pb, voice=chosen_voice,
                           deps=self.voice_deps, call_id=call_id, scenario=sc)
         self.voice_sessions[vs.session_id] = vs
+        self.prewarm_voice()
         return vs
+
+    def prewarm_voice(self) -> None:
+        """Start waking scale-to-zero GPU endpoints as soon as someone opens a voice session, so the first
+        turn rarely waits for a cold start. Fire-and-forget, throttled per app instance, never raises."""
+        now = time.monotonic()
+        if now - self._last_prewarm < self.settings.voice_prewarm_interval_s:
+            return
+        self._last_prewarm = now
+
+        async def ping(name: str, coro) -> None:
+            t0 = time.monotonic()
+            try:
+                await asyncio.wait_for(coro, timeout=self.settings.voice_warmup_budget_s)
+                log.info("prewarm %s ok in %.1f s", name, time.monotonic() - t0)
+            except Exception as exc:  # warm-up is best effort; the turn path has its own retries
+                log.info("prewarm %s not ready after %.1f s: %s", name, time.monotonic() - t0, type(exc).__name__)
+
+        async def tts_ping() -> None:
+            async for _ in self.tts.stream("Hi.", self.settings.tts_voice):
+                break
+
+        async def llm_ping() -> None:
+            # The first request to the voice model can take ~3 s (measured); later ones ~0.5 s to first token.
+            stream = self.llm.chat_stream(self.settings.voice_model, [{"role": "user", "content": "Say ok."}],
+                                          max_tokens=4, timeout=30)
+            try:
+                async for _ in stream:
+                    break
+            finally:
+                await stream.aclose()
+
+        pings = (("tts", tts_ping()), ("stt", self.transcriber.transcribe(_SILENT_WAV)), ("llm", llm_ping()))
+        for name, coro in pings:
+            task = asyncio.create_task(ping(name, coro))
+            self._background.add(task)
+            task.add_done_callback(self._background.discard)
 
     def voice_session(self, session_id: str) -> VoiceSession:
         vs = self.voice_sessions.get(session_id)

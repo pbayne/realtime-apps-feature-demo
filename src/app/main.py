@@ -89,6 +89,7 @@ async def _service_error(_request: Request, exc: ServiceError):
 
 
 @app.get("/healthz")
+@app.get("/api/health")  # the Databricks Apps proxy answers /healthz itself, so expose the report under /api too
 async def healthz(request: Request):
     return await _svc(request).health_full()
 

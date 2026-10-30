@@ -1,4 +1,4 @@
-from stt.agreement import LocalAgreement2
+from stt.agreement import LocalAgreement2, norm
 from stt.base import Word
 
 
@@ -82,3 +82,21 @@ def test_genuine_repeated_word_survives_boundary_guard():
     flushed = la.flush(hyp(w("in", 0, 200), w("four", 250, 500), w("four", 550, 800), w("two", 850, 1000)))
     assert [x.w for x in flushed] == ["four", "two"]
     assert la.text() == "in four four two"
+
+
+def test_real_parakeet_rolling_windows_commit_each_word_once():
+    """Recorded from the deployed Parakeet endpoint: 12 s windows every 400 ms, where the same word's
+    timestamps drift 160-400 ms between decodes. Time-based dedupe produced "I a first meeting with a a
+    couple who are are worried"; text alignment must reproduce the utterance exactly once."""
+    import json
+    from pathlib import Path
+
+    hyps = json.loads((Path(__file__).parent / "fixtures" / "parakeet_hyps_fee_question.json").read_text())
+    la = LocalAgreement2(hold_words=1)
+    for h in hyps[:-1]:
+        la.update([Word(w, s, e) for w, s, e in h["words"]])
+    la.flush([Word(w, s, e) for w, s, e in hyps[-1]["words"]])
+    got = [norm(w.w) for w in la.committed]
+    want = [norm(w) for w in ("I have a first meeting with a couple who are worried about fees What should I "
+                              "ask them and what should I follow up on afterwards").split()]
+    assert got == want
