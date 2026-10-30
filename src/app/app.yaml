@@ -30,6 +30,9 @@ env:
     valueFrom: smart-llm
   - name: EMBED_MODEL
     valueFrom: embedding
-  # Admin insights (SPEC 13): the SQL warehouse the insights page queries. Unset means the page shows its empty state.
+  # Admin insights (SPEC 14): the SQL warehouse the insights page queries. Unset means the page shows its empty state.
   - name: DATABRICKS_WAREHOUSE_ID
     valueFrom: sql-warehouse
+  # Actions (SPEC 12): SMTP relay as one JSON secret. Unset ("unset" placeholder) = outbox mode, nothing is sent.
+  - name: SMTP_CONFIG
+    valueFrom: smtp-config

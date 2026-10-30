@@ -1,6 +1,8 @@
 // Call console state. Server events are folded in via `applyServerEvent`.
 import type { Card, CoverageItem, Mode, ServerEvent, Speaker } from "./types";
 
+import { upsertAction, type ActionView } from "./actions";
+
 export type CallStatus = "idle" | "connecting" | "live" | "reconnecting" | "ended" | "error";
 export type Resolution = "accepted" | "edited" | "rejected";
 
@@ -52,6 +54,7 @@ export interface CallState {
   cardOrder: string[]; // chronological
   coverage: CoverageItem[];
   metrics: MetricSample[];
+  actions: ActionView[];       // SPEC 12: proposed and executed actions for this call
 }
 
 export const initialCallState: CallState = {
@@ -67,6 +70,7 @@ export const initialCallState: CallState = {
   cardOrder: [],
   coverage: [],
   metrics: [],
+  actions: [],
 };
 
 export type Action =
@@ -108,6 +112,8 @@ function applyUtterance(
 
 export function applyServerEvent(state: CallState, ev: ServerEvent, at: number): CallState {
   switch (ev.type) {
+    case "action":
+      return { ...state, actions: upsertAction(state.actions, ev.action) };
     case "transcript.partial":
       return { ...state, utterances: applyUtterance(state.utterances, ev.speaker, ev.seq, ev.text, false) };
 

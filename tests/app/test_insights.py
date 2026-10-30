@@ -1,4 +1,4 @@
-"""Admin insights (SPEC 13): statement builder, parameterisation, fail-soft, admin gate and cache.
+"""Admin insights (SPEC 14): statement builder, parameterisation, fail-soft, admin gate and cache.
 
 No warehouse is contacted: the executor is a recording fake. The one place that builds SDK parameters is covered
 by checking the parameter list it would send.

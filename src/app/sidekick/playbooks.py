@@ -74,6 +74,7 @@ class Playbook:
     kb_docs: tuple[KbDoc, ...]
     replay_scripts: tuple[str, ...] = ()
     scenarios: tuple[PracticeScenario, ...] = ()
+    programs: tuple[str, ...] = ()        # enrollment programs for the enroll action (SPEC 12)
     extra: dict[str, Any] = field(default_factory=dict, compare=False)
 
     def scenario(self, key: Optional[str]) -> Optional[PracticeScenario]:
@@ -155,6 +156,7 @@ def load_playbook(path: Path, playbooks_root: Path, replay_dir: Optional[Path] =
         kb_docs=kb_docs,
         replay_scripts=scripts,
         scenarios=scenarios,
+        programs=tuple(str(p) for p in (raw.get("programs") or [])),
     )
 
 

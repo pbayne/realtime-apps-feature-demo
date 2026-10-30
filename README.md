@@ -368,6 +368,58 @@ Two-way voice in the same app: Parakeet for speech in, Claude for the reply, Kok
 The wire contract is in `docs/SPEC.md` sections 9.2a, 9.6 and 9.7. Logs are JSON lines on `sidekick.voice`, keyed by
 session and turn, with no transcript text at INFO.
 
+## Actions (human in the loop)
+
+Sidekick can propose four things during a conversation or a call: send an email, book a meeting (with a reminder
+the day before and a 10 minute alert), update a contact, or enroll someone in a program. Each proposal appears in
+the Actions panel with a plain-language summary. **Nothing runs until you approve it.** You can edit the details
+first, reject it, retry a failure, preview the exact message or invite, and undo the reversible ones (not email).
+The design is in SPEC section 12.
+
+### Delivery: SMTP relay (no Google credential)
+
+Mail goes through an SMTP relay, configured as one JSON secret in the app's secret scope:
+
+```bash
+databricks secrets put-secret <scope> smtp_config --profile <profile>
+# then paste the JSON on stdin, for example:
+# {"host": "smtp.example.com", "port": 587, "username": "sidekick", "password": "...",
+#  "from": "Sidekick <sidekick@example.com>", "timeout_s": 20}
+```
+
+The keys are `host`, `port` (587 uses STARTTLS), `username` and `password` (optional for an open relay), `from`
+(required; the From header on every message), and `timeout_s`. `scripts/deploy.sh` writes
+`{"host":"unset","from":"unset"}` when the secret does not exist. While either field is `unset`, the app is in
+**outbox mode**: approved mail and invites are rendered, stored, shown and downloadable (`.eml`, `.ics`), and the
+status is "ready to send (no SMTP configured)". Nothing leaves the app. The app binds the secret as `SMTP_CONFIG`
+(`resources/app.yml`, `src/app/app.yaml`).
+
+Meetings are sent as calendar invitations, so Google Calendar and Outlook show them as invites with the reminders.
+
+### Safety lock (on by default)
+
+While `ACTION_SAFETY_LOCK` is `true`, every recipient and attendee is rewritten to `ACTION_SAFE_RECIPIENT`
+(default `patrick.bayne@databricks.com`), and the subject is prefixed `[Sidekick test -> <original recipients>]`.
+The panel says "Test mode: only sends to patrick.bayne@databricks.com". The originals are kept in each action's
+result.
+
+**To lift the lock** (only after the relay works with a test recipient):
+
+1. Confirm the relay with the lock on: approve one test email, check it arrives at the safe recipient with the
+   prefixed subject, and check the `.eml` preview matches.
+2. Set `ACTION_SAFETY_LOCK` to `false` in the app environment: add `- name: ACTION_SAFETY_LOCK` with
+   `value: "false"` to `src/app/app.yaml`, then redeploy with `scripts/deploy.sh`.
+3. Approve one real email to yourself first, then open it up. Lock again with `ACTION_SAFETY_LOCK=true` if
+   anything looks wrong.
+
+Keep `ACTION_SAFE_RECIPIENT` set to a mailbox you control in any environment that still has the lock on.
+
+### Other settings
+
+`SMTP_TIMEOUT_S` (default 20), `ACTION_PROPOSE_INTERVAL_S` (default 5: at most one call-mode proposal pass per call
+per interval), `ACTION_PROPOSE_TIMEOUT_S` (default 4). Enrollment programs are the `programs:` list in each playbook
+YAML; the action refuses any other program.
+
 ## Troubleshooting (seen on a fresh serverless FEVM workspace)
 
 | Symptom | Cause | Fix in this repo |

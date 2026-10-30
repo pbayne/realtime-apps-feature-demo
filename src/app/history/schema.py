@@ -46,6 +46,21 @@ TABLES: dict[str, list[tuple[str, str]]] = {
         ("item_id", "STRING"), ("session_id", "STRING"), ("turn", "INT"), ("kind", "STRING"), ("text", "STRING"),
         ("owner", "STRING"), ("due", "STRING"), ("source_doc", "STRING"), ("created_at_ms", "BIGINT"),
     ],
+    # Actions (SPEC 12). One row per status change; reconcile keeps the latest per action_id.
+    "actions": [
+        ("action_id", "STRING"), ("session_id", "STRING"), ("call_id", "STRING"), ("playbook", "STRING"),
+        ("owner", "STRING"), ("kind", "STRING"), ("summary", "STRING"), ("params", "STRING"), ("status", "STRING"),
+        ("proposed_by", "STRING"), ("created_at_ms", "BIGINT"), ("updated_at_ms", "BIGINT"),
+        ("decided_at_ms", "BIGINT"), ("decided_by", "STRING"), ("result", "STRING"), ("error", "STRING"),
+    ],
+    "contacts": [
+        ("contact_id", "STRING"), ("owner", "STRING"), ("first_name", "STRING"), ("last_name", "STRING"),
+        ("email", "STRING"), ("phone", "STRING"), ("company", "STRING"), ("updated_at_ms", "BIGINT"),
+    ],
+    "enrollments": [
+        ("enrollment_id", "STRING"), ("contact_id", "STRING"), ("program", "STRING"), ("owner", "STRING"),
+        ("note", "STRING"), ("created_at_ms", "BIGINT"),
+    ],
 }
 
 
@@ -120,6 +135,23 @@ def voice_turn_row(session_id: str, row: Mapping[str, Any]) -> dict[str, Any]:
         "interrupted": bool(row.get("interrupted")), "timing": dict(row.get("timing") or {}),
         "created_at_ms": row.get("created_at_ms"),
     }
+
+
+def action_row(action: Mapping[str, Any]) -> dict[str, Any]:
+    """JSON-valued params and result are STRING columns, same convention as the Lakebase tables."""
+    out = {name: action.get(name) for name, _ in TABLES["actions"]}
+    for key in ("params", "result"):
+        value = action.get(key)
+        out[key] = None if value is None else json.dumps(value, default=str, sort_keys=True)
+    return out
+
+
+def contact_row(contact: Mapping[str, Any]) -> dict[str, Any]:
+    return {name: contact.get(name) for name, _ in TABLES["contacts"]}
+
+
+def enrollment_row(enrollment: Mapping[str, Any]) -> dict[str, Any]:
+    return {name: enrollment.get(name) for name, _ in TABLES["enrollments"]}
 
 
 def voice_item_row(session_id: str, item: Mapping[str, Any]) -> dict[str, Any]:

@@ -246,3 +246,19 @@ BACKBONE=kafka scripts/deploy.sh <profile> <catalog> SASL_SSL_PLAIN
 - Lakebase is optional at startup. The store retries in the background, and the app runs degraded until it connects.
 - The LLM circuit breaker is per model; warm-up pings do not count.
 
+## 10. Actions (human in the loop, v0.7)
+
+- The model proposes actions in the same voice call (`<<ACTIONS>>` after `<<ITEMS>>`) or in a fast call-mode
+  pass on customer finals (fail-soft, at most one per 5 s per call). Proposals are validated against strict
+  schemas (`actions/schemas.py`) and stored as `proposed`. Nothing executes from the model.
+- `ActionService` (`actions/service.py`) is the only writer of action status. A human approves, edits, rejects or
+  undoes it over REST, and every change is persisted (Lakebase `actions`), sent to the Delta history, and emitted
+  on the owning socket.
+- Delivery: `actions/mail.py` (SMTP relay with STARTTLS, or outbox mode) and `actions/ics.py` (RFC 5545 invites with
+  reminders). The safety lock rewrites recipients and is on by default.
+- Data: `actions`, `contacts` and `enrollments` follow the same pattern as the other tables: the Lakebase DDL in
+  `store/lakebase.py` and `notebooks/init.py`, the Delta tables in `history/schema.py` and `notebooks/init_history.py`,
+  and the reconcile map in `notebooks/reconcile_lib.py`. The parity tests cover all three.
+- UI: the Actions panel in the voice console and the call console. `?mock=1` simulates proposals and execution
+  locally, so the flow can be demonstrated without a backend.
+

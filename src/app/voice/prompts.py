@@ -7,6 +7,7 @@ Both share VOICE_RULES (from the reference voice-agent app) and the <<ITEMS>> in
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from sidekick.playbooks import Playbook, PracticeScenario
@@ -28,6 +29,17 @@ ITEMS_RULES = (
     '"text" (one short sentence), and optional "owner", "due". Never put the JSON in the spoken part.'
 )
 
+ACTIONS_RULES = (
+    "Actions. If the person asks you to do something that needs a human to approve it (send an email, book a meeting, "
+    "update a contact, or enroll someone in a program), then after the <<ITEMS>> array write a new line containing "
+    "exactly <<ACTIONS>>, then on the next line a JSON array (possibly empty []) of objects with \"kind\" (one of "
+    "send_email, create_meeting, update_contact, enroll) and \"params\". Params: send_email {to: [email], cc: [email], "
+    "subject, body_text}; create_meeting {title, attendees: [email], start_iso (ISO 8601 with a UTC offset), "
+    "duration_min, description}; update_contact {email, fields: {first_name, last_name, email, phone, company}}; "
+    "enroll {email, program, note}. Propose only what the person asked for or clearly agreed. Never invent an email "
+    "address: if you do not have one, ask for it and propose nothing. Never put this JSON in the spoken part."
+)
+
 HISTORY_MESSAGES = 12   # conversation messages kept in the prompt
 
 
@@ -42,6 +54,9 @@ def assistant_messages(pb: Playbook, user_text: str, history: list[dict[str, str
         "Playbook reference (use it for facts; if it does not cover the question, say you will confirm):\n" + kb,
         VOICE_RULES,
         ITEMS_RULES,
+        ACTIONS_RULES,
+        ("Enrollment programs you may offer: " + ", ".join(pb.programs)) if pb.programs else "",
+        "Current time (UTC): " + datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ") + ".",
     ])
     return [{"role": "system", "content": system}, *history[-HISTORY_MESSAGES:],
             {"role": "user", "content": user_text}]

@@ -12,6 +12,7 @@ import { micNotice } from "../micErrors";
 import { TERMINAL_MESSAGES, type TerminalReason } from "../reconnectPolicy";
 import { initialCallState, reducer as callReducer, type CallStatus, type Resolution } from "../store";
 import { MOCK, MOCK_SPEED } from "../useCallSession";
+import { MOCK_PROGRAMS, mockProposal, nextMockKind, type ActionView } from "../actions";
 import type { AnyServerEvent, ServerEvent, VoiceClientMessage, VoiceStartOptions } from "../types";
 import { MicEngine, type LocalEvent, type VoiceInputMode } from "./mic";
 import { openMockVoice } from "./mockVoice";
@@ -110,6 +111,13 @@ export function useVoiceSession() {
         return;
       }
       if (ev.type === "user_text") playerRef.current?.beginTurn(ev.turn);
+      if (MOCK && ev.type === "user_text" && sessionRef.current?.role === "assistant") {
+        // ?mock=1: an assistant turn proposes an action a moment later, as the model would (SPEC 12).
+        const scope = { session_id: sessionRef.current.sessionId };
+        window.setTimeout(() => {
+          dispatch({ type: "event", ev: { type: "action", action: mockProposal(nextMockKind(), scope, MOCK_PROGRAMS) } });
+        }, 1400);
+      }
       dispatch({ type: "event", ev });
       return;
     }
@@ -368,6 +376,11 @@ export function useVoiceSession() {
     transportRef.current?.sendJson(msg);
   }, []);
 
+  /** A decision or create response for an action (SPEC 12), applied the same way as a socket `action` event. */
+  const actionUpdate = useCallback((action: ActionView) => {
+    dispatch({ type: "event", ev: { type: "action", action } });
+  }, []);
+
   const resolveCard = useCallback((cardId: string, action: "accept" | "reject" | "edit", text?: string) => {
     const msg: VoiceClientMessage =
       action === "edit"
@@ -462,6 +475,7 @@ export function useVoiceSession() {
     interrupt,
     setVoice,
     resolveCard,
+    actionUpdate,
     pinChip,
     dismissChip,
     readMic,

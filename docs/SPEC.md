@@ -8,8 +8,8 @@ pushed to the rep/agent UI over WebSocket. Two backbones (docs/ARCHITECTURE.md):
 - **kafka** (scale mode): utterances to Kafka, Spark Real-Time Mode enrichment into Lakebase, history to Delta
   through Kafka jobs.
 
-v0.6 records what the code does (2026-10-30). Changes from v0.5 are marked **[v0.6]**. Earlier changes are
-**[v0.2]** to **[v0.5]**.
+v0.7 records what the code does (2026-10-30). Changes from v0.5 are marked **[v0.6]**, and the
+human-in-the-loop actions are **[v0.7]** (section 12). Earlier changes are **[v0.2]** to **[v0.5]**.
 
 ## 1. Hard constraints (verified)
 - **Backbone [v0.4].** `BACKBONE=direct` (default) or `kafka`. Direct: no bus (`bus/null.py`), enrichment in
@@ -564,7 +564,100 @@ https://github.com/databricks/zerobus-sdk/blob/main/python/README.md
   lane, separate mic and Sidekick levels on the orb, a warming banner, and keys M (mute), Esc (interrupt) and Space
   (push-to-talk). `?stream=0` is the WAV-per-turn fallback. The mock (`?mock=1`) simulates all of it.
 
-## 12. Changes from v0.5 **[v0.6]** (summary)
+## 12. Actions: human in the loop **[v0.7]**
+
+The assistant proposes; a person approves. Nothing in this section runs without an explicit approval. An action
+is a structured request (send an email, create a meeting with a reminder, update a contact, enroll someone in a
+program). Proposals come from the model, or from a person's manual create. Execution happens only through the
+approval state machine in `actions/service.py`.
+
+### 12.1 Action record
+
+`Action` (models.py): `action_id`, `session_id` (voice) or `call_id` (call console), `owner` (X-Forwarded-Email,
+"local" in MODE=local), `playbook`, `kind`, `params` (JSON), `summary` (plain language, built from the params),
+`status`, `proposed_by` (model | user), `created_at_ms`, `updated_at_ms`, `decided_at_ms`, `decided_by`,
+`result` (JSON), `error`.
+
+| kind | params (strict; unknown keys refused) |
+|---|---|
+| `send_email` | `to[]`, `cc[]`, `subject` (one line), `body_text` |
+| `create_meeting` | `title`, `attendees[]`, `start_iso` (ISO 8601 with an offset), `duration_min` (5 to 1440), `description`, `location?`, `reminders[]` (default: email 1440 min, display 10 min) |
+| `update_contact` | `contact_id` or `email` (exactly one), `fields` (first_name, last_name, email, phone, company; at least one) |
+| `enroll` | `contact_id` or `email` (exactly one), `program` (must be in the playbook's `programs:`), `note?` |
+
+### 12.2 States
+
+```
+proposed --approve--> executing --> done | outboxed | failed
+proposed | failed --reject--> rejected
+failed --approve (retry, optionally with edited params)--> executing
+done | outboxed --undo (not send_email)--> undone
+```
+
+Approve is idempotent: an action that is executing, done or outboxed is returned unchanged, so a double click
+executes once. A per-action lock serialises decisions. Editing on approve re-validates the params. A failure stores
+`error` on the action and leaves it retryable.
+
+### 12.3 Proposal paths
+
+- **Voice (assistant role).** The same LLM call that writes the spoken reply can end with `<<ITEMS>>` (SPEC 9.4)
+  followed by `<<ACTIONS>>` and a JSON array of `{kind, params}`. The splitter may see either delimiter first,
+  and the trailing text is split before parsing (`voice/items.py` `split_sections`). Invalid entries are dropped one
+  by one. The prompt asks for proposals only when the person asked for them, and never an invented address.
+- **Call mode (replay or mic calls).** A fast-model pass on customer finals, at most one per
+  `action_propose_interval_s` (5 s) per call, with a `action_propose_timeout_s` (4 s) budget. It is fail-soft: an
+  error gives no proposals and never affects the call (`actions/proposals.py`, `session.py`).
+- **Dedupe.** Within a session, a proposal with the same kind and key params as a pending, done or outboxed action
+  is dropped. Rejected actions also block a re-proposal. Undone actions do not.
+- A proposal never executes by itself. Manual creation (`POST /api/actions`) is the same path with
+  `proposed_by=user`.
+
+### 12.4 Execution and delivery
+
+- **Email and invites** are MIME messages (`actions/mail.py`). With an SMTP relay configured
+  (`SMTP_HOST` and `SMTP_FROM`, from the `smtp_config` secret), they are sent with STARTTLS in a worker thread, and the
+  status becomes `done`. Without one, the exact message is rendered and stored, the status becomes `outboxed`, and
+  nothing leaves the app.
+- **Meetings** are RFC 5545 invites (`actions/ics.py`): `METHOD:REQUEST`, CRLF line endings, lines folded at 75
+  octets, UTC times, escaped TEXT, a stable UID. The VEVENT has two VALARMs: `ACTION:EMAIL` with
+  `TRIGGER:-P1D` and `ACTION:DISPLAY` with `TRIGGER:-PT10M`. The invite is sent as a `text/calendar` alternative
+  part and as `invite.ics`. Google Calendar and Outlook accept this as an invitation.
+- **Contacts and enrollments** are Lakebase rows (`contacts`, `enrollments`, SPEC 3.2). The shared demo directory
+  (owner NULL) is read-only for everyone: an update copies the contact into the caller's own rows.
+- **Undo.** `update_contact` restores the previous values (kept in `result.previous`). `enroll` deletes the
+  enrollment. `create_meeting` sends a `METHOD:CANCEL` with the same UID and a higher SEQUENCE (or outboxes it). Email
+  is never undoable.
+
+### 12.5 Safety lock
+
+`ACTION_SAFETY_LOCK` defaults to **true**. While it is on, every recipient and attendee is replaced by
+`ACTION_SAFE_RECIPIENT` (default `patrick.bayne@databricks.com`), the subject (or the invite title) is prefixed
+`[Sidekick test -> <original recipients>]`, and the originals are kept in `result.safety`. Preview and delivery use
+the same routing, so a preview shows exactly what would be sent. The UI shows "Test mode: only sends to <safe
+recipient>" on the panel and on each card. Lifting the lock is described in the README.
+
+### 12.6 Interfaces
+
+- REST (owner-scoped; another caller gets 404): `GET /api/actions?session_id=|call_id=`,
+  `POST /api/actions` (manual create), `POST /api/actions/{id}/approve|reject|undo` (approve takes optional
+  `params`), `GET /api/actions/{id}/message.eml` (what was sent or outboxed, otherwise a preview) and
+  `GET /api/actions/{id}/invite.ics`.
+- Socket: server to client `{type: "action", action}` on every status change, on the voice and the call socket.
+  Client to server `{type: "action_decision", action_id, decision: "approve"|"reject", params?}` on the voice and the
+  call socket (the UI decides over REST and uses the socket for events). Errors are reported without closing the
+  socket.
+- Snapshots: `GET /api/voice/sessions/{id}` and `GET /api/calls/{id}` include `actions`. Each action carries
+  `safety: {lock, safe_recipient, mode}` and `result.has_eml` or `has_ics` instead of the rendered text.
+- Persistence: `actions` (one row per status change in Delta, latest by `updated_at_ms`), `contacts` and
+  `enrollments` (SPEC 3.7 history, reconciled by `reconcile_lib.py`).
+
+### 12.7 Settings
+
+`ACTION_SAFETY_LOCK`, `ACTION_SAFE_RECIPIENT`, `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_USERNAME`, `SMTP_PASSWORD`,
+`SMTP_FROM`, `SMTP_TIMEOUT_S` (20), `ACTION_PROPOSE_INTERVAL_S` (5), `ACTION_PROPOSE_TIMEOUT_S` (4). Playbooks list
+enrollment programs under `programs:`.
+
+## 13. Changes from v0.5 **[v0.6]** (summary)
 - **Ownership.** Calls and voice sessions record their owner (`X-Forwarded-Email`, then `X-Forwarded-User`; `local` in
   MODE=local). `calls.owner` is a nullable column in the Lakebase DDL and the history schema. Other callers get 404 on REST
   and close 4404 on WebSockets. A voice session cannot link a call owned by someone else.
@@ -589,7 +682,7 @@ https://github.com/databricks/zerobus-sdk/blob/main/python/README.md
   `ROTATE_PG_PASSWORD=1` rotates it and restarts the app.
 
 
-## 13. Changes from v0.6 **[v0.7]** (summary): admin area
+## 14. Admin area **[v0.8]** (summary)
 
 - **Routes (UI).** `#/admin/themes`, `#/admin/architecture`, `#/admin/insights`, reached from a gear icon in the start screen and both console headers. Themes and architecture are open to every user. Insights is admin only.
 - **Preferences.** `GET/PUT /api/prefs` store the caller's theme in Lakebase `user_prefs` (owner PK, theme, updated_at_ms; DDL in `store/lakebase.py` and `notebooks/init.py`, parity test enforced). The owner is `X-Forwarded-Email`, never a body field. Unknown themes are refused (422). No identity is 403. Default for users without a choice: `APP_DEFAULT_THEME`. Four themes: midnight, aurora, daylight, databricks (`docs/THEMES.md`).

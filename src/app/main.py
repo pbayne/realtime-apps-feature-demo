@@ -17,6 +17,10 @@ REST:
   POST /api/voice/sessions   {"role":"assistant|practice","playbook","scenario"?,"call_id"?,"voice"?}
   GET  /api/voice/sessions/{id}   turns and items (live sessions only)
   DELETE /api/voice/sessions/{id}  end the session now (POST .../end is the same, for navigator.sendBeacon)
+  GET  /api/actions?session_id=|call_id=   the caller's actions in one scope (SPEC 12)
+  POST /api/actions                        manual create {session_id|call_id, kind, params}
+  POST /api/actions/{id}/approve|reject|undo, optional {params} on approve
+  GET  /api/actions/{id}/message.eml and /invite.ics   rendered (sent or preview) message text
 WebSocket:
   /ws/call/{id}              server -> client events; client -> server feedback | browser_stt
   /ws/audio/{id}?channel=agent|customer   binary PCM16 16 kHz frames, or text browser results
@@ -39,6 +43,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal, Optional
 
+from actions.service import ActionError
 from admin import insights as admin_insights
 from admin import prefs as admin_prefs
 from config import get_settings
@@ -99,6 +104,17 @@ class CreateCall(BaseModel):
     customer_id: Optional[str] = None
 
 
+class CreateAction(BaseModel):
+    session_id: Optional[str] = None
+    call_id: Optional[str] = None
+    kind: Literal["send_email", "create_meeting", "update_contact", "enroll"]
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class DecideAction(BaseModel):
+    params: Optional[dict[str, Any]] = None     # approve with edited params (re-validated)
+
+
 class CreateVoiceSession(BaseModel):
     role: Literal["assistant", "practice"] = "assistant"
     playbook: str = "advisor_coach"
@@ -109,6 +125,11 @@ class CreateVoiceSession(BaseModel):
 
 @app.exception_handler(ServiceError)
 async def _service_error(_request: Request, exc: ServiceError):
+    return JSONResponse(status_code=exc.status, content={"detail": exc.message})
+
+
+@app.exception_handler(ActionError)
+async def _action_error(_request: Request, exc: ActionError):
     return JSONResponse(status_code=exc.status, content={"detail": exc.message})
 
 
@@ -133,6 +154,7 @@ async def list_playbooks(request: Request):
             "kb_docs": [d.doc_id for d in pb.kb_docs],
             "replay_scripts": list(pb.replay_scripts),
             "scenarios": [sc.to_wire() for sc in pb.scenarios],
+            "programs": list(pb.programs),
         }
         for pb in svc.registry.all()
     ]}
@@ -207,6 +229,7 @@ async def get_call(call_id: str, request: Request):
         "transcript": snap.get("utterances", []),
         "cards": snap.get("cards", []),
         "feedback": snap.get("feedback", []),
+        "actions": await svc.actions.list(caller, call_id=call_id),
         "coverage": coverage,
         "decisions": decisions,
         "as_of_ms": snap.get("as_of_ms") or now_ms(),
@@ -272,8 +295,9 @@ async def create_voice_session(body: CreateVoiceSession, request: Request):
 async def get_voice_session(session_id: str, request: Request):
     """Live sessions only. Turns and items of an ended or unknown session are not readable: the owner check
     needs the in-memory session."""
-    vs = _owned_voice(_svc(request), session_id, _caller(request))
-    return vs.snapshot()
+    svc = _svc(request)
+    vs = _owned_voice(svc, session_id, _caller(request))
+    return {**vs.snapshot(), "actions": await svc.actions.list(vs.owner, session_id=session_id)}
 
 
 async def _end_voice_session(session_id: str, request: Request) -> Response:
@@ -293,7 +317,7 @@ async def end_voice_session(session_id: str, request: Request):
     return await _end_voice_session(session_id, request)
 
 
-# ----------------------------------------------------------------- identity and preferences (SPEC 13)
+# ----------------------------------------------------------------- identity and preferences (SPEC 14)
 
 class PutPrefs(BaseModel):
     theme: Literal["midnight", "aurora", "daylight", "databricks"]
@@ -374,6 +398,83 @@ async def admin_call_detail(call_id: str, request: Request):
     return {"call_id": call_id, **(await _insights_for(_svc(request)).call_detail(call_id))}
 
 
+# ------------------------------------------------------------------ actions (SPEC 12)
+
+def _action_scope(svc: Services, caller: Optional[str], body: "CreateAction") -> tuple[str, dict[str, Any]]:
+    """(playbook, scope) for a manual create. The scope must be live and owned by the caller (404 otherwise)."""
+    if bool(body.session_id) == bool(body.call_id):
+        raise ServiceError(400, "give exactly one of session_id or call_id")
+    if body.session_id:
+        vs = _owned_voice(svc, body.session_id, caller)
+        return vs.playbook.name, {"session_id": body.session_id}
+    session = _owned_call(svc, body.call_id, caller)
+    return session.playbook.name, {"call_id": body.call_id}
+
+
+@app.get("/api/actions")
+async def list_actions(request: Request, session_id: Optional[str] = Query(default=None),
+                       call_id: Optional[str] = Query(default=None)):
+    """The caller's actions in one session or call, plus the safety and delivery mode they run under."""
+    svc = _svc(request)
+    caller = _caller(request)
+    if caller is None:
+        raise ServiceError(404, "unknown session or call")
+    if bool(session_id) == bool(call_id):
+        raise ServiceError(400, "give exactly one of session_id or call_id")
+    return {"actions": await svc.actions.list(caller, session_id=session_id, call_id=call_id),
+            "safety": svc.actions.safety_info()}
+
+
+@app.post("/api/actions", status_code=201)
+async def create_action(body: CreateAction, request: Request):
+    svc = _svc(request)
+    caller = _caller(request)
+    if caller is None:
+        raise ServiceError(403, "the app could not identify the caller")
+    playbook, scope = _action_scope(svc, caller, body)
+    rec = await svc.actions.create(owner=caller, playbook=playbook, kind=body.kind, params=body.params, **scope)
+    return svc.actions.wire(rec)
+
+
+async def _decide_action(request: Request, action_id: str, decision: str,
+                         body: Optional[DecideAction] = None) -> dict[str, Any]:
+    svc = _svc(request)
+    rec = await svc.actions.decide(_caller(request), action_id, decision, body.params if body else None)
+    return svc.actions.wire(rec)
+
+
+@app.post("/api/actions/{action_id}/approve")
+async def approve_action(action_id: str, request: Request, body: Optional[DecideAction] = None):
+    return await _decide_action(request, action_id, "approve", body)
+
+
+@app.post("/api/actions/{action_id}/reject")
+async def reject_action(action_id: str, request: Request):
+    return await _decide_action(request, action_id, "reject")
+
+
+@app.post("/api/actions/{action_id}/undo")
+async def undo_action(action_id: str, request: Request):
+    svc = _svc(request)
+    return svc.actions.wire(await svc.actions.undo(_caller(request), action_id))
+
+
+@app.get("/api/actions/{action_id}/message.eml")
+async def action_message(action_id: str, request: Request):
+    svc = _svc(request)
+    name, text = await svc.actions.rendered(_caller(request), action_id, "eml")
+    return Response(content=text.encode("utf-8"), media_type="message/rfc822",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.get("/api/actions/{action_id}/invite.ics")
+async def action_invite(action_id: str, request: Request):
+    svc = _svc(request)
+    name, text = await svc.actions.rendered(_caller(request), action_id, "ics")
+    return Response(content=text.encode("utf-8"), media_type="text/calendar; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 # ----------------------------------------------------------------- WebSockets
 
 def _limiter(svc: Services) -> TokenBucket:
@@ -423,6 +524,9 @@ async def ws_call(ws: WebSocket, call_id: str):
                     await session.feedback(msg.get("card_id", ""), msg.get("action", ""), msg.get("text"))
                 elif kind == "browser_stt":
                     session.browser_result(msg.get("speaker", "agent"), msg)
+                elif kind == "action_decision":
+                    await svc.actions.decide(session.owner, str(msg.get("action_id", "")),
+                                             str(msg.get("decision", "")), msg.get("params"))
                 else:
                     await ws.send_json({"type": "error", "message": f"unknown message type {kind!r}"})
             except (ValueError, KeyError, TypeError) as exc:
@@ -595,6 +699,9 @@ async def ws_voice(ws: WebSocket, session_id: str):
                     if call is None:
                         raise ValueError("feedback needs a linked call")
                     await call.feedback(msg_card_id(payload), payload.get("action", ""), payload.get("text"))
+                elif kind == "action_decision":
+                    await svc.actions.decide(vs.owner, str(payload.get("action_id", "")),
+                                             str(payload.get("decision", "")), payload.get("params"))
                 elif kind == "text":
                     vs.submit_text(payload.get("text") or "")
                 elif kind == "config":

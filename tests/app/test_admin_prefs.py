@@ -1,4 +1,4 @@
-"""Preferences API (theme per user), /api/me and the admin allowlist (SPEC 13).
+"""Preferences API (theme per user), /api/me and the admin allowlist (SPEC 14).
 
 Owner scoping: the owner is always the proxy identity (X-Forwarded-Email), never a body field. Validation: only the
 known theme ids are accepted. The store is memory here; the Lakebase DDL parity is in test_schema_parity.py.

@@ -78,3 +78,19 @@ def test_bundled_env_does_not_override_explicit_values_and_ignores_bad_json():
            "ZEROBUS_CONFIG": "{not json"}
     assert expand_bundled_env(env) == ["LAKEBASE_DB"]
     assert env["LAKEBASE_HOST"] == "explicit" and env["LAKEBASE_DB"] == "d"
+
+
+def test_smtp_config_bundle_reaches_settings(monkeypatch):
+    from config import expand_bundled_env
+
+    env = {"SMTP_CONFIG": json.dumps({"host": "smtp.example.com", "port": 2525, "from": "sidekick@example.com"})}
+    expand_bundled_env(env)
+    for name in ("SMTP_HOST", "SMTP_PORT", "SMTP_FROM"):
+        monkeypatch.setenv(name, env[name])
+    s = Settings()
+    assert s.smtp_configured and s.smtp_port == 2525
+    placeholder = {"SMTP_CONFIG": '{"host":"unset","from":"unset"}'}
+    expand_bundled_env(placeholder)
+    monkeypatch.setenv("SMTP_HOST", placeholder["SMTP_HOST"])
+    monkeypatch.setenv("SMTP_FROM", placeholder["SMTP_FROM"])
+    assert not Settings().smtp_configured      # "unset" placeholder = outbox mode

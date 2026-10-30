@@ -183,7 +183,7 @@ class Settings(BaseSettings):
     playbooks_dir: Path = APP_DIR / "playbooks"
     replay_dir: Path = APP_DIR / "data" / "replay"
 
-    # --- admin area (SPEC 13) ---
+    # --- admin area (SPEC 14) ---
     app_default_theme: str = "midnight"        # theme for users with no saved preference (admin/prefs.py THEME_IDS)
     admin_emails: str = "patrick.bayne@databricks.com"  # comma-separated allowlist for /api/admin/* (case-insensitive)
     databricks_warehouse_id: Optional[str] = None  # SQL warehouse for insights (app resource sql_warehouse); unset = empty state
@@ -218,6 +218,23 @@ class Settings(BaseSettings):
     kafka_utterances_topic: str = "utterances"
     kafka_cards_topic: str = "cards"
 
+    # --- actions: human-in-the-loop (SPEC 12, v0.7) ---
+    # Safety lock (user decision): on, every recipient and attendee is rewritten to action_safe_recipient and the
+    # subject is prefixed. Lift it only after the SMTP relay has been tested with real recipients (README).
+    action_safety_lock: bool = True
+    action_safe_recipient: str = "patrick.bayne@databricks.com"
+    # SMTP relay (secret scope keys smtp_*). Unset or "unset" means outbox mode: the message is rendered and stored,
+    # never sent. Read by src/app/actions/mail.py.
+    smtp_host: Optional[str] = None
+    smtp_port: int = 587
+    smtp_username: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_from: Optional[str] = None
+    smtp_timeout_s: float = 20.0
+    # Call mode: a fast-model proposal pass on customer finals, at most one per interval per call (fail-soft).
+    action_propose_interval_s: float = 5.0
+    action_propose_timeout_s: float = 4.0
+
     # --- Lakebase (databricks mode) ---
     lakebase_host: Optional[str] = None
     lakebase_port: int = 5432
@@ -232,6 +249,21 @@ class Settings(BaseSettings):
     lakebase_pool_max: int = 6
     lakebase_command_timeout_s: float = 2.0  # every query: a stuck Lakebase must not hold a turn
     lakebase_connect_timeout_s: float = 5.0  # pool acquire and connect: fail fast and run degraded
+
+    @field_validator("smtp_host", "smtp_username", "smtp_password", "smtp_from", mode="before")
+    @classmethod
+    def _unset_to_none(cls, v: object) -> object:
+        """deploy.sh writes the placeholder "unset" for secrets that are not configured: treat it as absent."""
+        if v is None or (isinstance(v, str) and v.strip() in ("", "unset")):
+            return None
+        return v
+
+    @field_validator("smtp_port", mode="before")
+    @classmethod
+    def _port_or_default(cls, v: object) -> object:
+        if v is None or (isinstance(v, str) and not v.strip().isdigit()):
+            return 587
+        return v
 
     @field_validator("stt_frame_s")
     @classmethod
@@ -250,6 +282,10 @@ class Settings(BaseSettings):
             raise ValueError("HISTORY_BACKEND=zerobus is the direct-mode history path; in kafka mode history "
                              "flows over Kafka to delta_history.py (use auto or none)")
         return self
+
+    @property
+    def smtp_configured(self) -> bool:
+        return bool(self.smtp_host and self.smtp_from)
 
     @property
     def effective_bus(self) -> str:

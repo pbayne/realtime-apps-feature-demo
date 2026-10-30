@@ -21,8 +21,9 @@ import time
 import uuid
 import wave
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
+from actions.service import ActionService
 from bus import build_bus
 from config import Settings
 from enrich.direct import BusEnricher, DirectEnricher
@@ -88,9 +89,12 @@ class Services:
         self.history = build_history(settings)
         self.enricher = DirectEnricher(self.registry.rules_for)
         self.hub = Hub()
+        # Human-in-the-loop actions (SPEC 12). Events go to the owning voice session or call socket (_emit_action).
+        self.actions = ActionService(settings=settings, store=self.store, registry=self.registry, history=self.history,
+                                     emit=self._emit_action)
         self.deps = Deps(settings=settings, bus=self.bus, store=self.store, llm=self.llm,
                          retriever=self.retriever, registry=self.registry, hub=self.hub, vad=self.vad,
-                         history=self.history, enricher=self.enricher)
+                         history=self.history, enricher=self.enricher, actions=self.actions)
         self.bus_enricher: Optional[BusEnricher] = None
         self.sessions: dict[str, CallSession] = {}
         # Voice mode (SPEC 9): Kokoro TTS and Parakeet over the same workspace auth as the LLM.
@@ -116,7 +120,7 @@ class Services:
             retriever=self.retriever, calls=self.sessions, finish_call=self.finish_call,
             new_practice_call=self.new_practice_call, history=self.history,
             stream_decoder=stream_decoder, vad=self.vad, rules_for=self.registry.rules_for,
-            note_ok=self.note_voice_ok,
+            note_ok=self.note_voice_ok, actions=self.actions,
         )
         self.readiness = EndpointReadiness(
             {"stt": settings.stt_endpoint, "tts": settings.tts_endpoint},
@@ -376,6 +380,16 @@ class Services:
             self._background.add(task)
             task.add_done_callback(self._background.discard)
 
+    def _emit_action(self, rec: Any) -> None:
+        """Every action status change goes to the socket that owns its scope (SPEC 12: `action` events)."""
+        event = {"type": "action", "action": self.actions.wire(rec)}
+        if rec.session_id:
+            vs = self.voice_sessions.get(rec.session_id)
+            if vs is not None:
+                vs._emit(event)
+        if rec.call_id:
+            self.hub.emit(rec.call_id, event)
+
     def note_voice_ok(self, name: str) -> None:
         """A real turn reached this endpoint (stt | tts | llm): it is warm now."""
         self._warmth[name] = {**self._warmth.get(name, {}), "warming": False, "last_ok_ms": now_ms()}
@@ -455,6 +469,7 @@ class Services:
             "active_calls": self.active_calls(),
             "playbooks": self.registry.names(),
             "enrich_rules": self.rules.source,
+            "actions": {"mode": self.actions.mode, **self.actions.safety_info()},
             "voice": {"model": self.settings.voice_model, "tts": self.settings.tts_endpoint,
                       "stt": self.settings.stt_endpoint, "active_sessions": sum(1 for v in self.voice_sessions.values() if not v.closed)},
         }

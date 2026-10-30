@@ -58,7 +58,13 @@ resources:
           description: Voice mode model (haiku, thinking disabled)
           serving_endpoint: {name: "${var.voice_model}", permission: CAN_QUERY}
 
-        # Admin insights (SPEC 13): SQL Statement Execution over the history tables. Empty state when unset.
+        # Admin insights (SPEC 14): SQL Statement Execution over the history tables. Empty state when unset.
         - name: sql-warehouse
           description: SQL warehouse for the admin insights page (read-only queries over the history tables)
           sql_warehouse: {id: "${var.warehouse_id}", permission: CAN_USE}
+
+        # Actions (SPEC 12): one JSON secret for the SMTP relay (host, port, username, password, from, timeout_s).
+        # deploy.sh writes {"host":"unset","from":"unset"} until a relay is set: "unset" means outbox mode.
+        - name: smtp-config
+          description: SMTP relay settings as JSON (host, port, username, password, from, timeout_s)
+          secret: {scope: "${var.secret_scope}", key: smtp_config, permission: READ}

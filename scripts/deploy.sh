@@ -170,6 +170,13 @@ fi
 
 # The app's secret bindings need these keys to exist at deploy time. The setup job
 # overwrites them with real values. Placeholders are written only if absent.
+# SMTP relay for actions (SPEC 12): one JSON secret, smtp_config. The placeholder keeps the app's binding valid and
+# "unset" means outbox mode (nothing is sent). Replace it with the real JSON (host, port, username, password, from,
+# timeout_s) through stdin, never argv: databricks secrets put-secret <scope> smtp_config
+if ! have_secret smtp_config; then
+  put_secret smtp_config '{"host":"unset","from":"unset"}'
+fi
+
 for key in lakebase_host lakebase_db lakebase_user lakebase_endpoint; do
   if ! have_secret "$key"; then
     put_secret "$key" placeholder

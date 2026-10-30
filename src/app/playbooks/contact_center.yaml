@@ -102,3 +102,8 @@ practice:
     goals:
       - Reveal that money is tight only when the agent asks an open question about it.
       - Accept a payment plan or retention offer if it is explained clearly.
+# Enrollment programs the enroll action may offer (SPEC 12). The action refuses any other program.
+programs:
+  - "Autopay"
+  - "Paperless billing"
+  - "Loyalty discount"

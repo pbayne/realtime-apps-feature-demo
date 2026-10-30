@@ -7,6 +7,9 @@ import { Brand } from "./Brand";
 import { AdminGear } from "./admin/AdminGear";
 import { ContextPanel } from "./ContextPanel";
 import { SidekickFeed } from "./SidekickFeed";
+import { ActionsPanel } from "./actions/ActionsPanel";
+import { MOCK } from "../lib/useCallSession";
+import type { ActionView } from "../lib/actions";
 import { TranscriptPanel } from "./TranscriptPanel";
 
 interface Props {
@@ -18,6 +21,7 @@ interface Props {
   onChannel(ch: Speaker): void;
   onBrowserStt(on: boolean): void;
   onResolve(cardId: string, action: "accept" | "reject" | "edit", text?: string): void;
+  onActionUpdate(action: ActionView): void;
 }
 
 function useNow(active: boolean) {
@@ -39,7 +43,7 @@ const STATUS_STYLE: Record<CallStatus, { label: string; cls: string }> = {
   error: { label: "Error", cls: "text-rose-200 border-rose-400/40" },
 };
 
-export function Console({ state, channel, sttBrowser, notice, onEnd, onChannel, onBrowserStt, onResolve }: Props) {
+export function Console({ state, channel, sttBrowser, notice, onEnd, onChannel, onBrowserStt, onResolve, onActionUpdate }: Props) {
   const running = state.status !== "ended" && state.status !== "error";
   const now = useNow(running);
   const elapsed = state.startedAt ? (state.endedAt ?? now) - state.startedAt : 0;
@@ -119,7 +123,19 @@ export function Console({ state, channel, sttBrowser, notice, onEnd, onChannel, 
           <TranscriptPanel state={state} />
         </div>
         <div className="h-[520px] min-h-0 md:h-auto xl:h-auto">
-          <SidekickFeed state={state} onResolve={onResolve} />
+          <div className="flex h-full min-h-0 flex-col gap-3">
+            <div className="flex min-h-0 flex-[3] flex-col">
+              <SidekickFeed state={state} onResolve={onResolve} />
+            </div>
+            <ActionsPanel
+              className="min-h-0 flex-[2]"
+              actions={state.actions}
+              scope={{ call_id: state.callId ?? undefined }}
+              playbook={state.playbook}
+              mock={MOCK}
+              onUpdate={onActionUpdate}
+            />
+          </div>
         </div>
         <div className="h-[460px] min-h-0 md:col-span-2 md:h-auto xl:col-span-1 xl:h-auto">
           <ContextPanel state={state} />

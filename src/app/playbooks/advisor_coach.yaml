@@ -120,3 +120,8 @@ practice:
       - Surface the decision maker and whether the other partner agrees.
       - Be honest about risk tolerance: Sam is aggressive, Priya is conservative.
       - Reveal a rough time horizon only if the advisor asks a good open question.
+# Enrollment programs the enroll action may offer (SPEC 12). The action refuses any other program.
+programs:
+  - "Retirement income review"
+  - "Tax-loss harvesting pilot"
+  - "Quarterly portfolio check-in"

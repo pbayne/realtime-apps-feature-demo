@@ -2,6 +2,8 @@
 // call reducer (lib/store.ts); this file only holds the conversation, outcomes and turn timing.
 import type { CoverageItem, VoiceItem, VoiceRole, VoiceServerEvent, VoiceSuggestion, VoiceTiming } from "../types";
 
+import { upsertAction, type ActionView } from "../actions";
+
 export type VoiceStatus = "idle" | "connecting" | "live" | "reconnecting" | "ended" | "error";
 export type VoiceMode = "hands_free" | "ptt";
 export type Flash = "interrupted" | null;
@@ -69,6 +71,7 @@ export interface VoiceState {
   series: number[];
   chips: VoiceSuggestion[];
   warming: Warming | null;
+  actions: ActionView[];   // SPEC 12: proposed and executed actions for this session
 }
 
 export const initialVoiceState: VoiceState = {
@@ -97,6 +100,7 @@ export const initialVoiceState: VoiceState = {
   series: [],
   chips: [],
   warming: null,
+  actions: [],
 };
 
 export type VoiceAction =
@@ -165,6 +169,7 @@ const VOICE_ONLY = new Set([
   "stream_started",
   "stream_stopped",
   "session_ended",
+  "action",
 ]);
 
 export function isVoiceEvent(ev: { type: string } & object): ev is VoiceServerEvent {
@@ -271,6 +276,9 @@ export function voiceReducer(state: VoiceState, action: VoiceAction): VoiceState
 
 function applyVoiceEvent(state: VoiceState, ev: VoiceServerEvent): VoiceState {
   switch (ev.type) {
+    case "action":
+      return { ...state, actions: upsertAction(state.actions, ev.action) };
+
     case "user_text":
       return {
         ...state,

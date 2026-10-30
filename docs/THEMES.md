@@ -1,6 +1,6 @@
 # Themes
 
-Four looks, chosen per user from the admin area (`#/admin/themes`) and saved to Lakebase (`user_prefs`, SPEC 13).
+Four looks, chosen per user from the admin area (`#/admin/themes`) and saved to Lakebase (`user_prefs`, SPEC 14).
 
 | Id | Look | Scheme |
 |---|---|---|

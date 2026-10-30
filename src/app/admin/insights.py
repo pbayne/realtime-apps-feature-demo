@@ -1,4 +1,4 @@
-"""Admin insights over the UC Delta history (SPEC 13).
+"""Admin insights over the UC Delta history (SPEC 14).
 
 Reads realtime_call_sidekick_catalog.call_sidekick.* through the SQL Statement Execution API on the SQL warehouse
 named by DATABRICKS_WAREHOUSE_ID (app resource `sql-warehouse`, app service principal auth).

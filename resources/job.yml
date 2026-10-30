@@ -128,7 +128,7 @@ resources:
 
     call_sidekick_talk_track_insights:
       name: call-sidekick-talk-track-insights
-      description: Daily. Last 7 days of transcripts and cards -> ai_query -> talk_track_insights (recurring objections, responses that worked, KB gaps, coverage gaps). Feeds the admin insights page (SPEC 13).
+      description: Daily. Last 7 days of transcripts and cards -> ai_query -> talk_track_insights (recurring objections, responses that worked, KB gaps, coverage gaps). Feeds the admin insights page (SPEC 14).
       max_concurrent_runs: 1
       schedule:
         quartz_cron_expression: "0 0 6 * * ?"
