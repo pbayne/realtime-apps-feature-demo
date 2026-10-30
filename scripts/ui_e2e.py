@@ -68,6 +68,8 @@ PROBE = """(() => {
     cutOff: document.body.innerText.includes("cut off"),
     muteBtn: (q("button").find((b) => /^(Mute|Unmute)/.test(text(b))) || {}).innerText || "",
     sidekickTurns: q("div").filter((d) => /^SIDEKICK\\b/.test(text(d.firstElementChild || {}))).length,
+    tone: (document.querySelector('section[aria-label="Live read"] [role="img"]') || {getAttribute: () => ""}).getAttribute("aria-label") || "",
+    toneWhileSpeaking: text(document.querySelector('section[aria-label="Live read"]')).includes("while speaking"),
   };
 })()"""
 
@@ -154,6 +156,7 @@ async def run(args) -> int:
                 # Real acoustic path: the Mac speaks out loud and the built-in microphone hears it.
                 speaker = subprocess.Popen(["say", "-r", "175", args.say])
             seen_speaking = seen_caption = None
+            seen_tone = tone_while_speaking = None
             pinned = dismissed = None
             interrupted_at = None
             deadline = t0 + args.timeout
@@ -167,6 +170,13 @@ async def run(args) -> int:
                     seen_caption = t
                     notes["first live caption"] = f"{t:.1f} s: {s['caption'][:80]}"
                     await cdp.shot(f"{args.out}/1-live-caption.png")
+                if s.get("tone", "").startswith("Tone ") and "waiting" not in s["tone"] and seen_tone is None:
+                    seen_tone = t
+                    notes["first sentiment"] = f"{t:.1f} s: {s['tone']}"
+                if s.get("tone", "").startswith("Tone ") and seen_tone is not None:
+                    notes["last sentiment"] = f"{t:.1f} s: {s['tone']}"
+                if s.get("toneWhileSpeaking") and tone_while_speaking is None:
+                    tone_while_speaking = t
                 chips = s.get("chips", [])
                 if chips and pinned is None:
                     pinned = chips[0]
@@ -197,6 +207,8 @@ async def run(args) -> int:
                 await asyncio.sleep(0.25)
             checks["mic → 'You're speaking'"] = seen_speaking is not None
             checks["live caption while talking"] = seen_caption is not None
+            checks["live sentiment reading"] = seen_tone is not None
+            checks["sentiment updates while still speaking"] = tone_while_speaking is not None
             checks["suggestion chip appeared and was pinned"] = pinned is not None
             await asyncio.sleep(2.5)
             s = await cdp.js(PROBE) or {}

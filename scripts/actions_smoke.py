@@ -11,10 +11,14 @@ every check passes.
 from __future__ import annotations
 
 import argparse
+import asyncio
+import json
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
+import websockets
 
 TERMINAL = {"done", "outboxed", "sent", "failed", "rejected", "undone"}
 
@@ -103,6 +107,28 @@ def main() -> None:
         checks["bad params refused (4xx)"] = 400 <= bad.status_code < 500
         bad_prog = create("enroll", {"email": "sam.client@example.com", "program": "Made-up program"})
         checks["unknown program refused (4xx)"] = 400 <= bad_prog.status_code < 500
+        # The model proposes actions from what the user asks for (pending, nothing runs until approved).
+        before = {a["action_id"] for a in c.get("/api/actions", params={"session_id": sid}).json()["actions"]}
+        ask = ("Please email sam.client@example.com a short summary of today's fee discussion, and book a 30 minute "
+               "follow-up meeting with him next Tuesday at 2pm Eastern.")
+        asyncio.run(_say(base, sid, dict(c.headers), ask))
+        proposed: list[dict] = []
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < 60 and not proposed:
+            time.sleep(2)
+            now = c.get("/api/actions", params={"session_id": sid}).json()["actions"]
+            proposed = [a for a in now if a["action_id"] not in before]
+        notes["proposed"] = f"{time.monotonic() - t0:.0f} s: " + "; ".join(
+            f"{a.get('kind')}={a.get('status')} ({a.get('summary', '')[:70]})" for a in proposed)
+        kinds = {a.get("kind") for a in proposed}
+        checks["Sidekick proposes actions from the request"] = bool(proposed)
+        checks["proposals are pending, not executed"] = bool(proposed) and all(
+            a.get("status") == "proposed" for a in proposed)
+        checks["proposals include the email and the meeting"] = {"send_email", "create_meeting"} <= kinds
+        meets = [a for a in proposed if a.get("kind") == "create_meeting"]
+        if meets:   # "next Tuesday": the weekday must survive the model's date arithmetic
+            start = datetime.fromisoformat(meets[0]["params"]["start_iso"])
+            checks["'next Tuesday' lands on a Tuesday"] = start.strftime("%A") == "Tuesday"
         final = c.get("/api/actions", params={"session_id": sid}).json()["actions"]
         notes["actions in session"] = ", ".join(f"{a.get('kind')}={a.get('status')}" for a in final)
     finally:
@@ -114,6 +140,22 @@ def main() -> None:
     for k, v in notes.items():
         print(f"      {k}: {v}")
     sys.exit(0 if checks and all(checks.values()) else 1)
+
+
+async def _say(base: str, sid: str, headers: dict, text: str) -> None:
+    """One typed turn over the voice socket; returns after Sidekick's reply finishes (or 45 s)."""
+    url = base.replace("https://", "wss://") + f"/ws/voice/{sid}"
+    auth = {k: v for k, v in headers.items() if k.lower() == "authorization"}
+    async with websockets.connect(url, additional_headers=auth, max_size=None) as ws:
+        await ws.send(json.dumps({"type": "text", "text": text}))
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < 45:
+            try:
+                m = await asyncio.wait_for(ws.recv(), timeout=5)
+            except asyncio.TimeoutError:
+                continue
+            if isinstance(m, str) and json.loads(m).get("type") in ("turn_done",):
+                return
 
 
 def _headers(eml: str, names: tuple[str, ...]) -> str:

@@ -7,7 +7,7 @@ Both share VOICE_RULES (from the reference voice-agent app) and the <<ITEMS>> in
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sidekick.playbooks import Playbook, PracticeScenario
@@ -43,6 +43,16 @@ ACTIONS_RULES = (
 HISTORY_MESSAGES = 12   # conversation messages kept in the prompt
 
 
+def time_context(now: datetime | None = None) -> str:
+    """The current time with its weekday, and the next seven dates by name. Models misjudge weekday arithmetic
+    ("next Tuesday" came back a day late), so the prompt states the dates instead of leaving them to be computed."""
+    now = now or datetime.now(timezone.utc)
+    days = ", ".join(f"{d:%A} {d:%Y-%m-%d}" for d in (now + timedelta(days=i) for i in range(1, 8)))
+    return (f"Current time (UTC): {now:%A %Y-%m-%dT%H:%MZ}. The next seven days: {days}. "
+            "Resolve relative dates (tomorrow, next Tuesday) from this list. US Eastern is UTC-4 until the first "
+            "Sunday of November and UTC-5 after; give start_iso in the speaker's stated time zone.")
+
+
 def assistant_messages(pb: Playbook, user_text: str, history: list[dict[str, str]], call_text: str,
                        hits: list[Hit]) -> list[dict[str, str]]:
     kb = "\n".join(f"- [{h.title} / {h.section}] {h.text[:500]}" for h in hits) or "(no playbook reference matched)"
@@ -56,7 +66,7 @@ def assistant_messages(pb: Playbook, user_text: str, history: list[dict[str, str
         ITEMS_RULES,
         ACTIONS_RULES,
         ("Enrollment programs you may offer: " + ", ".join(pb.programs)) if pb.programs else "",
-        "Current time (UTC): " + datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ") + ".",
+        time_context(),
     ])
     return [{"role": "system", "content": system}, *history[-HISTORY_MESSAGES:],
             {"role": "user", "content": user_text}]
