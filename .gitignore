@@ -28,3 +28,6 @@ frontend/.vite/
 *.swp
 *conf*.json
 !frontend/tsconfig.json
+
+# Claude Code local state and agent worktrees (also keeps them out of bundle sync)
+.claude/

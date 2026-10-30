@@ -94,6 +94,43 @@ import tempfile
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 from huggingface_hub import snapshot_download
 
+# This workspace's /Workspace FUSE mount can fail with EIO from serverless compute while the
+# Workspace API still reads the same files, so copy the serving code through the API.
+import io
+import time
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.workspace import ExportFormat, ObjectType
+
+def copy_workspace_dir(src, dst, attempts=4):
+    w = WorkspaceClient()
+    os.makedirs(dst, exist_ok=True)
+    for obj in w.workspace.list(src, recursive=True):
+        if obj.object_type != ObjectType.FILE or "__pycache__" in obj.path:
+            continue
+        rel = os.path.relpath(obj.path.removeprefix("/Workspace"), src.removeprefix("/Workspace"))
+        target = os.path.join(dst, rel)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        for i in range(attempts):
+            try:
+                with w.workspace.download(obj.path, format=ExportFormat.AUTO) as f, open(target, "wb") as out:
+                    out.write(f.read())
+                break
+            except Exception as exc:  # transient storage errors: back off and retry
+                if i == attempts - 1:
+                    raise
+                print(f"retry {i + 1} downloading {obj.path}: {type(exc).__name__}")
+                time.sleep(2 ** i)
+
+def with_retries(fn, attempts=3, what="call"):
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            if i == attempts - 1:
+                raise
+            print(f"{what} failed ({type(exc).__name__}: {str(exc)[:160]}); retry {i + 1} in {15 * (i + 1)} s")
+            time.sleep(15 * (i + 1))
+
 NOTEBOOK_DIR = "/Workspace" + os.path.dirname(
     dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get())
 workdir = tempfile.mkdtemp()
@@ -101,7 +138,7 @@ os.chdir(workdir)
 snapshot_download(MODEL_REPO_ID, local_dir=ARTIFACTS_PATH, allow_patterns=["*.json", "*.pth", "voices/*"])
 print(len(os.listdir(f"{ARTIFACTS_PATH}/voices")), "voices")
 # The entrypoint runs serving/kokoro_server.py and serving/adapter.py (copied from kokoro_serving/).
-shutil.copytree(os.path.join(NOTEBOOK_DIR, "kokoro_serving"), "serving", ignore=shutil.ignore_patterns("__pycache__"))
+copy_workspace_dir(os.path.join(NOTEBOOK_DIR, "kokoro_serving"), "serving")
 
 # COMMAND ----------
 
@@ -199,14 +236,14 @@ class LLMModel(ChatModel):   # placeholder: Serving runs the entrypoint, not pre
     def predict(self, context, messages, params):
         return ChatCompletionResponse.from_dict({"choices": []})
 
-model_info = mlflow.pyfunc.log_model(
+model_info = with_retries(lambda: mlflow.pyfunc.log_model(
     name=SERVED_MODEL_NAME.replace(".", "_"),
     python_model=LLMModel(),
     artifacts={"model_dir": ARTIFACTS_PATH, "serving": "serving"},
     metadata={"task": "llm/v1/chat", "entrypoint": entrypoint(SERVING_PORT, SERVING_INTERNAL_PORT)},
     extra_pip_requirements=["mlflow==3.15.0"],
-)
-version = mlflow.register_model(model_info.model_uri, UC_MODEL_NAME, env_pack="databricks_model_serving").version
+), what="log_model")
+version = with_retries(lambda: mlflow.register_model(model_info.model_uri, UC_MODEL_NAME, env_pack="databricks_model_serving"), what="register_model").version
 print(UC_MODEL_NAME, "version", version)
 
 # COMMAND ----------
