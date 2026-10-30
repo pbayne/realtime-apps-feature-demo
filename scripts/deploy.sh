@@ -202,7 +202,9 @@ if [[ "$backbone" == "direct" && "${SKIP_ZEROBUS:-0}" != "1" ]]; then
   # Lakebase -> Delta reconcile (the job is also scheduled every 15 min). Its Lakebase catalog is registered by the
   # bundle (postgres_catalogs), so it runs after the bundle deploy above. Defaults only: the one-time backfill
   # (dedupe_existing, full_sync) is a manual command, see README "Zerobus history".
-  db bundle run call_sidekick_reconcile_history --target "$target"
+  # Best effort: it is a 15-minute scheduled job, so a failed first run must not block the app deploy.
+  db bundle run call_sidekick_reconcile_history --target "$target" \
+    || echo "WARNING: first reconcile_history run failed; the 15-minute schedule retries it (check the job run)." >&2
 fi
 
 # --- 5. GPU endpoints (opt-in, before the app deploy) ----------------------
