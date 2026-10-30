@@ -10,6 +10,8 @@ interface Overview {
   as_of_ms: number;
   sections: Record<string, Row[]>;
   errors?: Record<string, string>;
+  /** Present when the app's service principal cannot read the history schema: the read-only grants to run. */
+  access?: { principal: string | null; statements: string[] };
 }
 interface CallDetail {
   call_id: string;
@@ -20,6 +22,33 @@ interface CallDetail {
 }
 
 const WINDOWS = [7, 30, 90] as const;
+
+/** The app cannot read the history tables. It never grants itself access; this tells an admin exactly what to run. */
+function AccessNeeded({ access }: { access: NonNullable<Overview["access"]> }) {
+  const sql = access.statements.join("\n");
+  const [copied, setCopied] = useState(false);
+  return (
+    <div role="alert" className="panel mt-6 p-5">
+      <p className="text-[15px] font-semibold">The app can't read the history tables yet</p>
+      <p className="mt-2 max-w-3xl text-[13.5px] leading-relaxed text-[var(--color-muted)]">
+        Insights run as the app's service principal{access.principal ? ` (${access.principal})` : ""}, which needs
+        read-only access to the history schema. A catalog owner or metastore admin runs this once in the SQL editor:
+      </p>
+      <pre className="mt-3 overflow-x-auto rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-ink)] p-3 font-mono text-[12.5px] leading-relaxed">
+        {sql}
+      </pre>
+      <button
+        type="button"
+        className="btn mt-3"
+        onClick={() => {
+          void navigator.clipboard?.writeText(sql).then(() => setCopied(true));
+        }}
+      >
+        {copied ? "Copied" : "Copy SQL"}
+      </button>
+    </div>
+  );
+}
 
 async function getJson<T>(path: string): Promise<T> {
   const r = await fetch(path);
@@ -96,7 +125,10 @@ export function InsightsPage() {
         </div>
       )}
 
-      {data?.configured && (
+      {data?.access && <AccessNeeded access={data.access} />}
+
+      {/* Without access every section is empty; zeros would read as "no calls", so show only the fix. */}
+      {data?.configured && !data.access && (
         <>
           {/* KPI tiles */}
           <div className="mt-6 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">

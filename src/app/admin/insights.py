@@ -120,6 +120,7 @@ class Insights:
     warehouse_id: Optional[str]
     cache_s: float = 60.0
     executor: Optional[Executor] = None
+    principal: Optional[str] = None   # the app's service principal (DATABRICKS_CLIENT_ID), for the access hint
     _cache: dict[tuple[Any, ...], tuple[float, Any]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -169,13 +170,34 @@ class Insights:
                  "top_risk_flags", "card_outcomes", "latency", "methodology", "recent_calls", "talk_tracks"]
         sections: dict[str, Any] = {}
         errors: dict[str, str] = {}
-        for name in names:
-            try:
-                sections[name] = await self._run(name, params)
-            except Exception as exc:  # noqa: BLE001 - one section must not blank the page
+        # Concurrent: each statement waits on the warehouse in its own thread, so the page costs the slowest
+        # query instead of the sum of all eleven.
+        results = await asyncio.gather(*(self._run(name, params) for name in names), return_exceptions=True)
+        for name, result in zip(names, results):
+            if isinstance(result, BaseException):   # one section must not blank the page
                 sections[name] = []
-                errors[name] = str(exc)[:200]
-        return {"configured": True, "days": days, "as_of_ms": now_ms(), "sections": sections, "errors": errors}
+                errors[name] = str(result)[:200]
+            else:
+                sections[name] = result
+        out = {"configured": True, "days": days, "as_of_ms": now_ms(), "sections": sections, "errors": errors}
+        access = self.access_fix(errors)
+        if access:
+            out["access"] = access
+        return out
+
+    def access_fix(self, errors: dict[str, str]) -> Optional[dict[str, Any]]:
+        """When the app's service principal cannot read the history schema, the read-only grants an admin runs.
+        The app never grants itself anything; it only says what is missing."""
+        if not any("INSUFFICIENT_PERMISSIONS" in e or "PERMISSION_DENIED" in e for e in errors.values()):
+            return None
+        who = self.principal or "<the app's service principal application id>"
+        return {
+            "principal": self.principal,
+            "statements": [
+                f"GRANT USE CATALOG ON CATALOG `{self.catalog}` TO `{who}`;",
+                f"GRANT USE SCHEMA, SELECT ON SCHEMA `{self.catalog}`.`{self.schema}` TO `{who}`;",
+            ],
+        }
 
     async def call_detail(self, call_id: str) -> dict[str, Any]:
         if not self.configured:

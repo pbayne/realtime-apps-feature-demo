@@ -37,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from contextlib import asynccontextmanager
@@ -373,7 +374,8 @@ def _insights_for(svc: Services) -> admin_insights.Insights:
         s = svc.settings
         wh = s.databricks_warehouse_id
         executor = admin_insights.make_sdk_executor(wh) if wh and s.mode == "databricks" else None
-        existing = admin_insights.Insights(s.history_catalog, s.history_schema, wh, s.insights_cache_s, executor)
+        existing = admin_insights.Insights(s.history_catalog, s.history_schema, wh, s.insights_cache_s, executor,
+                                          principal=os.environ.get("DATABRICKS_CLIENT_ID"))
         svc.insights = existing
     return existing
 

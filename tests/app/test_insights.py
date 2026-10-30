@@ -134,3 +134,21 @@ def test_admin_gets_the_empty_state_without_a_warehouse(client):
 
 def test_call_id_shape_is_checked_before_any_query(client):
     assert client.get("/api/admin/calls/bad%20id%3B", headers=ADMIN).status_code == 404
+
+
+def test_permission_errors_return_the_read_only_grants_an_admin_runs():
+    async def denied(statement, params, types):
+        raise RuntimeError("[INSUFFICIENT_PERMISSIONS] Principal 'app-x' does not have USE CATALOG on Catalog 'c'")
+
+    ins = I.Insights("c", "s", "wh", 0, denied, principal="1111-2222")
+    out = asyncio.run(ins.overview(7))
+    assert out["errors"] and out["access"]["principal"] == "1111-2222"
+    assert out["access"]["statements"] == ["GRANT USE CATALOG ON CATALOG `c` TO `1111-2222`;",
+                                           "GRANT USE SCHEMA, SELECT ON SCHEMA `c`.`s` TO `1111-2222`;"]
+
+
+def test_other_errors_carry_no_access_hint():
+    async def broken(statement, params, types):
+        raise RuntimeError("warehouse stopped")
+
+    assert "access" not in asyncio.run(I.Insights("c", "s", "wh", 0, broken).overview(7))
