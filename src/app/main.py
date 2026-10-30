@@ -40,7 +40,8 @@ from typing import Any, Literal, Optional
 
 from config import get_settings
 from fastapi import FastAPI, Query, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from models import now_ms
 from pydantic import BaseModel, Field
 from ratelimit import TokenBucket
@@ -550,3 +551,17 @@ def msg_card_id(payload: dict) -> str:
     return str(payload.get("card_id", ""))
 
 
+
+
+# ----------------------------------------------------------------- static UI
+
+if (STATIC_DIR / "index.html").exists():
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+else:
+    @app.get("/", response_class=HTMLResponse)
+    async def placeholder() -> str:
+        return (
+            "<!doctype html><title>Call sidekick</title><h1>Call sidekick</h1>"
+            "<p>API is running. The UI has not been built into src/app/static yet.</p>"
+            "<p><a href='/docs'>API docs</a> &middot; <a href='/api/health'>health</a></p>"
+        )

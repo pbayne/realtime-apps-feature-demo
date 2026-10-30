@@ -90,12 +90,32 @@ paths = sorted(glob.glob(os.path.join(kb_dir, "**", "*.md"), recursive=True))
 if not paths:
     raise FileNotFoundError(f"no *.md under {kb_dir} (expected kb/<playbook>/<doc>.md)")
 
+# /Workspace FUSE reads can fail with EIO on serverless in some workspaces while the Workspace API serves the
+# same file, so retry the read and fall back to the API (same workaround as register_parakeet/kokoro).
+import time
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.workspace import ExportFormat
+
+_ws = WorkspaceClient()
+
+
+def read_text(path: str, attempts: int = 4) -> str:
+    for i in range(attempts):
+        try:
+            return Path(path).read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"FUSE read retry {i + 1} for {path}: {exc.__class__.__name__}")
+            time.sleep(0.5 * (2 ** i))
+    with _ws.workspace.download(path, format=ExportFormat.AUTO) as f:
+        return f.read().decode("utf-8")
+
+
 rows = []
 for path in paths:
     rel = Path(path).relative_to(kb_dir)
     playbook = rel.parts[0] if len(rel.parts) > 1 else "shared"
     doc_id = f"kb/{rel.as_posix()}"           # same doc ids the app cites (kb/advisor_coach/fee_objections.md)
-    for c in chunk_markdown(doc_id, Path(path).read_text(encoding="utf-8")):
+    for c in chunk_markdown(doc_id, read_text(path)):
         c["playbook"] = playbook
         c["title"] = Path(path).stem.replace("_", " ")
         rows.append(c)
