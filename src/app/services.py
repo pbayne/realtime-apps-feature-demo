@@ -355,7 +355,9 @@ class Services:
                 self._warmth[name] = {"warming": False, "last_ok_ms": now_ms(), "last_ms": round(elapsed * 1000)}
                 log.info("prewarm %s ok in %.1f s", name, elapsed)
             except Exception as exc:  # warm-up is best effort; the turn path has its own retries
-                self._warmth[name] = {**self._warmth.get(name, {}), "warming": False, "error": type(exc).__name__}
+                # STT shares the serving client (LlmUnavailable), so name the endpoint rather than the exception.
+                error = "timeout" if isinstance(exc, asyncio.TimeoutError) else f"{name} endpoint not ready"
+                self._warmth[name] = {**self._warmth.get(name, {}), "warming": False, "error": error}
                 log.info("prewarm %s not ready after %.1f s: %s", name, time.monotonic() - t0, type(exc).__name__)
 
         async def tts_ping() -> None:
