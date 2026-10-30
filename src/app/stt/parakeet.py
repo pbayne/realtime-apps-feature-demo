@@ -32,7 +32,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import AsyncIterator, Callable, Optional
 
-from llm import LlmClient, LlmUnavailable
+from llm import WARMUP, LlmClient, LlmUnavailable
 
 from stt.agreement import LocalAgreement2
 from stt.base import Decoder, Frame, TranscriptEvent, Window, Word
@@ -197,25 +197,57 @@ def transcription_request(wav: bytes, endpoint: str) -> tuple[dict, dict]:
     return files, data
 
 
-class ParakeetDecoder:
-    """Decoder over the Parakeet serving endpoint. Fail-soft: a failed window yields no words."""
+WARMING_AFTER = 3   # consecutive failed windows before the call is told transcription is warming up
 
-    def __init__(self, llm: LlmClient, endpoint: str, *, timeout_s: float = 2.0) -> None:
+
+class ParakeetDecoder:
+    """Decoder over the Parakeet serving endpoint. Fail-soft: a failed window yields no words.
+
+    Window decodes run 2-3 times a second, so they never open the LLM circuit breaker (a scale-to-zero
+    endpoint fails every window while it starts; a tripped breaker then rejected every window even after it
+    was warm). After WARMING_AFTER consecutive failures `on_status` gets a "warming" status event, and a
+    "ready" one on the first success after that, so the UI can explain the wait."""
+
+    def __init__(self, llm: LlmClient, endpoint: str, *, timeout_s: float = 2.0,
+                 on_status: Optional[Callable[[dict], None]] = None) -> None:
         self._llm = llm
         self._endpoint = endpoint
         self._timeout = timeout_s
+        self._on_status = on_status
+        self._fails = 0
+        self._warming = False
+        self._last_log = 0.0
+
+    def _status(self, state: str) -> None:
+        if self._on_status is not None:
+            self._on_status({"type": "status", "stage": "stt", "state": state,
+                             "message": "Warming up transcription (GPU starting)…" if state == "warming" else ""})
 
     async def decode(self, window: Window) -> list[Word]:
         if not window.pcm:
             return []
         files, data = transcription_request(pcm_to_wav(window.pcm), self._endpoint)
+        token = WARMUP.set(True)   # fail-soft per window: do not count towards the breaker
         try:
             body = await self._llm.multipart(self._endpoint, STT_ROUTE, files=files, data=data,
                                              timeout=self._timeout)
         except LlmUnavailable as exc:
-            # Fail-soft: a bad window yields no words this tick, the channel keeps running.
-            log.warning("STT decode failed (%s); no words this window", exc)
+            self._fails += 1
+            if self._fails >= WARMING_AFTER and not self._warming:
+                self._warming = True
+                self._status("warming")
+            now = time.monotonic()
+            if now - self._last_log > 5.0:   # one line per 5 s, not one per window
+                self._last_log = now
+                log.warning("STT decode failed %d window(s) in a row (%s: %s); no words this window",
+                            self._fails, type(exc.__cause__ or exc).__name__, str(exc)[:160])
             return []
+        finally:
+            WARMUP.reset(token)
+        if self._warming:
+            self._warming = False
+            self._status("ready")
+        self._fails = 0
         return words_from_response(body, window.start_ms, window.end_ms)
 
 

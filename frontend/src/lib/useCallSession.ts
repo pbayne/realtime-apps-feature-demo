@@ -63,6 +63,11 @@ export function useCallSession() {
     (ev: ServerEvent) => {
       dispatch({ type: "event", ev, at: Date.now() });
       if (ev.type === "error" && ev.message) setNotice(ev.message);
+      // Scale-to-zero GPU: the server says when transcription is still starting, and when it is ready.
+      const st = ev as unknown as { type: string; stage?: string; state?: string };
+      if (st.type === "status" && st.stage === "stt") {
+        setNotice(st.state === "warming" ? "Warming up transcription (GPU starting)… your first words can take a couple of minutes." : null);
+      }
       if (ev.type === "call.ended") teardownMedia();
     },
     [teardownMedia],

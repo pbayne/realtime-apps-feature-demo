@@ -87,6 +87,20 @@ class LakebaseStore:
             raise RuntimeError("Lakebase not configured: need LAKEBASE_HOST/USER/PASSWORD or LAKEBASE_ENDPOINT")
         return {"host": host, "port": s.lakebase_port, "database": s.lakebase_db, "user": user, "password": password, "ssl": s.lakebase_sslmode}
 
+    async def _apply_ddl(self, conn: Any) -> None:
+        """Create missing tables, one statement at a time. The setup job (init.py) owns the schema and runs the
+        migrations; the app's role may not own the tables, so a migration it cannot run (e.g. ALTER TABLE on a
+        table owned by the setup role) must not stop the app. A real problem still fails the first query."""
+        import asyncpg
+
+        for stmt in (st.strip() for st in DDL.split(";")):
+            if not stmt:
+                continue
+            try:
+                await conn.execute(stmt)
+            except asyncpg.exceptions.InsufficientPrivilegeError:
+                log.info("skipping schema statement the app role may not run (setup job owns it): %s", stmt.split("(")[0][:60])
+
     async def start(self) -> None:
         """Connect and create tables. Safe to call again after a failure (the retry loop in Services does):
         any half-open pool is closed first. Queries get command_timeout; a stuck database fails them, never hangs."""
@@ -98,7 +112,7 @@ class LakebaseStore:
         self._pool = await asyncpg.create_pool(min_size=self._s.lakebase_pool_min, max_size=self._s.lakebase_pool_max,
                                                **creds, **timeouts)
         async with self._pool.acquire() as conn:
-            await conn.execute(DDL)
+            await self._apply_ddl(conn)
         # LISTEN is only needed when RTM writes enrichments (BACKBONE=kafka). Direct mode enriches in process.
         if self._s.backbone == "kafka":
             self._listen_conn = await asyncpg.connect(**creds, **timeouts)
