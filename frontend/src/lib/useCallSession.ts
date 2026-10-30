@@ -10,6 +10,8 @@ import { TERMINAL_MESSAGES, type TerminalReason } from "./reconnectPolicy";
 import { initialCallState, reducer, type Resolution } from "./store";
 import type { ClientMessage, Mode, ServerEvent, Speaker } from "./types";
 
+import type { ActionView } from "./actions";
+
 export const URL_PARAMS = new URLSearchParams(window.location.search);
 export const MOCK = URL_PARAMS.get("mock") === "1";
 export const MOCK_SPEED = Math.max(0.25, Number(URL_PARAMS.get("speed") ?? "1") || 1);
@@ -164,6 +166,11 @@ export function useCallSession() {
     [],
   );
 
+  /** A decision or create response for an action (SPEC 12), applied the same way as a socket `action` event. */
+  const actionUpdate = useCallback((action: ActionView) => {
+    dispatch({ type: "event", ev: { type: "action", action }, at: Date.now() });
+  }, []);
+
   const resolveCard = useCallback(
     (cardId: string, action: "accept" | "reject" | "edit", text?: string) => {
       const msg: ClientMessage =
@@ -222,5 +229,6 @@ export function useCallSession() {
     setChannel,
     setBrowserStt,
     resolveCard,
+    actionUpdate,
   };
 }

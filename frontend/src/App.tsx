@@ -86,6 +86,7 @@ export default function App() {
         onChannel={session.setChannel}
         onBrowserStt={session.setBrowserStt}
         onResolve={session.resolveCard}
+        onActionUpdate={session.actionUpdate}
       />
     </div>
   );

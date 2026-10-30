@@ -10,6 +10,7 @@ import type { VoiceOption } from "../../lib/types";
 import { Brand } from "../Brand";
 import { ContextPanel } from "../ContextPanel";
 import { SidekickFeed } from "../SidekickFeed";
+import { ActionsPanel } from "../actions/ActionsPanel";
 import { Composer, Conversation } from "./Conversation";
 import { LatencyHud } from "./LatencyHud";
 import { LiveCaption } from "./LiveCaption";
@@ -313,7 +314,14 @@ export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void 
           <div className="flex min-h-[360px] flex-col gap-3 md:min-h-0">
             {live}
             {lane}
-            <div className="min-h-0 flex-1">
+            <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1.15fr)_minmax(0,0.85fr)] gap-3">
+              <ActionsPanel
+                actions={state.actions}
+                scope={{ session_id: state.sessionId ?? undefined }}
+                playbook={state.playbook}
+                mock={MOCK}
+                onUpdate={api.actionUpdate}
+              />
               <Outcomes items={state.items} />
             </div>
           </div>

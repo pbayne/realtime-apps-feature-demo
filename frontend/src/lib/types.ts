@@ -1,4 +1,5 @@
 // Wire contracts from docs/SPEC.md §3 and §3.1 (keep in sync with src/app/main.py and session.py).
+import type { ActionView } from "./actions";
 
 export type Speaker = "agent" | "customer";
 
@@ -66,7 +67,8 @@ export type ServerEvent =
       enrichment_source?: string;
     }
   | { type: "error"; message?: string; scope?: string; speaker?: Speaker }
-  | { type: "call.ended" };
+  | { type: "call.ended" }
+  | { type: "action"; action: ActionView };
 
 // Client -> server
 export type ClientMessage =
@@ -173,6 +175,7 @@ export type VoiceServerEvent =
   | { type: "stream_started"; sample_rate: number; endpoint_silence_ms: number; frame_ms: number }
   | { type: "stream_stopped"; flush: boolean; dropped_frames: number }
   | { type: "session_ended"; reason: string }
+  | { type: "action"; action: ActionView }
   | { type: "error"; turn: number; stage: "stt" | "llm" | "tts"; message: string };
 
 /** Client -> server on /ws/voice/{session_id}. Binary frames are one WAV turn (RIFF header) or streamed PCM16
