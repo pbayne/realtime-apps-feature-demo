@@ -70,7 +70,7 @@ db() { databricks "$@" --profile "$profile"; }
 
 have_secret() {
   db secrets list-secrets "$scope" -o json \
-    | jq -e --arg k "$1" '(.secrets // .)[]? | select(.key == $k)' >/dev/null 2>&1
+    | jq -e --arg k "$1" '(.secrets? // .)[]? | select(.key == $k)' >/dev/null 2>&1  # CLI returns a bare array
 }
 
 put_secret() {  # put_secret <key> <value>: the value goes through stdin, never argv or the log

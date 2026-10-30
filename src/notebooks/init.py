@@ -28,7 +28,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install --quiet "pg8000==1.31.2" "confluent-kafka>=2.5,<3" "aws-msk-iam-sasl-signer-python>=1.0,<2"
+# MAGIC %pip install --quiet "pg8000==1.31.2" "scramp==1.4.6" "confluent-kafka>=2.5,<3" "aws-msk-iam-sasl-signer-python>=1.0,<2"
 
 # COMMAND ----------
 
@@ -63,6 +63,9 @@ if len(p["pg_password"]) < 24:
 
 if p["backbone"] not in ("direct", "kafka"):
     raise ValueError(f"backbone must be direct or kafka, got {p['backbone']!r}")
+
+# Used by both backbones: the Kafka admin client (kafka) and the Lakebase secrets step (always).
+SCOPE = p["secret_scope"]
 
 for field in ("project_id", "branch_name", "database_name", "pg_role", "secret_scope"):
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,62}", p[field]):
@@ -284,7 +287,6 @@ else:
     from confluent_kafka import KafkaException
     from confluent_kafka.admin import AdminClient, NewTopic
 
-    SCOPE = p["secret_scope"]
     bootstrap = dbutils.secrets.get(SCOPE, "kafka_bootstrap")
 
 
