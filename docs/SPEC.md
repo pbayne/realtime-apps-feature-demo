@@ -513,8 +513,27 @@ notebook's DDL has the same columns and types.
 - Shutdown drains the queue up to `HISTORY_FLUSH_TIMEOUT_S`.
 
 ### Delivery guarantee
-Best effort [v0.6]. Acknowledged writes are at-least-once (dedupe on the natural keys). A batch that still fails after one requeue is dropped and counted in `failed`, and a full queue drops its oldest records. History is for analytics and post-call scoring, not a system of record.
-Live state is in Lakebase.
+Zerobus is the low-latency path, and on its own it is best effort [v0.6]: acknowledged writes are at-least-once, and a
+batch that still fails after one requeue is dropped and counted in `failed`. A full queue drops its oldest records.
+
+Completeness comes from Lakebase [v0.7]. Lakebase holds every record under the same natural keys, so it is the source
+of truth. `src/notebooks/reconcile_history.py` (serverless job `call_sidekick_reconcile_history`, every 15 minutes, UTC)
+reads each Lakebase table through the registered UC catalog `${LAKEBASE_CATALOG}.public` and, per table:
+- reads the rows in a watermark window (`updated` time at or after now minus 48 h; `cards` also includes cards with
+  feedback in the window, since feedback changes `cards.status`; `calls` uses `GREATEST(started_at, ended_at)`).
+  `full_sync=true` reads everything instead.
+- takes one row per natural key (QUALIFY row_number), so the MERGE source has no duplicates;
+- removes Delta duplicates for the keys in the window, then MERGEs by natural key: inserts missing rows and updates
+  rows that differ (null-safe). `enrichments.enrichment_source` is set on insert ('direct') and never updated, since
+  Lakebase has no such column.
+- `dedupe_existing=true` (one-off) keeps one row per duplicated key across the whole table first.
+
+Recovery point objective: a record reaches Delta within one schedule interval (15 min) plus the job runtime after it
+reaches Lakebase, for changes inside the 48 h watermark. Older changes need a `full_sync` run. A record that Zerobus
+dropped is restored by the next run. The job never deletes a key that is absent from Lakebase.
+
+Live state is in Lakebase. History in Delta is for analytics and post-call scoring; with the reconcile job it is
+complete to the recovery point above, but it is eventually complete, not queryable at the instant of the write.
 
 Sources: https://docs.databricks.com/aws/en/ingestion/zerobus-ingest ,
 https://docs.databricks.com/aws/en/ingestion/zerobus-message-blocking ,

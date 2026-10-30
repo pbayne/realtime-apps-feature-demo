@@ -44,6 +44,7 @@ flowchart LR
   ENR -->|enrichment row| LB[(Lakebase: live state)]
   APP -->|utterances, cards, feedback, calls| LB
   HS -->|Zerobus Ingest, JSON| UC[(UC Delta history<br/>calls, utterances, enrichments,<br/>cards, feedback, voice_turns, voice_items)]
+  LB -->|reconcile every 15 min: MERGE by natural key| UC
   APP -->|perception, compose, embeddings| LLM[(Claude and gte on Model Serving)]
   VS[(Vector Search KB index, opt-in)] -.->|RETRIEVAL_BACKEND=vector_search| APP
   UC -->|every 30 min| PCS[post_call_scoring.py<br/>ai_query, serverless]
@@ -103,7 +104,7 @@ scripts/deploy.sh <profile> <catalog>               # BACKBONE=direct is the def
 
 The script writes the Zerobus values to the secret scope (`call-sidekick` by default; `zerobus_client_secret` is never
 printed), validates and deploys the `dev` bundle target, runs the setup job (Lakebase tables), runs `init_history`
-(the seven Zerobus tables and the MODIFY+SELECT grant), deploys and starts the app, and builds the KB index.
+(the seven Zerobus tables and the MODIFY+SELECT grant), runs `reconcile_history` once (Lakebase → Delta), deploys and starts the app, and builds the KB index.
 No Kafka secrets are needed. Kafka keys get placeholders because the app's resources bind them at deploy time.
 
 Voice mode (adds two always-on GPU endpoints, see below):
@@ -141,6 +142,7 @@ databricks bundle validate --strict --target dev --profile <profile>
 databricks bundle deploy --target dev --profile <profile>
 databricks bundle run call_sidekick_setup --target dev
 databricks bundle run call_sidekick_init_history --target dev        # direct
+databricks bundle run call_sidekick_reconcile_history --target dev   # direct: Lakebase -> Delta (also every 15 min)
 databricks bundle run call_sidekick_app --target dev
 databricks bundle run call_sidekick_kb_index --target dev
 # voice only: databricks bundle run call_sidekick_parakeet_register --target dev  (and kokoro), then deploy again
@@ -151,7 +153,7 @@ Restart the app once after the first setup so it reads the real Lakebase secrets
 
 ## Serverless and classic compute
 
-The target workspace is serverless. Direct-mode jobs (setup, init_history, KB index, post-call scoring, and the
+The target workspace is serverless. Direct-mode jobs (setup, init_history, reconcile_history, KB index, post-call scoring, and the
 two GPU registrations) run on **serverless** compute with `environment_version` `6`. The GPU registrations use
 `compute.hardware_accelerator: GPU_1xA10` on serverless GPU, as in the reference audio notebooks
 (`reference/custom-llm-serving-solutions/audio-serving/kokoro-tts/01-serving.ipynb`, "Standard v6", A10).
@@ -263,6 +265,31 @@ Facts checked against the docs and the SDK 1.10.0 package:
   durable, not yet queryable.
 - Column types: STRING, INT, BIGINT, DOUBLE, BOOLEAN. JSON-valued columns are STRING. Times are epoch milliseconds.
 
+### Completeness: Lakebase is the source of truth [v0.7]
+
+Zerobus gives low-latency arrival, not a guarantee. It is at-least-once, so a retry can duplicate rows, and a batch that
+fails twice is lost. Every record also lives in Lakebase under the same natural keys
+(`calls.call_id`, `utterances` and `enrichments` (call_id, seq), `cards.card_id`, `feedback` (card_id, at_ms),
+`voice_turns` (session_id, turn), `voice_items.item_id`). So `src/notebooks/reconcile_history.py` (job
+`call_sidekick_reconcile_history`, serverless, every 15 minutes, one run at a time) closes the gap:
+
+- It reads each Lakebase table through the UC catalog registered on the Lakebase database
+  (`postgres_catalogs` in `resources/lakebase.yml`; `<lakebase_catalog>.public.<table>`, read-only, serverless compute).
+  Why this route and not pg8000: the registration is declarative in the bundle, the job needs no database password, and
+  Spark reads it directly. The pg8000 route (scramp pin plus a password read in the job) stays as the fallback.
+- Per run it reads a 48 h watermark window (`cards` also picks up cards with feedback in the window, since feedback sets
+  `cards.status`), keeps one row per key, removes Delta duplicates for those keys, then MERGEs by key. Missing rows are
+  inserted, changed rows are updated (null-safe, unchanged rows are not rewritten). It never deletes a key that is
+  absent from Lakebase.
+- `enrichments.enrichment_source` is set to `direct` on insert and never updated, because Lakebase has no such column.
+- **One-off backfill (after the first deploy, and only if duplicates exist):**
+  `databricks bundle run call_sidekick_reconcile_history --target dev -p <profile> -- --dedupe_existing true --full_sync true`.
+  `dedupe_existing` keeps one row per duplicated key across each whole table. `full_sync` reads all of Lakebase. Run it
+  with no live calls, because a Zerobus write that lands during the dedupe can be removed and is restored by the next run.
+
+**Recovery point objective:** a record reaches Delta within one schedule interval (15 min) plus the job runtime after it
+reaches Lakebase, for changes inside the 48 h window. Older changes need `full_sync`. Lakebase durability is the basis.
+
 Sources: [Zerobus Ingest](https://docs.databricks.com/aws/en/ingestion/zerobus-ingest),
 [message blocking and acknowledgment](https://docs.databricks.com/aws/en/ingestion/zerobus-message-blocking),
 [Python SDK README](https://github.com/databricks/zerobus-sdk/blob/main/python/README.md).
@@ -335,8 +362,8 @@ session and turn, with no transcript text at INFO.
 ```
 databricks.yml                 bundle variables; targets: dev (direct, default), kafka (adds RTM + history job)
 resources/
-  lakebase.yml                 Lakebase project, UC schema, checkpoint volume
-  job.yml                      serverless jobs: setup, init_history, kb_index, post_call_scoring, GPU registrations
+  lakebase.yml                 Lakebase project, its UC catalog registration, UC schema, checkpoint volume
+  job.yml                      serverless jobs: setup, init_history, reconcile_history, kb_index, post_call_scoring, GPU registrations
   app.yml                      Databricks App and its secret and serving-endpoint resources
 src/app/                       FastAPI app (bundle source_code_path)
   config.py                    settings; BACKBONE, HISTORY_BACKEND validated together
@@ -347,6 +374,7 @@ src/app/                       FastAPI app (bundle source_code_path)
 src/notebooks/
   init.py                      Lakebase role, SPEC 3.2 tables, NOTIFY trigger; Kafka topics only in kafka mode
   init_history.py              Zerobus history tables and grants (serverless)
+  reconcile_history.py         Lakebase -> Delta MERGE by natural key, every 15 min (SQL in reconcile_lib.py, unit tested)
   register_parakeet.py         Parakeet audio serving (Custom LLM task) → UC → GPU endpoint (serverless GPU)
   register_kokoro.py           Kokoro-82M TTS serving → UC → GPU endpoint (serverless GPU)
   build_kb_index.py            playbooks/kb/<playbook>/*.md → Delta → one Vector Search index (opt-in retrieval)

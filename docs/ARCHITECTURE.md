@@ -184,7 +184,18 @@ two always-on A10G endpoints.
   columns are STRING.
 - One stream per table. Batches are flushed every 0.5 s or 500 records. The queue holds 10 000 records and
   drops the oldest when full (counted in `/healthz` → `history.dropped`).
-- Acks mean durable, not queryable (the docs). On a write error a failed batch is retried on a fresh stream with exponential backoff (`HISTORY_RETRY_ATTEMPTS`, default 3; `retried` counts), and requeued once at the front of the queue after the last attempt, then counted in `failed`. Acknowledged writes are at-least-once: a retry after a partial ack can duplicate rows, so dedupe downstream on the natural keys (calls.call_id, utterances/enrichments (call_id, seq), cards.card_id, feedback (card_id, at_ms), voice_turns (session_id, turn), voice_items.item_id).
+- Acks mean durable, not queryable (the docs). On a write error a failed batch is retried on a fresh stream with exponential backoff (`HISTORY_RETRY_ATTEMPTS`, default 3; `retried` counts), and requeued once at the front of the queue after the last attempt, then counted in `failed`. Acknowledged writes are at-least-once: a retry after a partial ack can duplicate rows, and a batch that fails twice is lost from Zerobus.
+- **Completeness: Lakebase → Delta reconcile [v0.7].** Lakebase holds every record under the same natural keys
+  (calls.call_id, utterances/enrichments (call_id, seq), cards.card_id, feedback (card_id, at_ms), voice_turns
+  (session_id, turn), voice_items.item_id), so it is the source of truth. `src/notebooks/reconcile_history.py` runs as
+  serverless job `call_sidekick_reconcile_history` every 15 minutes (max concurrent runs 1). It reads each Lakebase
+  table through the UC catalog registered on the Lakebase database (`postgres_catalogs` in `resources/lakebase.yml`,
+  `<lakebase_catalog>.public.<table>`, read-only, serverless compute). Each run reads a 48 h watermark window, takes one
+  row per key, removes Delta duplicates for those keys, and MERGEs by key (inserts missing rows, updates changed rows).
+  Recovery point objective: 15 min plus job runtime after a record reaches Lakebase. `dedupe_existing` and
+  `full_sync` are one-off backfill switches. Why the UC catalog and not a pg8000 read: it is declarative in the bundle,
+  needs no password in the job, and Spark reads it directly; pg8000 would have needed the scramp pin and a password
+  in the job path.
 - Sources: Zerobus Ingest docs (<https://docs.databricks.com/aws/en/ingestion/zerobus-ingest>), message blocking
   and acknowledgment (<https://docs.databricks.com/aws/en/ingestion/zerobus-message-blocking>), and the Python
   SDK README (<https://github.com/databricks/zerobus-sdk/blob/main/python/README.md>). SDK 1.10.0,
