@@ -1,7 +1,10 @@
-/* Voice orb. Colours follow data-state; --lvl (0..1) is written per frame from the audio level. */
+/* Voice orb. Colours follow data-state. Two levels are written per frame: --mic (the user's mic) swells the orb,
+   and --out (Sidekick's playback) brightens the glow and drives the speech ring. --lvl is the larger of the two. */
 .orb {
   --c1: #38bdf8;
   --c2: #0369a1;
+  --mic: 0;
+  --out: 0;
   --lvl: 0;
   position: relative;
   width: 116px;
@@ -10,8 +13,9 @@
   background:
     radial-gradient(circle at 32% 26%, rgba(255, 255, 255, 0.55), transparent 42%),
     radial-gradient(circle at 50% 62%, var(--c1), var(--c2));
-  box-shadow: 0 0 calc(40px + var(--lvl) * 60px) calc(var(--lvl) * 6px) color-mix(in srgb, var(--c1) 45%, transparent);
-  transform: scale(calc(1 + var(--lvl) * 0.22));
+  box-shadow: 0 0 calc(34px + var(--out) * 70px + var(--mic) * 30px) calc(var(--out) * 8px + var(--mic) * 3px)
+    color-mix(in srgb, var(--c1) 45%, transparent);
+  transform: scale(calc(1 + var(--mic) * 0.16 + var(--out) * 0.06));
   transition:
     background 400ms ease,
     box-shadow 300ms ease;
@@ -26,7 +30,7 @@
   animation: orb-breathe 3.2s ease-in-out infinite;
 }
 .orb::after {
-  /* Orbit ring, used for thinking. */
+  /* Orbit ring (thinking), or the speech ring while Sidekick talks. */
   content: "";
   position: absolute;
   inset: -22px;
@@ -37,6 +41,14 @@
 
 .orb[data-state="you"] { --c1: #2dd4bf; --c2: #0f766e; }
 .orb[data-state="sidekick"] { --c1: #ff6a4d; --c2: #ff3621; }
+.orb[data-state="sidekick"]::after {
+  /* The speech ring breathes with Sidekick's level, not on a timer. */
+  border: 1.5px solid color-mix(in srgb, #ff6a4d 60%, transparent);
+  inset: -16px;
+  opacity: calc(0.25 + var(--out) * 0.75);
+  transform: scale(calc(0.96 + var(--out) * 0.14));
+  transition: transform 90ms linear, opacity 90ms linear;
+}
 .orb[data-state="interrupted"] { --c1: #fbbf24; --c2: #b45309; }
 .orb[data-state="thinking"] { --c1: #a78bfa; --c2: #5b21b6; }
 .orb[data-state="thinking"]::after { border-color: rgba(167, 139, 250, 0.45); animation: orb-spin 2.6s linear infinite; }
@@ -75,4 +87,6 @@
     animation: none !important;
     transition: none;
   }
+  .orb { transform: none; }
+  .orb[data-state="sidekick"]::after { transform: none; }
 }

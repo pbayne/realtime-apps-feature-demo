@@ -11,6 +11,9 @@ import { ContextPanel } from "../ContextPanel";
 import { SidekickFeed } from "../SidekickFeed";
 import { Composer, Conversation } from "./Conversation";
 import { LatencyHud } from "./LatencyHud";
+import { LiveCaption } from "./LiveCaption";
+import { LiveLane } from "./LiveLane";
+import { LiveRead } from "./LiveRead";
 import { Orb, type OrbState } from "./Orb";
 import { Outcomes } from "./Outcomes";
 
@@ -66,12 +69,16 @@ const STATUS_STYLE: Record<VoiceState["status"], { label: string; cls: string }>
   error: { label: "Error", cls: "text-rose-200 border-rose-400/40" },
 };
 
+const inField = (t: EventTarget | null) =>
+  t instanceof HTMLElement && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+
 export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void }) {
   const { state, callState } = api;
   const practice = state.role === "practice";
   const running = state.status === "live" || state.status === "reconnecting" || state.status === "connecting";
-  const now = useNow(running);
+  const now = useNow(running || !!state.warming);
   const elapsed = state.startedAt ? (state.endedAt ?? now) - state.startedAt : 0;
+  const warmingFor = state.warming ? now - state.warming.since : 0;
   const thinking = isThinking(state);
   const orb = orbFor(state, thinking);
   const st = STATUS_STYLE[state.status];
@@ -89,19 +96,31 @@ export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void 
     };
   }, []);
 
-  // Space is push-to-talk while push-to-talk mode is on and focus is not in a text field.
-  const { pttDown, pttUp } = api;
+  // Keyboard: Space holds to talk in push-to-talk mode; M mutes; Esc interrupts Sidekick. Typing in a field
+  // keeps its keys, except Esc, which always interrupts.
+  const { pttDown, pttUp, setMuted, interrupt } = api;
+  const muted = state.muted;
+  const ptt = state.mode === "ptt";
   useEffect(() => {
-    if (state.mode !== "ptt" || !running) return;
-    const inField = (t: EventTarget | null) =>
-      t instanceof HTMLElement && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+    if (!running) return;
     const down = (e: KeyboardEvent) => {
-      if (e.code !== "Space" || e.repeat || inField(e.target)) return;
-      e.preventDefault();
-      pttDown();
+      if (e.key === "Escape") {
+        interrupt();
+        return;
+      }
+      if (inField(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+      if ((e.key === "m" || e.key === "M") && !e.repeat) {
+        e.preventDefault();
+        setMuted(!muted);
+        return;
+      }
+      if (e.code === "Space" && ptt && !e.repeat) {
+        e.preventDefault();
+        pttDown();
+      }
     };
     const up = (e: KeyboardEvent) => {
-      if (e.code !== "Space" || inField(e.target)) return;
+      if (e.code !== "Space" || !ptt || inField(e.target)) return;
       e.preventDefault();
       pttUp();
     };
@@ -111,12 +130,18 @@ export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void 
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
     };
-  }, [state.mode, running, pttDown, pttUp]);
+  }, [running, ptt, muted, interrupt, setMuted, pttDown, pttUp]);
 
   const voiceList = voices.some((v) => v.id === state.voice)
     ? voices
     : [...voices, { id: state.voice, label: state.voice }];
   const scenarioTitle = state.scenario ? state.scenario.replace(/_/g, " ") : "free practice";
+  const listening = running && !muted && !state.userSpeaking && !state.caption;
+
+  const live = (
+    <LiveRead live={state.live} series={state.series} coverage={practice ? null : undefined} compact={practice} />
+  );
+  const lane = <LiveLane chips={state.chips} onPin={api.pinChip} onDismiss={api.dismissChip} />;
 
   return (
     <div className="flex min-h-full flex-col md:h-full md:min-h-0">
@@ -171,8 +196,15 @@ export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void 
         </div>
       </header>
 
+      {state.warming && (
+        <div role="status" className="flex items-center gap-2 border-b border-sky-400/20 bg-sky-400/[0.08] px-5 py-2 text-[12.5px] text-sky-100">
+          <span className="anim-live-dot size-1.5 shrink-0 rounded-full bg-sky-300" aria-hidden />
+          <span className="min-w-0 flex-1">Warming up voice (GPU starting)… the first reply can take a minute.</span>
+          <span className="font-mono tabular-nums text-sky-200">{fmtClock(warmingFor)}</span>
+        </div>
+      )}
       {state.notice && (
-        <div className="flex items-center gap-2 border-b border-amber-400/20 bg-amber-400/10 px-5 py-2 text-[12.5px] text-amber-100">
+        <div role="alert" className="flex items-center gap-2 border-b border-amber-400/20 bg-amber-400/10 px-5 py-2 text-[12.5px] text-amber-100">
           <Headphones className="size-3.5" /> {state.notice}
         </div>
       )}
@@ -196,12 +228,12 @@ export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void 
 
       <main
         className={`grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 ${
-          practice ? "md:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]" : "md:grid-cols-[minmax(0,1fr)_340px]"
+          practice ? "md:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]" : "md:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_380px]"
         }`}
       >
         <section className="panel flex min-h-[560px] min-h-0 flex-col overflow-hidden md:min-h-0">
           <div className="flex flex-col items-center gap-3 border-b border-[var(--color-line)] px-5 pb-4 pt-5">
-            <Orb state={orb.kind} label={orb.label} readLevel={api.readLevel} />
+            <Orb state={orb.kind} label={orb.label} readMic={api.readMic} readAgent={api.readAgent} />
             <Controls api={api} running={running} />
             <LatencyHud timing={state.lastTiming} history={state.firstAudioHistory} />
           </div>
@@ -213,27 +245,56 @@ export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void 
               <summary className="cursor-pointer px-4 py-2.5 text-[12.5px] font-medium text-slate-300 hover:bg-white/[0.02]">
                 Outcomes · {state.items.length}
               </summary>
-              <div className="max-h-[260px] overflow-y-auto">
+              <div className="max-h-[220px] overflow-y-auto">
                 <Outcomes items={state.items} compact />
               </div>
             </details>
           )}
 
+          <LiveCaption caption={state.caption} listening={listening} />
           <Composer disabled={!running} onSend={api.sendText} />
+          <KeyHints ptt={ptt} running={running} />
         </section>
 
         {practice ? (
-          <div className="grid min-h-[640px] grid-rows-[minmax(0,1fr)_minmax(0,0.85fr)] gap-3 md:min-h-0">
-            <SidekickFeed state={callState} onResolve={api.resolveCard} />
-            <ContextPanel state={callState} />
+          <div className="flex min-h-[640px] flex-col gap-3 md:min-h-0">
+            {live}
+            {lane}
+            <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_minmax(0,0.85fr)] gap-3">
+              <SidekickFeed state={callState} onResolve={api.resolveCard} />
+              <ContextPanel state={callState} />
+            </div>
           </div>
         ) : (
-          <div className="min-h-[360px] md:min-h-0">
-            <Outcomes items={state.items} />
+          <div className="flex min-h-[360px] flex-col gap-3 md:min-h-0">
+            {live}
+            {lane}
+            <div className="min-h-0 flex-1">
+              <Outcomes items={state.items} />
+            </div>
           </div>
         )}
       </main>
     </div>
+  );
+}
+
+function KeyHints({ ptt, running }: { ptt: boolean; running: boolean }) {
+  if (!running) return null;
+  return (
+    <p className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--color-line)] px-4 py-2 text-[11px] text-[var(--color-muted)]">
+      {ptt && (
+        <span>
+          <kbd className="key">Space</kbd> hold to talk
+        </span>
+      )}
+      <span>
+        <kbd className="key">M</kbd> mute
+      </span>
+      <span>
+        <kbd className="key">Esc</kbd> interrupt
+      </span>
+    </p>
   );
 }
 
@@ -279,7 +340,7 @@ function Controls({ api, running }: { api: VoiceSession; running: boolean }) {
         className={`btn py-1.5 text-[13px] ${state.muted ? "border border-amber-400/40 bg-amber-400/10 text-amber-100" : "btn-ghost"}`}
       >
         {state.muted ? <MicOff className="size-3.5" /> : <Mic className="size-3.5" />}
-        {state.muted ? "Unmute" : "Mute"}
+        {state.muted ? "Unmute" : "Mute"} <span className="font-mono text-[10.5px] text-[var(--color-muted)]">M</span>
       </button>
     </div>
   );

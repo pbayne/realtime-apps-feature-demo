@@ -16,7 +16,9 @@ WebSocket:
   POST /api/voice/sessions   {"role":"assistant|practice","playbook","scenario"?,"call_id"?,"voice"?}
   GET  /api/voice/sessions/{id}   turns and items
   GET  /api/voices          Kokoro voice presets
-  /ws/voice/{id}             binary WAV turns; text interrupt | text | config; events per SPEC 9.2
+  /ws/voice/{id}             binary: WAV turns (RIFF) or streamed PCM16 frames after stream_start;
+                             text: interrupt | text | config | stream_start | stream_stop | pin | dismiss
+                             (events per SPEC 9.2, 9.2a, 9.7)
 """
 
 from __future__ import annotations
@@ -88,7 +90,7 @@ async def _service_error(_request: Request, exc: ServiceError):
 
 @app.get("/healthz")
 async def healthz(request: Request):
-    return _svc(request).health()
+    return await _svc(request).health_full()
 
 
 @app.get("/api/playbooks")
@@ -199,7 +201,8 @@ async def get_voice_session(session_id: str, request: Request):
     # Not active in this process: turns and items come from Lakebase. Session metadata (role, playbook,
     # call_id) is kept in memory only, so it is null here.
     return {"session_id": session_id, "role": None, "playbook": None, "call_id": None,
-            "turns": snap["turns"], "items": snap["items"], "active": False}
+            "turns": snap["turns"], "items": snap["items"], "sentiment": [], "suggestions": [],
+            "streaming": False, "active": False}
 
 
 @app.post("/api/calls/{call_id}/end")
@@ -329,6 +332,7 @@ async def ws_voice(ws: WebSocket, session_id: str):
         await ws.close(code=4404)
         return
     vs.attach_call_events(svc.hub)
+    vs.arm_deadline(svc.settings.voice_max_session_minutes * 60.0)
     if vs.role == "practice":
         vs.start_opening()
 
@@ -346,7 +350,12 @@ async def ws_voice(ws: WebSocket, session_id: str):
                 return
             try:
                 if msg.get("bytes"):
-                    vs.submit_audio(msg["bytes"])
+                    data = msg["bytes"]
+                    # A RIFF header is one complete WAV turn (SPEC 9.2). Anything else is streamed PCM (SPEC 9.2a).
+                    if data[:4] == b"RIFF":
+                        vs.submit_audio(data)
+                    else:
+                        vs.stream_frame(data)
                     continue
                 if not msg.get("text"):
                     continue
@@ -354,6 +363,15 @@ async def ws_voice(ws: WebSocket, session_id: str):
                 kind = payload.get("type")
                 if kind == "interrupt":
                     vs.interrupt()
+                elif kind == "stream_start":
+                    vs.stream_start(sample_rate=payload.get("sample_rate", 16000),
+                                    endpoint_silence_ms=payload.get("endpoint_silence_ms"))
+                elif kind == "stream_stop":
+                    vs.stream_stop(flush=payload.get("flush", True) is not False)
+                elif kind == "pin":
+                    await vs.pin(str(payload.get("item_id", "")))
+                elif kind == "dismiss":
+                    vs.dismiss(str(payload.get("item_id", "")))
                 elif kind == "feedback":
                     # Same handling as the call socket: the card belongs to the linked call.
                     call = svc.sessions.get(vs.call_id) if vs.call_id else None
@@ -386,6 +404,7 @@ async def ws_voice(ws: WebSocket, session_id: str):
     finally:
         out_task.cancel()
         in_task.cancel()
+        vs.abort_stream()              # the mic is gone: discard any open utterance
         vs.detach_call_events()
         if vs.role == "practice":
             await vs.close()           # a practice call lives with its socket

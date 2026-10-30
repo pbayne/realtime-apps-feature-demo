@@ -1,10 +1,34 @@
 // Voice session state. Practice-mode call events (cards, coverage, enrichment) live in the existing
 // call reducer (lib/store.ts); this file only holds the conversation, outcomes and turn timing.
-import type { VoiceItem, VoiceRole, VoiceServerEvent, VoiceTiming } from "../types";
+import type { CoverageItem, VoiceItem, VoiceRole, VoiceServerEvent, VoiceSuggestion, VoiceTiming } from "../types";
 
 export type VoiceStatus = "idle" | "connecting" | "live" | "reconnecting" | "ended" | "error";
 export type VoiceMode = "hands_free" | "ptt";
 export type Flash = "interrupted" | null;
+
+/** The user's words as they are being heard (streamed partial), before the endpoint makes them a turn. */
+export interface Caption {
+  turn: number;
+  text: string;
+}
+
+/** Latest live reading: what the speech sounds like right now (SPEC 9.7). */
+export interface LiveRead {
+  sentiment: number;
+  intent: string;
+  signals: string[];
+  coverage: CoverageItem[] | null;
+  partial: boolean;
+}
+
+/** A cold STT or TTS endpoint is starting (SPEC 9.6). `since` is the wall clock of the first warming event. */
+export interface Warming {
+  stage: "stt" | "tts";
+  since: number;
+}
+
+/** Sentiment history kept for the sparkline. */
+export const SERIES_KEEP = 90;
 
 /** One user turn and the reply to it. `turn` is null until the server numbers it. */
 export interface Exchange {
@@ -40,6 +64,11 @@ export interface VoiceState {
   firstAudioHistory: number[];
   startedAt: number | null;
   endedAt: number | null;
+  caption: Caption | null;
+  live: LiveRead | null;
+  series: number[];
+  chips: VoiceSuggestion[];
+  warming: Warming | null;
 }
 
 export const initialVoiceState: VoiceState = {
@@ -63,6 +92,11 @@ export const initialVoiceState: VoiceState = {
   firstAudioHistory: [],
   startedAt: null,
   endedAt: null,
+  caption: null,
+  live: null,
+  series: [],
+  chips: [],
+  warming: null,
 };
 
 export type VoiceAction =
@@ -84,6 +118,8 @@ export type VoiceAction =
   | { type: "event"; ev: VoiceServerEvent }
   | { type: "hydrate"; exchanges: Exchange[]; items: VoiceItem[] }
   | { type: "set"; patch: Partial<Pick<VoiceState, "mode" | "muted" | "voice">> }
+  | { type: "chip_remove"; itemId: string }
+  | { type: "caption_clear" }
   | { type: "ended"; at: number }
   | { type: "reset" };
 
@@ -115,10 +151,24 @@ export function isThinking(state: VoiceState): boolean {
 }
 
 /** Matches the voice socket's event types. `error` is shared with the call socket and is told apart by `stage`. */
+const VOICE_ONLY = new Set([
+  "user_text",
+  "user_partial",
+  "agent_text",
+  "audio",
+  "item",
+  "suggestion",
+  "suggestion_retire",
+  "live",
+  "turn_done",
+  "status",
+  "stream_started",
+  "stream_stopped",
+  "session_ended",
+]);
+
 export function isVoiceEvent(ev: { type: string } & object): ev is VoiceServerEvent {
-  if (ev.type === "user_text" || ev.type === "agent_text" || ev.type === "audio" || ev.type === "item" || ev.type === "turn_done") {
-    return true;
-  }
+  if (VOICE_ONLY.has(ev.type)) return true;
   return ev.type === "error" && "stage" in ev;
 }
 
@@ -201,6 +251,12 @@ export function voiceReducer(state: VoiceState, action: VoiceAction): VoiceState
     case "reset":
       return initialVoiceState;
 
+    case "chip_remove":
+      return { ...state, chips: state.chips.filter((c) => c.item_id !== action.itemId) };
+
+    case "caption_clear":
+      return state.caption ? { ...state, caption: null } : state;
+
     default:
       return state;
   }
@@ -211,8 +267,42 @@ function applyVoiceEvent(state: VoiceState, ev: VoiceServerEvent): VoiceState {
     case "user_text":
       return {
         ...state,
+        // The endpointed final replaces the streamed caption: the words solidify into the bubble.
+        caption: state.caption && state.caption.turn !== ev.turn ? state.caption : null,
         exchanges: upsert(state.exchanges, ev.turn, (e) => ({ ...e, user: ev.text })),
       };
+
+    case "user_partial":
+      return { ...state, caption: { turn: ev.turn, text: ev.text } };
+
+    case "live": {
+      const series = [...state.series, ev.sentiment].slice(-SERIES_KEEP);
+      const live: LiveRead = {
+        sentiment: ev.sentiment,
+        intent: ev.intent,
+        signals: ev.signals,
+        coverage: ev.coverage,
+        partial: ev.kind === "partial",
+      };
+      return { ...state, live, series };
+    }
+
+    case "suggestion": {
+      const chips = state.chips.filter((c) => c.item_id !== ev.item.item_id);
+      return { ...state, chips: [...chips, ev.item] };
+    }
+
+    case "suggestion_retire":
+      return { ...state, chips: state.chips.filter((c) => !ev.item_ids.includes(c.item_id)) };
+
+    case "status":
+      if (ev.state === "warming") {
+        return { ...state, warming: { stage: ev.stage, since: state.warming?.since ?? Date.now() } };
+      }
+      return state.warming ? { ...state, warming: null } : state;
+
+    case "session_ended":
+      return { ...state, status: "ended", endedAt: state.endedAt ?? Date.now(), warming: null };
 
     case "agent_text":
       return {
@@ -221,8 +311,10 @@ function applyVoiceEvent(state: VoiceState, ev: VoiceServerEvent): VoiceState {
       };
 
     case "item": {
+      // A pinned chip becomes an outcome with the same id: it leaves the live lane.
       const items = state.items.filter((i) => i.item_id !== ev.item.item_id);
-      return { ...state, items: [...items, ev.item] };
+      const chips = state.chips.filter((c) => c.item_id !== ev.item.item_id);
+      return { ...state, items: [...items, ev.item], chips };
     }
 
     case "turn_done": {

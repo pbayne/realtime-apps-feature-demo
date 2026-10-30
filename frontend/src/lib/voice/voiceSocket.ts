@@ -2,8 +2,11 @@
 import { wsUrl, type ConnStatus } from "../connection";
 import type { AnyServerEvent, VoiceClientMessage } from "../types";
 
+/** Audio is dropped, not queued, once this much is unsent: a stalled link must not grow an unbounded backlog. */
+export const MAX_BUFFERED_BYTES = 256 * 1024;
+
 export interface VoiceTransport {
-  /** One complete user turn as a WAV blob. Returns false when the socket is not open. */
+  /** A WAV turn, or one streamed PCM16 frame while a stream is open. False when not open or backed up. */
   sendAudio(wav: ArrayBuffer): boolean;
   sendJson(msg: VoiceClientMessage): boolean;
   close(): void;
@@ -61,7 +64,7 @@ export function openVoiceSocket(sessionId: string, h: VoiceSocketHandlers): Voic
   };
 
   return {
-    sendAudio: (wav) => send(wav),
+    sendAudio: (wav) => (ws && ws.bufferedAmount > MAX_BUFFERED_BYTES ? false : send(wav)),
     sendJson: (msg) => send(JSON.stringify(msg)),
     close() {
       closedByUs = true;

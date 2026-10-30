@@ -24,7 +24,25 @@ log = logging.getLogger("sidekick.llm")
 
 
 class LlmUnavailable(RuntimeError):
-    """The LLM endpoint could not serve the request. Callers fall back to rules."""
+    """The LLM endpoint could not serve the request. Callers fall back to rules.
+
+    `cold` marks a failure that looks like a scale-to-zero endpoint still starting (timeout, connect error,
+    HTTP 429/503/504). Voice mode retries cold failures with backoff (voice/resilience.py); other failures
+    are final for the call."""
+
+    def __init__(self, message: str = "", *, cold: bool = False) -> None:
+        super().__init__(message)
+        self.cold = cold
+
+
+COLD_STATUS = frozenset({429, 503, 504})
+
+
+def is_cold_failure(exc: BaseException) -> bool:
+    """True for failures that a warming serving endpoint produces (timeouts, refused or reset connections)."""
+    if getattr(exc, "cold", False):
+        return True
+    return isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError))
 
 
 class LlmClient:
@@ -87,6 +105,10 @@ class LlmClient:
 
             self._sdk_config = Config()  # respects DATABRICKS_CONFIG_PROFILE / Apps env
         return self._sdk_config
+
+    def sdk_config(self) -> Any:
+        """The databricks-sdk Config this client authenticates with (readiness probes reuse it)."""
+        return self._config()
 
     async def workspace_auth(self) -> tuple[str, dict[str, str]]:
         """Workspace host and the app's auth headers (service principal in Apps, profile locally).
@@ -221,13 +243,14 @@ class LlmClient:
             resp = await self._client().post(url, headers=headers, files=files, data=data,
                                              timeout=timeout or self._s.llm_timeout_s)
             if resp.status_code >= 400:
-                raise LlmUnavailable(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                raise LlmUnavailable(f"HTTP {resp.status_code}: {resp.text[:200]}",
+                                     cold=resp.status_code in COLD_STATUS)
             body = resp.json()
             self._record_ok()
             return body
         except Exception as exc:  # noqa: BLE001 - every failure is a degradation, not a crash
             self._record_fail(exc)
-            raise LlmUnavailable(str(exc)) from exc
+            raise LlmUnavailable(str(exc), cold=is_cold_failure(exc)) from exc
 
     async def aclose(self) -> None:
         if self._http is not None:

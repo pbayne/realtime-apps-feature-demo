@@ -57,7 +57,24 @@ class Settings(BaseSettings):
     tts_voice: str = "af_heart"
     tts_timeout_s: float = 20.0
     voice_stt_timeout_s: float = 10.0      # one whole user turn (<= 30 s of audio)
-    voice_max_audio_bytes: int = 2_000_000  # a 30 s 16 kHz mono PCM16 WAV is ~960 KB
+    voice_max_audio_bytes: int = 2_000_000  # hard byte cap for one WAV turn (the seconds cap below is tighter)
+
+    # --- voice streaming, live analysis, limits, cold endpoints (SPEC 9.6, v0.5) ---
+    voice_endpoint_silence_ms: int = 700     # streaming: silence that ends a user turn (300..2000 accepted per stream)
+    voice_max_turn_audio_s: float = 30.0     # one user turn (WAV or stream); a stream is force-ended at this length
+    voice_stream_queue_max: int = 300        # 100 ms frames buffered per stream; beyond this frames are dropped
+    voice_max_session_minutes: float = 30.0  # wall-clock limit per voice socket
+    voice_max_concurrent_sessions: int = 20  # voice sessions per app instance; more gets HTTP 429
+    voice_out_queue_max: int = 2000          # outbound events per socket; live events are dropped beyond this
+    voice_retry_base_s: float = 1.0          # cold STT/TTS retry: first backoff, doubling
+    voice_retry_cap_s: float = 8.0           # cold STT/TTS retry: largest single backoff
+    voice_warmup_budget_s: float = 90.0      # total time one STT or TTS call keeps retrying a cold endpoint
+    live_debounce_ms: int = 600              # live analysis on stable partials: at most one run per window
+    live_min_new_words: int = 4              # a partial must add this many words before it is analysed
+    live_suggest_interval_s: float = 2.5     # live suggestion pass: at most one LLM call per session per interval
+    live_suggest_timeout_s: float = 1.5      # live suggestion pass: fail-soft after this long
+    live_suggest_max_tokens: int = 220
+    readiness_ttl_s: float = 30.0            # /healthz voice readiness (serving endpoint states) cache
 
     # --- retrieval ---
     retrieval_backend: Literal["auto", "memory", "keyword", "vector_search"] = "auto"

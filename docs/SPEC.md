@@ -1,4 +1,4 @@
-# Realtime Call Sidekick — Build Spec (v0.4)
+# Realtime Call Sidekick — Build Spec (v0.5)
 
 Live call → sub-second transcription → enrichment → Lakebase → sidekick agent → suggestion cards
 pushed to the rep/agent UI over WebSocket. Two backbones (docs/ARCHITECTURE.md):
@@ -8,8 +8,8 @@ pushed to the rep/agent UI over WebSocket. Two backbones (docs/ARCHITECTURE.md):
 - **kafka** (scale mode): utterances to Kafka, Spark Real-Time Mode enrichment into Lakebase, history to Delta
   through Kafka jobs.
 
-v0.4 records what the code does (2026-10-30). Changes from v0.3 are marked **[v0.4]**. Earlier changes are
-**[v0.2]** and **[v0.3]**.
+v0.5 records what the code does (2026-10-30). Changes from v0.4 are marked **[v0.5]**. Earlier changes are
+**[v0.2]**, **[v0.3]** and **[v0.4]**.
 
 ## 1. Hard constraints (verified)
 - **Backbone [v0.4].** `BACKBONE=direct` (default) or `kafka`. Direct: no bus (`bus/null.py`), enrichment in
@@ -349,7 +349,9 @@ Databricks serving, Kokoro TTS). Two roles, switchable per session:
 
 ### 9.2 WebSocket `/ws/voice/{session_id}`
 Client → server:
-- binary frame = **one complete user turn** as 16 kHz mono PCM16 WAV (client-side VAD decides turn end).
+- binary frame = **one complete user turn** as 16 kHz mono PCM16 WAV (client-side VAD decides turn end). **[v0.5]**
+  Streamed input is the default in the UI: raw PCM16 frames between `stream_start` and `stream_stop` (section 9.2a).
+  A WAV frame (RIFF header) is still one turn, so both modes share the socket.
 - `{"type":"interrupt"}` = barge-in: server cancels LLM + all in-flight TTS streams for the current turn and
   records the partial reply as interrupted.
 - `{"type":"text","text":"..."}` = typed turn (same pipeline, no STT).
@@ -386,6 +388,88 @@ first audio (user stops speaking → first audible reply) ≤ 1.2 s p50 in-regio
 audio ≤ 200 ms; barge-in stops playback ≤ 150 ms client-side and cancels server work ≤ 300 ms.
 Browser: AudioWorklet capture, echoCancellation + noiseSuppression, energy VAD (start 200 ms, end 800 ms,
 preroll 300 ms, barge-in 300 ms at 2× threshold) — ported from the reference `index.html`.
+
+### 9.2a Streaming input **[v0.5]**
+Client → server, on `/ws/voice/{session_id}`:
+- `{"type":"stream_start","sample_rate":16000,"endpoint_silence_ms":700?}` opens a stream. Answer:
+  `{"type":"stream_started","sample_rate":16000,"endpoint_silence_ms":700,"frame_ms":100}`. Only sample_rate 16000 is
+  accepted; endpoint_silence_ms must be 300..2000 (default `VOICE_ENDPOINT_SILENCE_MS`, 700).
+- Binary frames **without a RIFF header** are raw PCM16 mono 16 kHz, about 100 ms each, at most 1 s. They are stream
+  frames while a stream is open. Without an open stream they are an error. The server never blocks the socket:
+  when its frame queue is full (`VOICE_STREAM_QUEUE_MAX`, 300 frames), the frame is dropped and counted in
+  `dropped_frames`.
+- `{"type":"stream_stop","flush":true|false}`. `flush:true` finalises the open utterance into a turn (push-to-talk
+  release). `flush:false` discards it (mute, switch to push-to-talk). Answer: `stream_stopped {flush, dropped_frames}`.
+- Endpointing: silence of `endpoint_silence_ms` ends the utterance. The final starts the turn exactly as a WAV or typed
+  turn: `user_text` (stt_ms = commit latency), then the reply, then `turn_done`. A continuous utterance is force-ended
+  with silence after `VOICE_MAX_TURN_AUDIO_S` (30 s).
+- Barge-in is still the client's `interrupt` (the VAD on the client decides it).
+
+Server → client (same socket):
+```
+{"type":"user_partial","turn":n,"text":"...","seq":..,"first_word_ms":..}
+```
+`turn` is the turn the endpoint will start, so the caption and the reply share a number. Partials come from the same
+StreamingSession as the call path (Parakeet rolling window, LocalAgreement-2).
+
+### 9.7 Live analysis while the user talks **[v0.5]**
+Two passes, both on partials and finals of the user (assistant mode) or the rep (practice mode).
+
+1. **Rules, no network.** `enrich/rules.py` on the text. Partials are debounced (600 ms, `LIVE_DEBOUNCE_MS`) and
+   analysed only with at least 4 new words (`LIVE_MIN_NEW_WORDS`). Finals are analysed at once and cancel a pending partial.
+```
+{"type":"live","turn":n,"speaker":"user|agent|customer","kind":"partial|final","sentiment":-1..1,"intent":"question|statement",
+ "signals":["question","objection:fees","risk:unsupported_claim","method:budget"],"coverage":[{key,label,covered}]|null}
+```
+   Coverage is the playbook methodology over the **user's** speech in assistant mode. In practice mode it is `null`, because
+   the call pipeline owns coverage. The rep's line is analysed as `agent` and the customer's reply as `customer`.
+   Every analysis appends a point to the session's **sentiment series** (`t_ms, turn, speaker, kind, value`, the last 300).
+2. **Suggestions, one fast-model call (fail-soft).** `LIVE_SUGGEST_INTERVAL_S` (2.5): at most one call per session per
+   interval, and never two in flight. A final cancels a pass in flight and, if the interval is still closed, runs one pass
+   at the first open slot. Timeout `LIVE_SUGGEST_TIMEOUT_S` (1.5). Failure produces nothing. The result is 0 to 2 items:
+```
+{"type":"suggestion","turn":n,"item":{Item, "provisional":true}}
+{"type":"suggestion_retire","turn":n,"item_ids":[..],"reason":"superseded|turn_done"}
+```
+   Kinds are the Item kinds (section 9.3). A new pass supersedes the unpinned chips of the same turn. The end of the turn
+   retires the rest, because the `<<ITEMS>>` list is authoritative.
+
+Client → server:
+- `{"type":"pin","item_id":..}`: the chip becomes an outcome item with the **same id**. It is persisted (`voice_items`)
+  and sent as `{"type":"item"}`. An unknown or superseded id is an `error` event.
+- `{"type":"dismiss","item_id":..}`: the chip is removed. Nothing is persisted.
+
+`GET /api/voice/sessions/{id}` adds `sentiment` (the series), `suggestions` (live chips), `streaming` (bool) and
+`dropped_frames`.
+
+### 9.6 Limits, cold endpoints and observability **[v0.5]**
+**Limits.** Each one is an env setting with a default.
+- `VOICE_MAX_SESSION_MINUTES` (30). At the limit the socket gets `{"type":"session_ended","reason":"max_session_minutes"}`
+  and closes.
+- `VOICE_MAX_CONCURRENT_SESSIONS` (20) per app instance. Creating more voice sessions returns HTTP 429.
+- `VOICE_MAX_TURN_AUDIO_S` (30) per turn, for WAV turns as well as streams (`VOICE_MAX_AUDIO_BYTES` is a hard byte cap).
+- `VOICE_STREAM_QUEUE_MAX` (300 frames, 30 s). `VOICE_OUT_QUEUE_MAX` (2000): when a socket falls behind, only
+  `user_partial`, `live` and `suggestion` are dropped. Turn events are never dropped.
+
+**Cold endpoints (scale-to-zero).** An STT or TTS call that fails cold (timeout, refused or reset connection, HTTP 429,
+503 or 504) is retried with exponential backoff (`VOICE_RETRY_BASE_S` 1, `VOICE_RETRY_CAP_S` 8) for up to
+`VOICE_WARMUP_BUDGET_S` (90). Status events:
+```
+{"type":"status","stage":"stt|tts","state":"warming","message":"Warming up voice (GPU starting)…","turn":n}
+{"type":"status","stage":"stt|tts","state":"ready","elapsed_ms":..,"turn":n}
+{"type":"status","stage":"stt|tts","state":"failed","turn":n}     (budget spent; the turn gets an error event)
+```
+Streaming partials never retry, because a late partial is stale. Final decodes retry. TTS retries only before a sentence's
+first audio chunk. Every other failure is final, as before.
+
+**Readiness.** `GET /healthz` adds `voice.readiness`: `{endpoints: {stt|tts: {endpoint, state}}, ready, checked_at_ms,
+cached}`. The state comes from the SDK's serving endpoint (`ready`, `not_ready`, or `unknown` when the probe fails or times
+out). It is cached for `READINESS_TTL_S` (30). In local mode the state is `local` and nothing is probed. `voice.limits`
+reports the limits above.
+
+**Logs.** One JSON object per line on logger `sidekick.voice`: `{"event":"voice.<name>","session_id","turn",…}`. Events
+include `stream_started`, `stream_stopped`, `turn_start`, `turn_done`, `stream_backpressure`, `limit_hit`, `session_closed`.
+No transcript text at INFO or above.
 
 ## 3.7 History contract: Zerobus Ingest (direct backbone) **[v0.4]**
 
@@ -442,3 +526,19 @@ https://github.com/databricks/zerobus-sdk/blob/main/python/README.md
 - GPU endpoints: serverless GPU (`GPU_1xA10`). Scale-to-zero configurable (`gpu_scale_to_zero`, default true).
 - `VOICE_MODEL` default `databricks-claude-haiku-4-5`.
 - Packaging: `resources/cluster.yml` is removed. The RTM cluster and Kafka jobs are in `targets.kafka`.
+
+## 11. Changes from v0.4 **[v0.5]** (summary)
+- Voice input streams: `stream_start`, PCM16 frames, `stream_stop` (section 9.2a). Partials (`user_partial`) appear
+  while the user talks. The endpoint (700 ms of silence) starts the same reply turn as a WAV or typed turn. WAV turns
+  are unchanged.
+- Live analysis while the user talks: `live` events from the rules (sentiment, intent, signals, coverage) and provisional
+  `suggestion` chips from one fast-model pass, rate-limited and fail-soft. Pin and dismiss (section 9.7). The sentiment
+  series is in the snapshot.
+- Production limits: session minutes, concurrent sessions (HTTP 429), turn audio, stream backpressure, outbound
+  backpressure (section 9.6).
+- Cold STT and TTS endpoints retry with backoff and emit `status` events. `/healthz` reports voice readiness (SDK,
+  cached 30 s).
+- Structured JSON voice logs keyed by session and turn. No transcript text at INFO.
+- UI (not a contract change): the console shows a live caption, the live read (sentiment gauge and sparkline), the live
+  lane, separate mic and Sidekick levels on the orb, a warming banner, and keys M (mute), Esc (interrupt) and Space
+  (push-to-talk). `?stream=0` is the WAV-per-turn fallback. The mock (`?mock=1`) simulates all of it.

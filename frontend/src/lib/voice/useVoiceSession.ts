@@ -1,5 +1,9 @@
 // Owns one voice session: the /ws/voice socket, the mic engine, the playback queue, and both reducers
 // (voice conversation here; practice-mode call events in the existing call reducer).
+//
+// Input is streamed by default (SPEC 9.2, streaming input): `stream_start`, then 100 ms PCM16 frames while the
+// mic is open. Hands-free keeps the stream open; push-to-talk opens it on key down and flushes on key up; mute
+// discards the open utterance. `?stream=0` falls back to one WAV per turn (the client VAD decides the turn end).
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import { createVoiceSession, endCall, getVoiceSnapshot } from "../api";
 import type { ConnStatus } from "../connection";
@@ -15,6 +19,10 @@ import { openVoiceSocket, type VoiceTransport } from "./voiceSocket";
 import { MIN_UTTERANCE_MS, type VadEnv } from "./vad";
 
 const FLASH_MS = 1400;
+
+/** Streamed input unless the page is opened with ?stream=0 (the WAV-per-turn compatibility mode). */
+const STREAMING =
+  typeof window === "undefined" || new URLSearchParams(window.location.search).get("stream") !== "0";
 
 const callStatusOf = (s: ConnStatus): CallStatus =>
   s === "open" ? "live" : s === "reconnecting" ? "reconnecting" : s === "closed" ? "ended" : "connecting";
@@ -33,6 +41,8 @@ export function useVoiceSession() {
   // Mirrors of React state for the non-React audio callbacks.
   const busyRef = useRef(false);
   const modeRef = useRef<VoiceInputMode>("hands_free");
+  const mutedRef = useRef(false);
+  const streamOpenRef = useRef(false);
   const userSpeakingRef = useRef(false);
   const pttAtRef = useRef(0);
   const flashTimer = useRef<number | undefined>(undefined);
@@ -48,6 +58,7 @@ export function useVoiceSession() {
     micRef.current = null;
     transportRef.current?.close();
     transportRef.current = null;
+    streamOpenRef.current = false;
     mockCallRef.current?.close();
     mockCallRef.current = null;
     playerRef.current?.close();
@@ -67,6 +78,27 @@ export function useVoiceSession() {
     dispatch({ type: "local_interrupt" });
     flashInterrupted();
   }, [flashInterrupted]);
+
+  /** Open the stream (or re-arm the mic gate after a reconnect or a mic start). Never while muted. */
+  const openStream = useCallback(() => {
+    const t = transportRef.current;
+    if (!STREAMING || !t || mutedRef.current) return;
+    if (!streamOpenRef.current) {
+      const msg: VoiceClientMessage = { type: "stream_start", sample_rate: 16000 };
+      if (!t.sendJson(msg)) return;
+      streamOpenRef.current = true;
+    }
+    micRef.current?.setGate(true);
+  }, []);
+
+  /** Close the stream. `flush` finalises the open utterance into a turn (push-to-talk release); otherwise it is dropped. */
+  const closeStream = useCallback((flush: boolean) => {
+    micRef.current?.setGate(false);
+    if (!streamOpenRef.current) return;
+    streamOpenRef.current = false;
+    const msg: VoiceClientMessage = { type: "stream_stop", flush };
+    transportRef.current?.sendJson(msg);
+  }, []);
 
   const onServer = useCallback((ev: AnyServerEvent) => {
     if (isVoiceEvent(ev)) {
@@ -95,9 +127,11 @@ export function useVoiceSession() {
       }
       userSpeakingRef.current = false;
       dispatch({ type: "speaking", user: false });
+      // Streamed: the server endpoints the turn from the frames it already has.
+      if (STREAMING) return;
       if (ev.durationMs < MIN_UTTERANCE_MS) return;
       dispatch({ type: "local_turn", id: `local-${++idRef.current}`, via: "voice", text: "" });
-      if (!t?.sendAudio(ev.wav)) dispatch({ type: "notice", message: "Connection lost. That turn was not sent." });
+      if (!t?.sendAudio(ev.wav ?? new ArrayBuffer(0))) dispatch({ type: "notice", message: "Connection lost. That turn was not sent." });
     },
     [interruptNow],
   );
@@ -109,6 +143,11 @@ export function useVoiceSession() {
 
   const onSocketStatus = useCallback((g: number, s: ConnStatus) => {
     if (g !== gen.current || s === "closed") return;
+    if (s !== "open") {
+      // The server discards an open stream when its socket goes away; reopen after the reconnect.
+      streamOpenRef.current = false;
+      micRef.current?.setGate(false);
+    }
     const status = callStatusOf(s);
     dispatch({ type: "status", status });
     callDispatch({ type: "status", status });
@@ -118,6 +157,7 @@ export function useVoiceSession() {
     if (g !== gen.current) return;
     dispatch({ type: "status", status: "live", error: null });
     callDispatch({ type: "status", status: "live" });
+    if (modeRef.current === "hands_free") openStream();
     if (!reconnected) return;
     // The socket dropped mid-session: rebuild the conversation from the server snapshot.
     const snap = await getVoiceSnapshot(sid);
@@ -134,7 +174,7 @@ export function useVoiceSession() {
       timing: t.timing ?? null,
     }));
     dispatch({ type: "hydrate", exchanges, items: snap.items });
-  }, []);
+  }, [openStream]);
 
   const start = useCallback(
     async (opts: VoiceStartOptions) => {
@@ -146,6 +186,8 @@ export function useVoiceSession() {
       // Create the player inside the click that started the session so the browser allows audio.
       playerRef.current = new PcmPlayer();
       modeRef.current = "hands_free";
+      mutedRef.current = false;
+      streamOpenRef.current = false;
       userSpeakingRef.current = false;
       dispatch({
         type: "begin",
@@ -189,13 +231,17 @@ export function useVoiceSession() {
       }
 
       if (MOCK) {
-        transportRef.current = openMockVoice(opts.role, MOCK_SPEED, { onEvent: onServer, onLocal }, true);
+        transportRef.current = openMockVoice(opts.role, MOCK_SPEED, { onEvent: onServer, onLocal }, true, {
+          streaming: STREAMING,
+          warmFirst: new URLSearchParams(window.location.search).get("warm") === "1",
+        });
         if (opts.role === "practice" && callId) {
           // The mock call timeline supplies the practice-mode cards and coverage.
           mockCallRef.current = openMockCall(callId, MOCK_SPEED, { onEvent: onServer, onStatus: () => {} });
         }
         dispatch({ type: "status", status: "live" });
         if (opts.role === "practice") callDispatch({ type: "status", status: "live" });
+        openStream();
         return;
       }
 
@@ -205,7 +251,8 @@ export function useVoiceSession() {
         onOpen: (again) => void onSocketOpen(g, sessionId, again),
       });
 
-      const mic = new MicEngine(envNow, onLocal);
+      const sink = STREAMING ? (pcm: ArrayBuffer) => void transportRef.current?.sendAudio(pcm) : undefined;
+      const mic = new MicEngine(envNow, onLocal, sink);
       micRef.current = mic;
       try {
         await mic.start();
@@ -213,9 +260,11 @@ export function useVoiceSession() {
         if (!alive()) return;
         const why = err instanceof Error ? err.message : String(err);
         dispatch({ type: "notice", message: `Microphone unavailable (${why}). Type your turns instead.` });
+        return;
       }
+      if (alive() && modeRef.current === "hands_free") openStream();
     },
-    [envNow, onLocal, onServer, onSocketOpen, onSocketStatus, teardown],
+    [envNow, onLocal, onServer, onSocketOpen, onSocketStatus, openStream, teardown],
   );
 
   const sendText = useCallback(
@@ -230,30 +279,68 @@ export function useVoiceSession() {
     [interruptNow],
   );
 
-  const setMode = useCallback((mode: VoiceInputMode) => {
-    modeRef.current = mode;
-    micRef.current?.setMode(mode);
-    dispatch({ type: "set", patch: { mode } });
-  }, []);
+  const setMode = useCallback(
+    (mode: VoiceInputMode) => {
+      modeRef.current = mode;
+      micRef.current?.setMode(mode);
+      // Leaving hands-free drops any utterance still open; entering it re-opens the stream.
+      if (mode === "ptt") closeStream(false);
+      else openStream();
+      dispatch({ type: "set", patch: { mode } });
+    },
+    [closeStream, openStream],
+  );
 
-  const setMuted = useCallback((muted: boolean) => {
-    micRef.current?.setMuted(muted);
-    dispatch({ type: "set", patch: { muted } });
-  }, []);
+  const setMuted = useCallback(
+    (muted: boolean) => {
+      mutedRef.current = muted;
+      micRef.current?.setMuted(muted);
+      if (muted) closeStream(false);
+      else if (modeRef.current === "hands_free") openStream();
+      dispatch({ type: "set", patch: { muted } });
+    },
+    [closeStream, openStream],
+  );
 
   /** Push-to-talk. Without a mic (mock mode) the same speech events are synthesised here. */
   const pttDown = useCallback(() => {
-    if (micRef.current) return micRef.current.pttDown();
-    if (!MOCK || modeRef.current !== "ptt") return;
+    if (modeRef.current !== "ptt") return;
+    if (micRef.current) {
+      if (STREAMING) openStream();
+      return micRef.current.pttDown();
+    }
+    if (!MOCK) return;
     pttAtRef.current = Date.now();
+    if (STREAMING) openStream();
     onLocal({ kind: "speech_start" });
-  }, [onLocal]);
+  }, [onLocal, openStream]);
 
   const pttUp = useCallback(() => {
-    if (micRef.current) return micRef.current.pttUp();
+    if (micRef.current) {
+      micRef.current.pttUp();
+      if (STREAMING) closeStream(true);
+      return;
+    }
     if (!MOCK || modeRef.current !== "ptt") return;
     onLocal({ kind: "speech_end", wav: new ArrayBuffer(0), durationMs: Math.max(0, Date.now() - pttAtRef.current) });
-  }, [onLocal]);
+    if (STREAMING) closeStream(true);
+  }, [closeStream, onLocal]);
+
+  /** Barge-in from the keyboard (Esc): only while Sidekick is thinking or talking. */
+  const interrupt = useCallback(() => {
+    if (busyRef.current || (playerRef.current?.isSpeaking() ?? false)) interruptNow();
+  }, [interruptNow]);
+
+  const pinChip = useCallback((itemId: string) => {
+    const msg: VoiceClientMessage = { type: "pin", item_id: itemId };
+    transportRef.current?.sendJson(msg);
+  }, []);
+
+  const dismissChip = useCallback((itemId: string) => {
+    dispatch({ type: "chip_remove", itemId });
+    const msg: VoiceClientMessage = { type: "dismiss", item_id: itemId };
+    transportRef.current?.sendJson(msg);
+  }, []);
 
   const setVoice = useCallback((voice: string) => {
     dispatch({ type: "set", patch: { voice } });
@@ -292,18 +379,24 @@ export function useVoiceSession() {
     callDispatch({ type: "reset" });
   }, [teardown]);
 
-  /** Fill `out` with the signal to draw: agent audio while it plays, otherwise the mic. */
-  const readLevel = useCallback((out: Uint8Array<ArrayBuffer>) => {
-    const p = playerRef.current;
-    if (p?.isSpeaking()) return p.level(out);
+  /** Mic level for the orb: the real analyser, or a synthetic signal in mock mode while the rep is speaking. */
+  const readMic = useCallback((out: Uint8Array<ArrayBuffer>) => {
     if (MOCK && userSpeakingRef.current) {
-      const now = Date.now();
-      for (let i = 0; i < out.length; i++) {
-        out[i] = 128 + Math.round(70 * Math.sin(i * 0.21 + now * 0.012) * (0.55 + 0.45 * Math.sin(i * 0.031 + now * 0.004)));
-      }
+      synth(out, Date.now(), 70);
       return;
     }
-    if (micRef.current) return micRef.current.level(out);
+    if (micRef.current && !mutedRef.current) micRef.current.level(out);
+    else out.fill(128);
+  }, []);
+
+  /** Sidekick (or the practice customer) speech level, from the playback analyser. */
+  const readAgent = useCallback((out: Uint8Array<ArrayBuffer>) => {
+    const p = playerRef.current;
+    if (p?.isSpeaking()) {
+      if (MOCK) synth(out, Date.now(), 46);
+      else p.level(out);
+      return;
+    }
     out.fill(128);
   }, []);
 
@@ -330,10 +423,21 @@ export function useVoiceSession() {
     setMuted,
     pttDown,
     pttUp,
+    interrupt,
     setVoice,
     resolveCard,
-    readLevel,
+    pinChip,
+    dismissChip,
+    readMic,
+    readAgent,
   };
+}
+
+/** Fake waveform for mock mode: a breathing signal around the midpoint, amplitude `amp` out of 128. */
+function synth(out: Uint8Array<ArrayBuffer>, now: number, amp: number): void {
+  for (let i = 0; i < out.length; i++) {
+    out[i] = 128 + Math.round(amp * Math.sin(i * 0.21 + now * 0.012) * (0.55 + 0.45 * Math.sin(i * 0.031 + now * 0.004)));
+  }
 }
 
 export type VoiceSession = ReturnType<typeof useVoiceSession>;

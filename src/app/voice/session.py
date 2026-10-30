@@ -1,7 +1,12 @@
-"""VoiceSession: one voice conversation (SPEC 9.1 to 9.4).
+"""VoiceSession: one voice conversation (SPEC 9.1 to 9.4, 9.6, 9.7).
 
-A turn is one user utterance (a WAV from the client, or typed text). Per turn:
-  1. STT (WAV only): `user_text` event with stt_ms.
+A turn is one user utterance. It arrives three ways, and all three run the same turn pipeline:
+  - streamed PCM (`stream_start`, then binary PCM16 frames): streaming STT emits `user_partial` while the user
+    talks and a final at the endpoint (700 ms of silence, or `stream_stop` with flush). The final starts the turn.
+  - a whole WAV (the compatibility path, client-side VAD): STT runs once, then the turn starts.
+  - typed text.
+Per turn:
+  1. `user_text` with stt_ms.
   2. Practice: the rep's text goes into the call session as an `agent` final, so enrichment, decide,
      cards and coverage run exactly as for a live call. Assistant: context = linked call + KB hits.
   3. One LLM stream. Text before `<<ITEMS>>` is the spoken reply: each `agent_text` delta goes out at once,
@@ -9,6 +14,10 @@ A turn is one user utterance (a WAV from the client, or typed text). Per turn:
      order (`audio` events, seq 0..n). Text after the delimiter is parsed into items after the audio.
   4. Practice: the reply text is injected into the call session as a `customer` final.
   5. `turn_done` with timing, and the turn is persisted (voice_turns, voice_items).
+
+While the user talks (streamed or not), voice/live.py analyses the partials and the finals: `live` events
+(sentiment, intent, signals, coverage) and provisional `suggestion` chips. The chips can be pinned (`pin`) or
+dismissed (`dismiss`). The end-of-turn <<ITEMS>> list stays authoritative.
 
 Interrupt (`interrupt` message, or a new turn while one runs) cancels the LLM stream and every in-flight
 TTS stream, closes them, and ends the turn with interrupted=true. The partial reply is kept.
@@ -22,26 +31,38 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any, Awaitable, Callable, Optional
 
 from config import Settings
+from enrich.rules import Rules, load_rules
 from history import schema as hs
 from llm import LlmClient, LlmUnavailable
 from models import now_ms
 from sidekick.playbooks import Playbook, PracticeScenario
 from sidekick.retrieval import Hit, Retriever
 from store.base import Store
+from stt.base import TranscriptEvent
+from stt.vad import EnergyVad
 
 from voice.items import ReplySplitter, parse_items
+from voice.live import LiveAnalyzer
+from voice.logs import vlog
 from voice.prompts import assistant_messages, call_text, practice_messages
+from voice.resilience import RetryPolicy, WarmState, call_with_warmup
 from voice.sentences import SentenceChunker
-from voice.tts import TtsUnavailable
+from voice.stream import MAX_FRAME_BYTES, LiveStt
+from voice.tts import PcmChunk, TtsUnavailable
 
 log = logging.getLogger("sidekick.voice")
 
 VOICE_RE = re.compile(r"^[a-z]{2}_[a-z]+$")
 MAX_SESSION_TURNS = 500
 KB_BUDGET_S = 1.5
+RATE = 16000
+FRAME_MS = 100
+# Events a slow socket may lose: captions and analysis are refreshed constantly, so dropping one is harmless.
+LOSSY = frozenset({"user_partial", "live", "suggestion"})
 
 
 class Transcriber:
@@ -56,6 +77,11 @@ class Speaker:
     def stream(self, text: str, voice: str) -> Any: ...
 
 
+@lru_cache(maxsize=1)
+def _default_rules() -> Rules:
+    return load_rules()
+
+
 @dataclass
 class VoiceDeps:
     settings: Settings
@@ -68,6 +94,10 @@ class VoiceDeps:
     finish_call: Callable[[str], Awaitable[None]]
     new_practice_call: Callable[[str], Awaitable[str]]
     history: Any = None                        # HistorySink (SPEC 3.7); None in tests means no history
+    # Streaming input (SPEC 9.2): builds the decoder for one stream from a status emitter. None = streaming off.
+    stream_decoder: Optional[Callable[[Callable[[dict[str, Any]], None]], Any]] = None
+    vad: Any = None                            # voice-activity gate for streams; None = energy VAD
+    rules_for: Optional[Callable[[str], Rules]] = None
 
 
 @dataclass
@@ -81,6 +111,7 @@ class _Turn:
     customer_injected: bool = False
     items: list[dict[str, Any]] = field(default_factory=list)
     cancellable: bool = False       # True only while this turn's LLM/TTS/STT work is in flight
+    warm_tts: Optional[WarmState] = None
 
 
 def _ms(since: float) -> float:
@@ -104,12 +135,31 @@ class VoiceSession:
         self.items: list[dict[str, Any]] = []
         self.closed = False
         self.opened = False
+        self.dropped_events = 0
+        self.dropped_frames = 0
         self._pending_practice = False
         self._current: Optional[_Turn] = None   # the turn whose work may be interrupted
         self._task: Optional[asyncio.Task[None]] = None
         self._hub_q: Optional[asyncio.Queue[Optional[dict[str, Any]]]] = None
         self._hub: Any = None
         self._hub_task: Optional[asyncio.Task[None]] = None
+        self._stream: Optional[LiveStt] = None
+        self._stream_task: Optional[asyncio.Task[None]] = None
+        self._flushing: set[asyncio.Task[None]] = set()
+        self._stt_seq = 0
+        self._deadline: Optional[asyncio.Task[None]] = None
+        rules = (deps.rules_for or (lambda _name: _default_rules()))(playbook.name)
+        self.live = LiveAnalyzer(
+            session_id=session_id, role=role, playbook_title=playbook.title,
+            methodology=[(m.key, m.label) for m in playbook.methodology], rules=rules,
+            llm=deps.llm, fast_model=deps.settings.fast_model, emit=self._emit,
+            context=self._live_context, scenario=scenario.title if scenario else None,
+            debounce_s=deps.settings.live_debounce_ms / 1000.0,
+            min_new_words=deps.settings.live_min_new_words,
+            suggest_interval_s=deps.settings.live_suggest_interval_s,
+            suggest_timeout_s=deps.settings.live_suggest_timeout_s,
+            max_tokens=deps.settings.live_suggest_max_tokens,
+        )
 
     # ------------------------------------------------------------ plumbing
     @property
@@ -120,12 +170,37 @@ class VoiceSession:
     def busy(self) -> bool:
         return self._task is not None and not self._task.done()
 
+    @property
+    def streaming(self) -> bool:
+        return self._stream is not None
+
+    def _user_label(self) -> str:
+        """Speaker label for the user's own speech in live events: the assistant's user, or the practice rep."""
+        return "user" if self.role == "assistant" else "agent"
+
     def _emit(self, event: dict[str, Any]) -> None:
         event.setdefault("emitted_at_ms", now_ms())
+        if event.get("type") in LOSSY and self.out.qsize() >= self.settings.voice_out_queue_max:
+            self.dropped_events += 1
+            return
         self.out.put_nowait(event)
 
     def _error(self, turn: int, stage: str, exc: BaseException | str) -> None:
         self._emit({"type": "error", "turn": turn, "stage": stage, "message": str(exc)[:300]})
+
+    def _warm(self, stage: str, turn: int) -> WarmState:
+        return WarmState(stage, lambda ev: self._emit({**ev, "turn": turn}))
+
+    def _policy(self) -> RetryPolicy:
+        s = self.settings
+        return RetryPolicy(budget_s=s.voice_warmup_budget_s, base_s=s.voice_retry_base_s, cap_s=s.voice_retry_cap_s)
+
+    def _max_wav_bytes(self) -> int:
+        seconds_cap = int(self.settings.voice_max_turn_audio_s * RATE * 2) + 44
+        return min(self.settings.voice_max_audio_bytes, seconds_cap)
+
+    def _live_context(self) -> str:
+        return "\n".join(f"{m['role']}: {m['content']}" for m in self.history[-6:])
 
     def attach_call_events(self, hub: Any) -> None:
         """Practice (or a linked assistant call): forward the call's events on this session's socket."""
@@ -153,21 +228,126 @@ class VoiceSession:
         self._hub_q = None
         self._hub_task = None
 
+    def arm_deadline(self, seconds: float) -> None:
+        """Wall-clock limit for the socket (voice_max_session_minutes). On expiry the session says so and ends."""
+        if self._deadline is None:
+            self._deadline = asyncio.ensure_future(self._expire_after(seconds))
+
+    async def _expire_after(self, seconds: float) -> None:
+        await asyncio.sleep(seconds)
+        vlog("limit_hit", session_id=self.session_id, limit="max_session_minutes")
+        self._emit({"type": "session_ended", "reason": "max_session_minutes"})
+        await self.close()
+        self.out.put_nowait(None)
+
     # ------------------------------------------------------------- inputs
     def submit_audio(self, wav: bytes) -> None:
         if not wav:
             raise ValueError("empty audio turn")
         if wav[:4] != b"RIFF" or wav[8:12] != b"WAVE":
             raise ValueError("each binary frame must be one complete WAV turn (16 kHz mono PCM16)")
-        if len(wav) > self.settings.voice_max_audio_bytes:
-            raise ValueError("audio turn is too long (max 30 s of 16 kHz mono PCM16)")
+        if len(wav) > self._max_wav_bytes():
+            raise ValueError(f"audio turn is too long (max {self.settings.voice_max_turn_audio_s:g} s of 16 kHz mono PCM16)")
         self._start_turn(wav=wav)
 
-    def submit_text(self, text: str) -> None:
-        text = (text or "").strip()
+    def stream_start(self, sample_rate: int = RATE, endpoint_silence_ms: Optional[int] = None) -> None:
+        """Open a streaming input (SPEC 9.2). A stream already open is discarded first."""
+        if self.closed:
+            raise ValueError("voice session is closed")
+        if sample_rate != RATE:
+            raise ValueError("sample_rate must be 16000 (16 kHz mono PCM16)")
+        silence = self.settings.voice_endpoint_silence_ms if endpoint_silence_ms is None else int(endpoint_silence_ms)
+        if not 300 <= silence <= 2000:
+            raise ValueError("endpoint_silence_ms must be between 300 and 2000")
+        if self.deps.stream_decoder is None:
+            raise ValueError("streaming input is not available in this process")
+        self.abort_stream()
+        stream = LiveStt(
+            speaker=self._user_label(), decoder=self.deps.stream_decoder(self._status_emitter()),
+            vad=self.deps.vad or EnergyVad(self.settings.vad_rms_threshold), next_seq=self._next_stt_seq,
+            on_partial=self._on_stream_partial, on_final=self._on_stream_final,
+            frame_s=self.settings.stt_frame_s, window_s=self.settings.stt_window_s,
+            hold_words=self.settings.stt_hold_words, endpoint_silence_ms=silence,
+            max_turn_ms=self.settings.voice_max_turn_audio_s * 1000.0,
+            queue_max=self.settings.voice_stream_queue_max,
+        )
+        self._stream = stream
+        self._stream_task = asyncio.ensure_future(self._run_stream(stream))
+        vlog("stream_started", session_id=self.session_id, turn=self.turn + 1, endpoint_silence_ms=silence)
+        self._emit({"type": "stream_started", "sample_rate": RATE, "endpoint_silence_ms": silence,
+                    "frame_ms": FRAME_MS})
+
+    def stream_frame(self, pcm: bytes) -> None:
+        """One binary PCM16 frame. Frames are dropped (and counted) when the stream falls behind."""
+        live = self._stream
+        if live is None:
+            raise ValueError("binary frame is not a WAV turn and no stream is open; WAV turns carry a RIFF header, "
+                             "and streamed PCM needs stream_start first")
+        if not pcm or len(pcm) % 2:
+            raise ValueError("stream frame must be whole PCM16 samples")
+        if len(pcm) > MAX_FRAME_BYTES:
+            raise ValueError("stream frame is too large (max 1 s of 16 kHz mono PCM16)")
+        if not live.push(pcm):
+            self.dropped_frames += 1
+            if self.dropped_frames == 1 or self.dropped_frames % 50 == 0:
+                vlog("stream_backpressure", session_id=self.session_id, turn=self.turn + 1,
+                     dropped_frames=self.dropped_frames, level=logging.WARNING)
+
+    def stream_stop(self, flush: bool = True) -> None:
+        """Close the stream. flush=True finalises the open utterance into a turn (push-to-talk release).
+        flush=False discards it (mute)."""
+        live, task = self._stream, self._stream_task
+        if live is None:
+            return
+        self._stream = None
+        self._stream_task = None
+        if flush:
+            live.end()
+            if task is not None:
+                self._flushing.add(task)
+                task.add_done_callback(self._flushing.discard)
+        elif task is not None and not task.done():
+            task.cancel()
+        vlog("stream_stopped", session_id=self.session_id, turn=self.turn + 1, flush=flush,
+             dropped_frames=live.dropped)
+        self._emit({"type": "stream_stopped", "flush": flush, "dropped_frames": live.dropped})
+
+    def abort_stream(self) -> None:
+        """Discard the open stream without a final (mute, socket close, a new stream_start)."""
+        if self._stream is not None:
+            self.stream_stop(flush=False)
+
+    async def _run_stream(self, live: LiveStt) -> None:
+        try:
+            await live.run()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a broken stream is reported, the socket stays up
+            vlog("stream_failed", session_id=self.session_id, turn=self.turn + 1, level=logging.WARNING,
+                 error=type(exc).__name__)
+            self._error(self.turn + 1, "stt", exc)
+
+    def _status_emitter(self) -> Callable[[dict[str, Any]], None]:
+        return lambda ev: self._emit({**ev, "turn": self.turn + 1})
+
+    def _next_stt_seq(self) -> int:
+        self._stt_seq += 1
+        return self._stt_seq
+
+    def _on_stream_partial(self, ev: TranscriptEvent) -> None:
+        turn = self.turn + 1
+        self._emit({"type": "user_partial", "turn": turn, "text": ev.text, "seq": ev.seq,
+                    "first_word_ms": ev.first_word_ms})
+        self.live.on_partial(turn, ev.text, self._user_label())
+
+    def _on_stream_final(self, ev: TranscriptEvent) -> None:
+        text = (ev.text or "").strip()
         if not text:
-            raise ValueError("text turn is empty")
-        self._start_turn(text=text)
+            return
+        try:
+            self._start_turn(text=text, stt_ms=ev.commit_ms)
+        except ValueError as exc:
+            self._error(self.turn + 1, "llm", exc)
 
     def interrupt(self) -> None:
         """Barge-in: cancel the running turn while its work is in flight. Its cleanup emits
@@ -175,6 +355,12 @@ class VoiceSession:
         interrupt that arrives after turn_done is ignored."""
         if self.busy and self._current is not None and self._current.cancellable:
             self._task.cancel()
+
+    def submit_text(self, text: str) -> None:
+        text = (text or "").strip()
+        if not text:
+            raise ValueError("text turn is empty")
+        self._start_turn(text=text)
 
     def start_opening(self) -> None:
         """Practice only: the customer speaks the scenario's opening line once, as turn 0."""
@@ -197,6 +383,7 @@ class VoiceSession:
                 self.scenario = self.playbook.scenario(scenario_key) or self.playbook.scenarios[0]
                 self._pending_practice = True
                 # The call is created by ensure_practice_call() when the socket applies the config.
+            self.live.set_role(role, self.scenario.title if (role == "practice" and self.scenario) else None)
 
     async def ensure_practice_call(self, hub: Any) -> None:
         """After a role switch to practice: create the call the rep's and customer's turns go into."""
@@ -205,20 +392,42 @@ class VoiceSession:
             self._pending_practice = False
             self.attach_call_events(hub)
 
-    def _start_turn(self, *, wav: Optional[bytes] = None, text: Optional[str] = None) -> None:
+    # --------------------------------------------------------- pin / dismiss
+    async def pin(self, item_id: str) -> dict[str, Any]:
+        """A provisional suggestion becomes an outcome item (SPEC 9.7). Same id, same persistence as <<ITEMS>>."""
+        item = {k: v for k, v in self.live.take(item_id).items() if k != "provisional"}
+        item["created_at_ms"] = now_ms()
+        await self._persist_item(item)
+        vlog("pin", session_id=self.session_id, turn=item["turn"], kind=item["kind"])
+        self._emit({"type": "item", "turn": item["turn"], "item": _wire_item(item)})
+        return item
+
+    def dismiss(self, item_id: str) -> None:
+        self.live.drop(item_id)
+
+    # ----------------------------------------------------------------- turn
+    def _start_turn(self, *, wav: Optional[bytes] = None, text: Optional[str] = None,
+                    stt_ms: Optional[float] = None) -> None:
         if self.turn >= MAX_SESSION_TURNS:
             raise ValueError("turn limit reached for this session")
         prev = self._task
         if prev is not None and not prev.done() and self._current is not None and self._current.cancellable:
             prev.cancel()          # a new turn while one is speaking is a barge-in
         self.turn += 1
-        self._task = asyncio.ensure_future(self._run(self.turn, prev, wav=wav, text=text))
+        self._task = asyncio.ensure_future(self._run(self.turn, prev, wav=wav, text=text, stt_ms=stt_ms))
 
     async def close(self) -> None:
-        """Socket closed: stop the running turn, detach, and end a practice call (it lives with the socket)."""
+        """Socket closed (or the session limit was hit): stop the running turn, detach, and end a practice call
+        (it lives with the socket)."""
         if self.closed:
             return
         self.closed = True
+        vlog("session_closed", session_id=self.session_id, role=self.role, turns=self.turn,
+             dropped_events=self.dropped_events, dropped_frames=self.dropped_frames)
+        self.live.close()
+        self.abort_stream()
+        if self._deadline is not None and self._deadline is not asyncio.current_task():
+            self._deadline.cancel()
         if self.busy:
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
@@ -229,13 +438,14 @@ class VoiceSession:
             except Exception:  # noqa: BLE001
                 log.exception("ending practice call failed")
 
-    # --------------------------------------------------------------- turn
     async def _run(self, turn_no: int, prev: Optional[asyncio.Task[None]], *, wav: Optional[bytes] = None,
-                   text: Optional[str] = None, opening: Optional[str] = None) -> None:
+                   text: Optional[str] = None, opening: Optional[str] = None,
+                   stt_ms: Optional[float] = None) -> None:
         t0 = time.monotonic()
         rec = _Turn(turn=turn_no, opening=opening is not None)
         rec.timing = {"stt_ms": None, "llm_first_token_ms": None, "tts_first_audio_ms": None,
                       "first_audio_ms": None, "total_ms": None}
+        rec.warm_tts = self._warm("tts", turn_no)
         interrupted = False
         try:
             if prev is not None:
@@ -243,13 +453,17 @@ class VoiceSession:
             rec.cancellable = True
             self._current = rec
             if opening is not None:
+                vlog("turn_start", session_id=self.session_id, turn=turn_no, input="opening")
                 await self._reply(rec, t0, messages=None, fixed_text=opening)
             else:
-                user_text = await self._user_text(rec, wav, text)
+                source = "wav" if wav is not None else ("stream" if stt_ms is not None else "text")
+                vlog("turn_start", session_id=self.session_id, turn=turn_no, input=source)
+                user_text = await self._user_text(rec, wav, text, stt_ms)
                 rec.user_text = user_text
-                if user_text and self.role == "practice":
-                    self._inject("agent", user_text)
                 if user_text:
+                    if self.role == "practice":
+                        self._inject("agent", user_text)
+                    self.live.on_final(turn_no, user_text, self._user_label())
                     messages = await self._messages(user_text)
                     await self._reply(rec, t0, messages=messages, fixed_text=None)
         except asyncio.CancelledError:
@@ -265,16 +479,19 @@ class VoiceSession:
                 rec.customer_injected = True
             await self._finish_turn(rec, t0, interrupted=interrupted, spoken=spoken)
 
-    async def _user_text(self, rec: _Turn, wav: Optional[bytes], text: Optional[str]) -> str:
+    async def _user_text(self, rec: _Turn, wav: Optional[bytes], text: Optional[str],
+                         stt_ms: Optional[float] = None) -> str:
         if wav is None:
-            rec.timing["stt_ms"] = 0.0
+            rec.timing["stt_ms"] = float(stt_ms or 0.0)
             user_text = (text or "").strip()
         else:
             t = time.monotonic()
             try:
-                user_text = (await self.deps.stt.transcribe(wav) or "").strip()
+                raw = await call_with_warmup(lambda: self.deps.stt.transcribe(wav), self._warm("stt", rec.turn),
+                                             self._policy(), sleep=asyncio.sleep)
+                user_text = (raw or "").strip()
             except Exception as exc:  # noqa: BLE001 - STT failure: no reply this turn, the session goes on
-                log.warning("voice STT failed: %s", exc)
+                log.warning("voice STT failed: %s", type(exc).__name__)
                 self._error(rec.turn, "stt", exc)
                 user_text = ""
             rec.timing["stt_ms"] = _ms(t)
@@ -376,16 +593,24 @@ class VoiceSession:
             rec.items = parse_items(splitter.items_raw, turn=rec.turn, session_id=self.session_id, now_ms=now_ms())
 
     async def _speak(self, rec: _Turn, sentence: str, q: asyncio.Queue[Any]) -> None:
-        """One sentence through Kokoro into its queue. The stream is always closed, even on cancel."""
-        gen = self.deps.tts.stream(sentence, self.voice)
+        """One sentence through Kokoro into its queue. A cold endpoint is retried before the first audio arrives
+        (SPEC 9.6). The stream is always closed, even on cancel."""
+        gen: Any = None
         try:
-            async for chunk in gen:
-                q.put_nowait(chunk)
+            gen, first = await call_with_warmup(
+                lambda: _first_chunk(self.deps.tts, sentence, self.voice),
+                rec.warm_tts or self._warm("tts", rec.turn), self._policy(), sleep=asyncio.sleep,
+            )
+            if first is not None:
+                q.put_nowait(first)
+                async for chunk in gen:
+                    q.put_nowait(chunk)
         except TtsUnavailable as exc:
-            log.warning("TTS failed for one sentence: %s", exc)
+            log.warning("TTS failed for one sentence: %s", type(exc).__name__)
             self._error(rec.turn, "tts", exc)
         finally:
-            await gen.aclose()
+            if gen is not None:
+                await gen.aclose()
             q.put_nowait(None)
 
     async def _emit_audio(self, rec: _Turn, t0: float,
@@ -409,6 +634,15 @@ class VoiceSession:
                 seq += 1
 
     # ------------------------------------------------------------ finish
+    async def _persist_item(self, item: dict[str, Any]) -> None:
+        self.items.append(item)
+        try:
+            await self.deps.store.put_voice_item(self.session_id, item)
+        except Exception:  # noqa: BLE001 - persistence is best effort during the session
+            log.exception("voice item persist failed")
+        if self.deps.history is not None:
+            self.deps.history.emit("voice_items", hs.voice_item_row(self.session_id, item))
+
     async def _finish_turn(self, rec: _Turn, t0: float, *, interrupted: bool, spoken: str) -> None:
         rec.timing["total_ms"] = _ms(t0)
         agent_text = spoken
@@ -417,13 +651,7 @@ class VoiceSession:
         if agent_text:
             self.history.append({"role": "assistant", "content": agent_text})
         for item in rec.items:
-            self.items.append(item)
-            try:
-                await self.deps.store.put_voice_item(self.session_id, item)
-            except Exception:  # noqa: BLE001 - persistence is best effort during the session
-                log.exception("voice item persist failed")
-            if self.deps.history is not None:
-                self.deps.history.emit("voice_items", hs.voice_item_row(self.session_id, item))
+            await self._persist_item(item)
             self._emit({"type": "item", "turn": rec.turn, "item": _wire_item(item)})
         row = {"turn": rec.turn, "role": self.role, "user_text": rec.user_text, "agent_text": agent_text,
                "interrupted": interrupted, "timing": dict(rec.timing), "created_at_ms": now_ms()}
@@ -435,6 +663,11 @@ class VoiceSession:
                 log.exception("voice turn persist failed")
             if self.deps.history is not None:
                 self.deps.history.emit("voice_turns", hs.voice_turn_row(self.session_id, row))
+        if self.role == "practice" and spoken and not interrupted:
+            self.live.on_final(rec.turn, spoken, "customer", suggest=False)
+        self.live.retire_turn(rec.turn)
+        vlog("turn_done", session_id=self.session_id, turn=rec.turn, interrupted=interrupted,
+             items=len(rec.items), total_ms=rec.timing.get("total_ms"), first_audio_ms=rec.timing.get("first_audio_ms"))
         self._emit({"type": "turn_done", "turn": rec.turn, "interrupted": interrupted, "timing": rec.timing})
 
     # ------------------------------------------------------------ helpers
@@ -449,10 +682,26 @@ class VoiceSession:
             "call_id": self.call_id, "voice": self.voice,
             "scenario": self.scenario.key if self.scenario else None,
             "turns": list(self.turns), "items": [_wire_item(i) for i in self.items],
+            "sentiment": list(self.live.series),
+            "suggestions": list(self.live.provisional.values()),
+            "streaming": self.streaming, "dropped_frames": self.dropped_frames,
         }
+
+
+async def _first_chunk(tts: Speaker, sentence: str, voice: str) -> tuple[Any, Optional[PcmChunk]]:
+    """Open one sentence's TTS stream and read its first chunk. Returns (generator, chunk or None when empty).
+    Raises TtsUnavailable (cold or not) before any audio, so the caller may retry. The generator is closed on error."""
+    gen = tts.stream(sentence, voice)
+    try:
+        first = await gen.__anext__()
+    except StopAsyncIteration:
+        return gen, None
+    except BaseException:
+        await gen.aclose()
+        raise
+    return gen, first
 
 
 def _wire_item(item: dict[str, Any]) -> dict[str, Any]:
     keys = ("item_id", "session_id", "turn", "kind", "text", "owner", "due", "source_doc", "created_at_ms")
     return {k: item.get(k) for k in keys}
-
