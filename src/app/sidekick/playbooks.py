@@ -39,6 +39,22 @@ class ComplianceSpec:
 
 
 @dataclass(frozen=True)
+class PracticeScenario:
+    """A practice persona (SPEC 9): Sidekick plays the customer. `voice` is a Kokoro preset."""
+    key: str
+    title: str
+    persona: str
+    voice: str
+    opening: str
+    objections: tuple[str, ...]
+    goals: tuple[str, ...]
+
+    def to_wire(self) -> dict:
+        return {"key": self.key, "name": self.key, "title": self.title, "persona": self.persona, "voice": self.voice,
+                "opening": self.opening, "objections": list(self.objections), "goals": list(self.goals)}
+
+
+@dataclass(frozen=True)
 class KbDoc:
     doc_id: str          # path relative to playbooks/, e.g. "kb/advisor_coach/fee_objections.md"
     title: str
@@ -57,7 +73,11 @@ class Playbook:
     prompts: dict[str, str]
     kb_docs: tuple[KbDoc, ...]
     replay_scripts: tuple[str, ...] = ()
+    scenarios: tuple[PracticeScenario, ...] = ()
     extra: dict[str, Any] = field(default_factory=dict, compare=False)
+
+    def scenario(self, key: Optional[str]) -> Optional[PracticeScenario]:
+        return next((s for s in self.scenarios if s.key == key), None)
 
     def rules_extension(self) -> dict[str, Any]:
         """Shape consumed by enrich.rules.extend_rules."""
@@ -112,6 +132,14 @@ def load_playbook(path: Path, playbooks_root: Path, replay_dir: Optional[Path] =
         ComplianceSpec(key=c["key"], title=c.get("title", "Compliance"), message=c["message"], patterns=tuple(c["patterns"]))
         for c in raw.get("compliance", [])
     )
+    scenarios = tuple(
+        PracticeScenario(
+            key=str(sc["key"]), title=sc.get("title", sc["key"]), persona=sc.get("persona", "").strip(),
+            voice=sc.get("voice", "af_heart"), opening=sc.get("opening", "").strip(),
+            objections=tuple(sc.get("objections") or ()), goals=tuple(sc.get("goals") or ()),
+        )
+        for sc in raw.get("practice") or []
+    )
     scripts: tuple[str, ...] = ()
     if replay_dir is not None and replay_dir.exists():
         scripts = tuple(sorted(p.stem.split("__", 1)[1] for p in replay_dir.glob(f"{name}__*.jsonl")))
@@ -126,6 +154,7 @@ def load_playbook(path: Path, playbooks_root: Path, replay_dir: Optional[Path] =
         prompts=dict(raw.get("prompts") or {}),
         kb_docs=kb_docs,
         replay_scripts=scripts,
+        scenarios=scenarios,
     )
 
 

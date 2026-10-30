@@ -88,12 +88,19 @@ class LlmClient:
             self._sdk_config = Config()  # respects DATABRICKS_CONFIG_PROFILE / Apps env
         return self._sdk_config
 
-    async def _url_and_headers(self, model: str, suffix: str) -> tuple[str, dict[str, str]]:
+    async def workspace_auth(self) -> tuple[str, dict[str, str]]:
+        """Workspace host and the app's auth headers (service principal in Apps, profile locally).
+        Re-authenticated on every call so OAuth tokens refresh. Shared by every serving client
+        (chat, embeddings, multipart audio, the Kokoro TTS stream in voice/tts.py)."""
         cfg = self._config()
         host = (cfg.host or "").rstrip("/")
         if not host:
             raise LlmUnavailable("no Databricks host configured")
         headers = await asyncio.to_thread(cfg.authenticate)
+        return host, dict(headers)
+
+    async def _url_and_headers(self, model: str, suffix: str) -> tuple[str, dict[str, str]]:
+        host, headers = await self.workspace_auth()
         headers = {**headers, "Content-Type": "application/json"}
         return f"{host}/serving-endpoints/{model}/{suffix}", headers
 
@@ -186,22 +193,39 @@ class LlmClient:
             self._record_fail(exc)
             raise LlmUnavailable(str(exc)) from exc
 
-    async def invoke(self, endpoint: str, payload: dict[str, Any], *, timeout: Optional[float] = None,
-                     url: Optional[str] = None) -> dict[str, Any]:
-        """Raw JSON invocation of any serving endpoint (used for the Parakeet STT endpoint).
-        `url` overrides the workspace path; route-optimized endpoints need their data-plane URL."""
+    async def json_post(self, endpoint: str, payload: dict[str, Any], *, timeout: Optional[float] = None) -> dict[str, Any]:
+        """Raw JSON POST to {endpoint}/invocations, e.g. the Databricks whisper endpoint's {"inputs": [...]} contract.
+        Same auth and breaker as the other calls."""
         await self._guard()
         try:
-            if url:
-                headers = {**await asyncio.to_thread(self._config().authenticate), "Content-Type": "application/json"}
-            else:
-                url, headers = await self._url_and_headers(endpoint, "invocations")
+            url, headers = await self._url_and_headers(endpoint, "invocations")
             resp = await self._client().post(url, headers=headers, json=payload, timeout=timeout or self._s.llm_timeout_s)
             if resp.status_code >= 400:
                 raise LlmUnavailable(f"HTTP {resp.status_code}: {resp.text[:200]}")
+            body = resp.json()
             self._record_ok()
-            return resp.json()
+            return body
         except Exception as exc:  # noqa: BLE001
+            self._record_fail(exc)
+            raise LlmUnavailable(str(exc)) from exc
+
+    async def multipart(self, endpoint: str, route: str, *, files: dict[str, Any], data: dict[str, str],
+                        timeout: Optional[float] = None) -> dict[str, Any]:
+        """Multipart POST to a serving endpoint route, e.g. `audio/transcriptions` for Parakeet
+        (SPEC 3.3). Same workspace auth and circuit breaker as the JSON calls. Content-Type is left to
+        httpx so the multipart boundary is set. Returns the parsed JSON body."""
+        await self._guard()
+        try:
+            host, headers = await self.workspace_auth()
+            url = f"{host}/serving-endpoints/{endpoint}/{route}"
+            resp = await self._client().post(url, headers=headers, files=files, data=data,
+                                             timeout=timeout or self._s.llm_timeout_s)
+            if resp.status_code >= 400:
+                raise LlmUnavailable(f"HTTP {resp.status_code}: {resp.text[:200]}")
+            body = resp.json()
+            self._record_ok()
+            return body
+        except Exception as exc:  # noqa: BLE001 - every failure is a degradation, not a crash
             self._record_fail(exc)
             raise LlmUnavailable(str(exc)) from exc
 

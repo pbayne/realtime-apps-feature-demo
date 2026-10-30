@@ -2,25 +2,44 @@ import { useCallback, useEffect, useRef } from "react";
 import { Console } from "./components/Console";
 import { PostCallSummary } from "./components/PostCallSummary";
 import { StartScreen } from "./components/StartScreen";
+import { VoiceConsole } from "./components/voice/VoiceConsole";
 import { MOCK, useCallSession } from "./lib/useCallSession";
-import type { StartOptions } from "./lib/types";
+import { useVoiceSession } from "./lib/voice/useVoiceSession";
+import type { StartOptions, VoiceRole, VoiceStartOptions } from "./lib/types";
 
 export default function App() {
   const session = useCallSession();
+  const voice = useVoiceSession();
   const { state } = session;
+  const vState = voice.state;
+  // A voice session owns the screen from the moment it starts until the rep returns to the start screen.
+  // A voice start that failed before a session existed falls through to the start screen with its error.
+  const voiceActive = vState.status !== "idle" && !(vState.status === "error" && !vState.sessionId);
 
-  // Demo convenience: ?autostart=1[&playbook=<name>][&script=<name>][&mode=replay|mic] starts a call
-  // straight away, against the real backend or in ?mock=1 mode. Used for headless screenshots.
+  // Demo convenience (?autostart=1): starts a call straight away.
+  //   ?mode=replay|mic                       call console (real backend or ?mock=1)
+  //   ?mock=1&voice=assistant|practice       simulated voice session (no backend, no mic)
+  //   &playbook=<name>&script=<name>|scenario=<name>
   const autostarted = useRef(false);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (autostarted.current || params.get("autostart") !== "1") return;
     autostarted.current = true;
-    const mode = params.get("mode") === "mic" ? "mic" : "replay";
     const playbook = params.get("playbook") || "advisor_coach";
+    const voiceRole = params.get("voice");
+    if (voiceRole) {
+      if (!MOCK) return;
+      const role: VoiceRole = voiceRole === "practice" ? "practice" : "assistant";
+      const scenario =
+        params.get("scenario") ||
+        (role === "practice" ? (playbook === "contact_center" ? "billing_dispute" : "fee_objection") : undefined);
+      void voice.start({ role, playbook, scenario, voice: "af_heart" });
+      return;
+    }
+    const mode = params.get("mode") === "mic" ? "mic" : "replay";
     const script = params.get("script") || (playbook === "contact_center" ? "billing_dispute" : "fee_objection");
     void session.start({ playbook, mode, script: mode === "replay" ? script : undefined });
-  }, [session.start]);
+  }, [session.start, voice.start]);
 
   const onStart = useCallback(
     (opts: StartOptions) => {
@@ -29,9 +48,22 @@ export default function App() {
     [session.start],
   );
 
+  const onStartVoice = useCallback(
+    (opts: VoiceStartOptions) => {
+      void voice.start(opts);
+    },
+    [voice.start],
+  );
+
+  if (voiceActive) {
+    return <VoiceConsole api={voice} onNew={voice.reset} />;
+  }
+
+  const startError = vState.status === "error" ? vState.error ?? undefined : state.error;
+
   // Start screen before any call, or after a failed start (error shown there).
-  if (state.status === "idle" || (state.status === "error" && !state.callId)) {
-    return <StartScreen error={state.error} onStart={onStart} />;
+  if (state.status === "idle" || (state.status === "error" && !state.callId) || vState.status === "error") {
+    return <StartScreen error={startError} onStart={onStart} onStartVoice={onStartVoice} />;
   }
 
   if (state.status === "ended") {

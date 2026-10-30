@@ -104,26 +104,38 @@ RTM enrichment is **deterministic + cheap** (lexicon/regex for objections,
 methodology keyword hits, entity regex, sentiment lexicon, question intent) so it stays
 sub-second inside Spark. LLM perception runs app-side (section 4) and is merged with the RTM row.
 
-### 3.3 Parakeet STT endpoint **[v0.2: contract pinned; the app and the notebook agree]**
-Implemented by `src/notebooks/register_parakeet.py` (MLflow pyfunc, `dataframe_records`) and called by
-`src/app/stt/parakeet.py`.
+### 3.3 Parakeet STT endpoint **[v0.3: adopt the field-eng audio-serving server]**
+Deployed by `src/notebooks/register_parakeet.py`, ported from
+`reference/custom-llm-serving-solutions/audio-serving/parakeet-tdt-0.6b-v3.ipynb`: a Custom LLM Serving
+entrypoint (FastAPI + NeMo, bf16, 5 ms micro-batching, task `llm/v1/audio/transcriptions`,
+`env_pack="databricks_model_serving"`), GPU_MEDIUM (A10), scale-to-zero **off**, **not** route-optimized
+(unproven for custom-entrypoint audio endpoints). Called from both the call path (`stt/parakeet.py`
+rolling-window decoder) and voice mode.
 
-Request (one record per window; PCM16 little-endian, mono, 16 kHz; ≤ 30 s; rolling window of 12 s):
-```json
-{"dataframe_records": [{"audio_b64": "<base64 PCM16>", "offset_ms": 12340, "channel": "customer"}]}
-```
-Response:
-```json
-{"predictions": [{"text": "i want to think about the fees",
-                  "words": [{"word": "i", "start_ms": 12340, "end_ms": 12420}],
-                  "audio_ms": 4300, "channel": "customer", "model": "nvidia/parakeet-tdt-0.6b-v3"}]}
-```
-- Word times are **absolute on the call timeline**: the endpoint adds `offset_ms`. The app does not add it again.
-- The app also accepts the MLflow-wrapped form `{"predictions": {"predictions": [...]}}`.
-- A response with `text` and no `words` gets its text spread evenly over the window.
-- Auth: OAuth M2M for route-optimized endpoints. Post to the data-plane URL in `STT_ENDPOINT_URL`
-  (from `data_plane_info.query_info.endpoint_url`). `STT_ENDPOINT` is the workspace endpoint name used when
-  the URL is unset. Decoding failures are fail-soft: no words that window.
+Request: multipart `POST {host}/serving-endpoints/{STT_ENDPOINT}/audio/transcriptions`
+with `file` (16 kHz mono PCM16 **WAV**, ≤ 30 s), `model` (endpoint name), `response_format=verbose_json`.
+Response: `{"duration": 4.3, "text": "...", "segments": [{"start","end","text"}], "words": [{"word","start","end"}]}`
+- Times are **seconds relative to the clip**. The caller converts to absolute call time:
+  `start_ms = offset_ms + round(start * 1000)`. The endpoint does not know about channels.
+- Auth: the app's service principal via `WorkspaceClient().config.authenticate()` headers on the workspace
+  host. No data-plane URL. Failures are fail-soft (no words for that window / turn).
+- Local dev stand-in: any Databricks-hosted Whisper endpoint with the same route (e.g. `shared-whisper`
+  on e2-demo) if it supports `/audio/transcriptions`; otherwise the replay/browser sources.
+
+### 3.3a Kokoro TTS endpoint **[v0.3]**
+Deployed by `src/notebooks/register_kokoro.py`, ported verbatim from
+`reference/custom-llm-serving-solutions/audio-serving/kokoro-tts/` (`serving/kokoro_server.py`,
+`serving/adapter.py`, 01-serving cells): placeholder ChatModel with an `entrypoint` (4 Kokoro workers +
+adapter), `kokoro==0.9.4 misaki[en]==0.9.4`, GPU_MEDIUM (A10), workload Small, scale-to-zero **off**.
+
+Request: `POST {host}/serving-endpoints/{TTS_ENDPOINT}/invocations`
+`{"messages":[{"role":"user","content":"<one sentence>"}],"voice":"af_heart","stream":true}` (optional `speed`).
+Response: SSE `chat.completion.chunk`. First `delta.content` is a header
+`#audio/pcm;rate=24000;channels=1;format=s16le;...\n` (skip it); each later chunk is base64 raw s16le mono
+24 kHz PCM; ends with `finish_reason:"stop"` then `[DONE]`.
+- One request per sentence. Keep sentences short (the worker holds the GPU per sentence).
+- Always close the HTTP stream on cancel (an unread stream can stall a Kokoro worker).
+- Voices: 54 presets, `af_heart` default; the practice-customer persona picks its own voice per playbook.
 
 ### 3.4 Card
 ```json
@@ -282,3 +294,58 @@ contact_center is over budget. That is the sonnet compose stream and is an open 
 ## 8. Packaging **[v0.2]**
 The DAB app's `source_code_path` is `src/app`, so everything the app reads at runtime lives under `src/app`:
 `playbooks/`, `data/replay/`, and `enrich/enrich_rules.json`. The KB index job reads `${workspace.file_path}/src/app/playbooks/kb`.
+
+## 9. Voice mode **[v0.3]**
+Two-way voice inside the same Databricks App. **Only Databricks-hosted models** (Parakeet STT, Claude on
+Databricks serving, Kokoro TTS). Two roles, switchable per session:
+- `assistant`: the rep talks to Sidekick before / during / after a call ("what should I ask next?",
+  "summarize", "draft the follow-up"). Context = the linked call's transcript, cards, coverage (if any) +
+  playbook KB retrieval.
+- `practice`: Sidekick plays the **customer** from a playbook scenario (persona, goals, objections to raise).
+  The rep's speech is the `agent` channel and the AI customer's speech is the `customer` channel of a normal
+  call session, so the existing Sidekick pipeline (enrichment → decide → cards, coverage) coaches live.
+
+### 9.1 Session REST
+`POST /api/voice/sessions {"role":"assistant|practice","playbook":"advisor_coach","scenario":"fee_objection"?,"call_id":"<link>"?,"voice":"af_heart"?}`
+→ `{"session_id","call_id"}` (practice always creates a call_id; assistant may link one).
+`GET /api/voice/sessions/{id}` → snapshot (turns, items). `GET /api/voices` → TTS voice list.
+`GET /api/playbooks` gains `scenarios` per playbook (practice personas, from playbook YAML `practice:`).
+
+### 9.2 WebSocket `/ws/voice/{session_id}`
+Client → server:
+- binary frame = **one complete user turn** as 16 kHz mono PCM16 WAV (client-side VAD decides turn end).
+- `{"type":"interrupt"}` = barge-in: server cancels LLM + all in-flight TTS streams for the current turn and
+  records the partial reply as interrupted.
+- `{"type":"text","text":"..."}` = typed turn (same pipeline, no STT).
+- `{"type":"config","voice":..,"role":..}` = change voice/role mid-session.
+Server → client (in order per turn; `turn` increments per user turn):
+```
+{"type":"user_text","turn":3,"text":"...","stt_ms":180}
+{"type":"agent_text","turn":3,"delta":"tokens"}                 (spoken reply text, streamed)
+{"type":"audio","turn":3,"seq":0,"rate":24000,"pcm_b64":"..."}  (s16le mono; play in seq order)
+{"type":"item","turn":3,"item":{Item}}                           (0..n per turn, after the spoken reply)
+{"type":"turn_done","turn":3,"interrupted":false,"timing":{"stt_ms","llm_first_token_ms","tts_first_audio_ms","first_audio_ms","total_ms"}}
+{"type":"error","turn":3,"stage":"stt|llm|tts","message":"..."}
+```
+In practice mode the session also pushes the normal call events (transcript.final, enrichment, card.*,
+coverage) for its `call_id` on the same socket, so one UI can show both.
+
+### 9.3 Item (structured outcome of a turn)
+`{"item_id","session_id","turn","kind","text","owner"?,"due"?,"source_doc"?,"created_at_ms"}`
+`kind ∈ action_item | follow_up_question | follow_up_response | next_step | summary | risk | note`.
+Persisted to Lakebase table `voice_items` (and `voice_turns(session_id, turn, role, user_text, agent_text,
+interrupted, timing JSON, created_at_ms)`), both added to the app DDL **and** `init.py` (parity test).
+
+### 9.4 One LLM call per turn
+The voice model streams the **spoken reply first**, then a delimiter line `<<ITEMS>>`, then a JSON array of
+items. The app sends text before the delimiter to TTS sentence-by-sentence (split on `[.!?]\s+`; the first
+chunk may end at `,;:—` once ≥ 25 chars; strip markdown/emoji; `VOICE_RULES` appended to the prompt, from
+the reference app) and parses the JSON after it (tolerant; parse failure = no items, never breaks audio).
+Each sentence's TTS stream starts as soon as the sentence is complete; playback order is preserved.
+`VOICE_MODEL` env (default `databricks-claude-haiku-5-5` with thinking disabled); measure first-token.
+
+### 9.5 Targets
+first audio (user stops speaking → first audible reply) ≤ 1.2 s p50 in-region; STT ≤ 250 ms; TTS first
+audio ≤ 200 ms; barge-in stops playback ≤ 150 ms client-side and cancels server work ≤ 300 ms.
+Browser: AudioWorklet capture, echoCancellation + noiseSuppression, energy VAD (start 200 ms, end 800 ms,
+preroll 300 ms, barge-in 300 ms at 2× threshold) — ported from the reference `index.html`.

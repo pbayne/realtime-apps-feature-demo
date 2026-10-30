@@ -74,16 +74,30 @@ export type ClientMessage =
   // SPEC addition (requested for backend): browser Web Speech API fallback results.
   | { type: "browser_stt"; speaker: Speaker; text: string; is_final: boolean };
 
-/** One playbook as the UI uses it. Built by normalizePlaybooks() in lib/api.ts. */
-export type PlaybookSummary = { name: string; label: string; persona: string };
+/** A practice scenario (SPEC §9.1: playbook YAML `practice:`). `persona` and `voice` are optional. */
+export interface PracticeScenario {
+  name: string;
+  title: string;
+  persona?: string;
+  voice?: string;
+}
 
-/** GET /api/playbooks returns {"playbooks": [{name, title, persona, card_weights, methodology, ...}]}.
+/** One playbook as the UI uses it. Built by normalizePlaybooks() in lib/api.ts. */
+export interface PlaybookSummary {
+  name: string;
+  label: string;
+  persona: string;
+  scenarios: PracticeScenario[];
+}
+
+/** GET /api/playbooks returns {"playbooks": [{name, title, persona, card_weights, methodology, scenarios, ...}]}.
  *  `label` and a bare array are accepted too, so an older backend still works. */
 export interface PlaybookApi {
   name: string;
   title?: string;
   label?: string;
   persona?: string;
+  scenarios?: unknown;
 }
 
 export type Mode = "replay" | "mic";
@@ -92,4 +106,73 @@ export interface StartOptions {
   playbook: string;
   mode: Mode;
   script?: string;
+}
+
+// ---- Voice mode (SPEC §9, v0.3) ----------------------------------------------------------------
+
+export type VoiceRole = "assistant" | "practice";
+
+export type OutcomeKind =
+  | "action_item"
+  | "follow_up_question"
+  | "follow_up_response"
+  | "next_step"
+  | "summary"
+  | "risk"
+  | "note";
+
+/** SPEC §9.3 Item: structured outcome of one turn. */
+export interface VoiceItem {
+  item_id: string;
+  session_id?: string;
+  turn: number;
+  kind: OutcomeKind;
+  text: string;
+  owner?: string | null;
+  due?: string | null;
+  source_doc?: string | null;
+  created_at_ms: number;
+}
+
+/** SPEC §9.2 turn_done.timing. Every field is optional so partial timings render. */
+export interface VoiceTiming {
+  stt_ms?: number | null;
+  llm_first_token_ms?: number | null;
+  tts_first_audio_ms?: number | null;
+  first_audio_ms?: number | null;
+  total_ms?: number | null;
+}
+
+/** Server -> client voice events on /ws/voice/{session_id} (SPEC §9.2). */
+export type VoiceServerEvent =
+  | { type: "user_text"; turn: number; text: string; stt_ms?: number | null }
+  | { type: "agent_text"; turn: number; delta: string }
+  | { type: "audio"; turn: number; seq: number; rate: number; pcm_b64: string }
+  | { type: "item"; turn: number; item: VoiceItem }
+  | { type: "turn_done"; turn: number; interrupted: boolean; timing?: VoiceTiming }
+  | { type: "error"; turn: number; stage: "stt" | "llm" | "tts"; message: string };
+
+/** Client -> server on /ws/voice/{session_id}. Binary frames carry one user turn as WAV.
+ *  `feedback` is a SPEC gap: card resolutions in practice mode are sent on the same socket. */
+export type VoiceClientMessage =
+  | { type: "interrupt" }
+  | { type: "text"; text: string }
+  | { type: "config"; voice?: string; role?: VoiceRole }
+  | { type: "feedback"; card_id: string; action: "accept" | "reject" | "edit"; text?: string };
+
+/** Anything that can arrive on the voice socket: voice turn events plus the call events of practice mode. */
+export type AnyServerEvent = ServerEvent | VoiceServerEvent;
+
+export interface VoiceOption {
+  id: string;
+  label: string;
+}
+
+export interface VoiceStartOptions {
+  role: VoiceRole;
+  playbook: string;
+  scenario?: string;
+  /** Assistant only: link an existing call for context. */
+  callId?: string;
+  voice: string;
 }

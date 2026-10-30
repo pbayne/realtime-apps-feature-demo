@@ -7,6 +7,7 @@
 #   KAFKA_BOOTSTRAP_SERVERS, KAFKA_SECURITY, KAFKA_USERNAME, KAFKA_PASSWORD <- secret resources
 #     (KAFKA_SECURITY: SASL_SSL_PLAIN | SASL_SSL_SCRAM_SHA_256 | SASL_SSL_SCRAM_SHA_512)
 #   STT_ENDPOINT, FAST_MODEL, SMART_MODEL, EMBED_MODEL                     <- serving endpoint resources
+#   TTS_ENDPOINT, VOICE_MODEL                                              <- serving endpoint resources (voice mode)
 resources:
   apps:
     call_sidekick_app:
@@ -50,7 +51,7 @@ resources:
           secret: {scope: "${var.secret_scope}", key: kafka_app_api_secret, permission: READ}
 
         - name: parakeet-stt
-          description: Route-optimized GPU STT endpoint (created by register_parakeet.py)
+          description: GPU audio STT endpoint, Parakeet (created by register_parakeet.py; not route-optimized)
           serving_endpoint: {name: "${var.parakeet_endpoint}", permission: CAN_QUERY}
 
         - name: fast-llm
@@ -64,3 +65,12 @@ resources:
         - name: embedding
           description: Embeddings for KB retrieval
           serving_endpoint: {name: "${var.embed_model}", permission: CAN_QUERY}
+
+        # Voice mode (SPEC 9). Kokoro (GPU, always on) and the voice chat model.
+        - name: kokoro-tts
+          description: Kokoro-82M text-to-speech (created by register_kokoro.py; voice mode)
+          serving_endpoint: {name: "${var.kokoro_endpoint}", permission: CAN_QUERY}
+
+        - name: voice-llm
+          description: Voice mode model (haiku, thinking disabled)
+          serving_endpoint: {name: "${var.voice_model}", permission: CAN_QUERY}

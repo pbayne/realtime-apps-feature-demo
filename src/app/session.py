@@ -126,6 +126,7 @@ class CallSession:
         self._spec_retrieval: dict[str, asyncio.Task[list[Hit]]] = {}
         self._spec_inflight: Optional[asyncio.Task[list[Hit]]] = None
         self._compliance_seqs: set[int] = set()
+        self._t0 = time.monotonic()
 
     # ------------------------------------------------------------- lifecycle
     @property
@@ -183,6 +184,20 @@ class CallSession:
             log.exception("STT channel %s failed", session.speaker)
             self.deps.hub.emit(self.call_id, {"type": "error", "scope": "stt", "speaker": session.speaker,
                                               "message": str(exc)[:200]})
+
+    def inject_final(self, speaker: str, text: str, *, commit_ms: float = 0.0) -> None:
+        """Voice practice (SPEC 9): a final utterance from a non-audio source (the rep's typed or spoken turn,
+        or the AI customer's reply). It takes the same path as a server STT final."""
+        text = (text or "").strip()
+        if self.ended or not text:
+            return
+        if speaker not in ("agent", "customer"):
+            raise ValueError("speaker must be agent or customer")
+        now_rel = int((time.monotonic() - self._t0) * 1000)
+        self._events.put_nowait(TranscriptEvent(
+            kind="final", speaker=speaker, seq=self.next_seq(), text=text,
+            t_start_ms=now_rel, t_end_ms=now_rel, first_word_ms=0.0, commit_ms=commit_ms,
+        ))
 
     def browser_result(self, speaker: str, msg: dict[str, Any]) -> None:
         """Browser Web Speech result (WS text message `browser_stt` or /ws/audio text frame)."""

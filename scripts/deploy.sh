@@ -7,7 +7,8 @@
 #                     | SASL_SSL_SCRAM_SHA_512 | SASL_SSL_MSK_IAM (jobs only; the app producer needs a user/password mode)
 #
 # Environment:
-#   DEPLOY_PARAKEET=1   also run the one-off Parakeet registration (GPU; needs quota)
+#   DEPLOY_VOICE=1      also register both GPU endpoints for voice mode: Parakeet (STT) and Kokoro (TTS)
+#   DEPLOY_PARAKEET=1   register only the Parakeet endpoint (GPU; needs quota). Implied by DEPLOY_VOICE=1.
 #   SIDEKICK_SCOPE       secret scope name (default call-sidekick)
 #   BUNDLE_VAR_*        any bundle variable can be overridden, e.g. BUNDLE_VAR_project_id
 #
@@ -18,7 +19,7 @@
 #   4. app deploy (its secret bindings need the Lakebase keys written in step 3)
 #   5. KB index job (blocking)
 #   6. RTM enrichment job and Delta history job (continuous, --no-wait)
-#   7. optional Parakeet registration (blocking; creates the GPU endpoint)
+#   7. optional GPU endpoints (blocking; cost: two always-on A10G endpoints, see README "Voice mode")
 #
 # The generated Postgres password is stored in the secret scope by the setup job.
 # It is never printed.
@@ -118,10 +119,16 @@ db bundle run call_sidekick_kb_index --target dev
 db bundle run call_sidekick_rtm_enrich --target dev --no-wait
 db bundle run call_sidekick_delta_history --target dev --no-wait
 
-# --- 7. Parakeet (opt-in) --------------------------------------------------
-if [[ "${DEPLOY_PARAKEET:-0}" == "1" ]]; then
+# --- 7. GPU endpoints (opt-in) ---------------------------------------------
+# Parakeet is the call path's STT and the voice mode's STT. Kokoro is voice mode's TTS. Both are Custom LLM
+# Serving endpoints on A10G with scale-to-zero off, so each bills while it exists.
+if [[ "${DEPLOY_VOICE:-0}" == "1" || "${DEPLOY_PARAKEET:-0}" == "1" ]]; then
   db bundle run call_sidekick_parakeet_register --target dev
-  echo "Parakeet registered. Note the data-plane URL printed by the job for the app."
+  echo "Parakeet endpoint registered (sidekick-parakeet by default; the app reads it through STT_ENDPOINT)."
+fi
+if [[ "${DEPLOY_VOICE:-0}" == "1" ]]; then
+  db bundle run call_sidekick_kokoro_register --target dev
+  echo "Kokoro endpoint registered (sidekick-kokoro by default; the app reads it through TTS_ENDPOINT)."
 fi
 
 cat <<EOF

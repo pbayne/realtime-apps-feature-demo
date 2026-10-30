@@ -148,56 +148,58 @@ search summary of the Lakebase structured-streaming docs.
   jobs run on separate job clusters, so they never take RTM task slots.
 - **Fixed-cadence delta history.** `delta_history.py` uses `toTable()` on a plain
   micro-batch stream with `processingTime="5 seconds"` (or `availableNow` for backfill). It has no `foreachBatch`.
-- **Route-optimized STT endpoint, created by notebook.** The DAB model-serving resource schema
-  was not verified for `route_optimized`, so `register_parakeet.py` creates it through the SDK.
-  The app declares `CAN_QUERY` on it as an app resource.
+- **GPU audio endpoints, Custom LLM Serving.** Parakeet (STT) and Kokoro (TTS) are logged with the
+  `llm/v1/audio/transcriptions` and `llm/v1/chat` tasks and a FastAPI entrypoint, following the field-eng
+  audio-serving reference. Neither is route-optimized: the app calls them through the workspace host with its
+  service principal. The app declares `CAN_QUERY` on each as an app resource.
 
-## Parakeet STT endpoint
+## Parakeet STT endpoint (contract v0.3, SPEC 3.3)
 
-### Request / response
+Deployed by `src/notebooks/register_parakeet.py` from `src/notebooks/parakeet_serving/asr_server.py`
+(NeMo, bf16, 5 ms micro-batching). Endpoint `sidekick-parakeet` by default, `GPU_MEDIUM`, scale-to-zero off.
 
-Request (one record per window, PCM16 LE, mono, 16 kHz, ≤ 30 s):
+Request: multipart `POST {host}/serving-endpoints/{STT_ENDPOINT}/audio/transcriptions` with
+`file` (16 kHz mono PCM16 WAV, ≤ 30 s), `model` (the endpoint name), `response_format=verbose_json`.
 
-```json
-{"dataframe_records": [{"audio_b64": "<base64 PCM16>", "offset_ms": 12340, "channel": "customer"}]}
-```
+Response: `{"duration", "text", "segments": [{"start","end","text"}], "words": [{"word","start","end"}]}`.
+Times are seconds relative to the clip. The app converts them: `start_ms = offset_ms + round(start * 1000)`.
 
-Response:
+Auth is the app's service principal (`LlmClient.multipart`, the same workspace auth as the other calls).
+A failed window yields no words for the call path, and a failed turn yields a voice error event.
 
-```json
-{"predictions": [{
-  "text": "i want to think about the fees",
-  "words": [{"word": "i", "start_ms": 12340, "end_ms": 12420}],
-  "audio_ms": 4300,
-  "channel": "customer",
-  "model": "nvidia/parakeet-tdt-0.6b-v3"
-}]}
-```
+The call path's rolling-window decoder (`stt/parakeet.py`, SPEC 1) sends 12 s windows every 0.4 s. Voice mode
+sends one WAV per user turn through `ParakeetTranscriber`.
 
-The SPEC's streaming scheme (12 s rolling window, re-decoded every 0.4 s,
-LocalAgreement-2 commit) runs in the app's `stt/parakeet.py`. This endpoint only
-transcribes one window per call.
+For local development against the e2-demo workspace, `STT_PROTOCOL=whisper_json` points voice mode at the
+Databricks-hosted `shared-whisper` endpoint. It takes `{"inputs": [base64 WAV]}` on `/invocations` (not multipart)
+and returns `predictions` as strings. That switch applies to voice mode only.
 
-### How the app calls it (route-optimized)
+## Voice mode (SPEC 9)
 
-1. Create an OAuth M2M credential for a service principal (the App's SP, or a dedicated one).
-   Grant it `CAN_QUERY` on the endpoint. The App resource does this for the App's own SP.
-2. Exchange client credentials for a token at the workspace's OIDC endpoint
-   (`POST https://<workspace-host>/oidc/v1/token`, `grant_type=client_credentials`, `scope=all-apis`).
-3. Read the data-plane URL: `GET /api/2.0/serving-endpoints/parakeet-live` and
-   take `data_plane_info.query_info.endpoint_url`. `register_parakeet.py` prints
-   this block at the end of its run. **Field names are from memory and must be
-   checked against the printed output.**
-4. POST the request body to that URL. Do not use the workspace
-   `/serving-endpoints/<name>/invocations` path for route-optimized endpoints. Set the app
-   env `STT_ENDPOINT_URL` to it; `STT_ENDPOINT` (default `parakeet-live`) is used only when the
-   URL is unset.
+Two-way voice inside the same App, using only Databricks-hosted models: Parakeet (STT), Claude on Databricks
+serving (the voice model), and Kokoro-82M (TTS).
 
-The app (`src/app/stt/parakeet.py`) sends exactly the request above, with `offset_ms` set to the
-window start and `channel` set to `agent` or `customer`. It reads word times as absolute call time,
-because the endpoint adds `offset_ms`.
+- **assistant**: the rep talks to Sidekick before, during or after a call. Context is the linked call's transcript,
+  coverage and cards (if linked), plus playbook KB hits.
+- **practice**: Sidekick plays the customer from a playbook `practice:` scenario (persona, opening line, objections,
+  goals). The rep's turns and the customer's replies run through a normal call session, so enrichment, decide,
+  cards and coverage run live and their events arrive on the voice socket too.
 
-The app should cache the token and refresh before expiry.
+Endpoints: `POST /api/voice/sessions`, `GET /api/voice/sessions/{id}`, `GET /api/voices`, `WS /ws/voice/{id}`.
+`GET /api/playbooks` lists the scenarios. Each binary WebSocket frame is one complete 16 kHz mono PCM16 WAV turn.
+
+One LLM call per turn: the spoken reply streams first, then `<<ITEMS>>`, then a JSON array of structured items
+(`action_item`, `next_step`, `summary`, and so on), persisted to `voice_items`. Each turn is persisted to
+`voice_turns`. Sentences go to Kokoro as they complete, and audio is emitted in sentence order.
+
+Configuration (env, defaults in `src/app/config.py`): `VOICE_MODEL=databricks-claude-haiku-5-5` (thinking disabled),
+`TTS_ENDPOINT=sidekick-kokoro`, `TTS_VOICE=af_heart`, `STT_ENDPOINT=sidekick-parakeet`.
+
+Local development against e2-demo: `STT_PROTOCOL=whisper_json` uses the Databricks-hosted `shared-whisper` endpoint
+as the STT stand-in. Kokoro is not deployed there, so local TTS needs a deployed `sidekick-kokoro` (or
+`TTS_ENDPOINT` pointed at one).
+
+Measured on e2-demo (2026-10-29): see the report notes in the PR description. Targets are in SPEC 9.5.
 
 ## Repository layout
 
@@ -206,14 +208,16 @@ databricks.yml                 bundle variables and the dev target (no host)
 resources/
   cluster.yml                  RTM cluster (classic, fixed workers, RTM conf)
   lakebase.yml                 Lakebase project, UC schema, checkpoint volume
-  job.yml                      setup, rtm_enrich, delta_history, kb_index, post_call_scoring, parakeet_register
+  job.yml                      setup, rtm_enrich, delta_history, kb_index, post_call_scoring, parakeet_register, kokoro_register
   app.yml                      Databricks App and its secret and serving-endpoint resources
 src/notebooks/
   init.py                      Lakebase role, SPEC §3 tables, NOTIFY trigger, Kafka topics, secrets
   rtm_lib.py                   shared pure functions (rules, enrichment expressions, Kafka options)
   rtm_enrich.py                Kafka → RTM → native postgresql sink
   delta_history.py             Kafka → Delta bronze (micro-batch, not RTM)
-  register_parakeet.py         NeMo pyfunc → UC; route-optimized GPU endpoint
+  register_parakeet.py         Parakeet audio serving (Custom LLM task) → UC → GPU endpoint
+  register_kokoro.py           Kokoro-82M TTS serving (chat task, 4 workers) → UC → GPU endpoint
+  parakeet_serving/, kokoro_serving/   server code the two notebooks log with their models
   build_kb_index.py            src/app/playbooks/kb → Delta → Vector Search index
   post_call_scoring.py         ai_query scoring → gold_call_scores
   enrich_rules.json            shared deterministic rules
@@ -236,7 +240,7 @@ databricks secrets put-secret call-sidekick kafka_app_api_key      # app user (n
 databricks secrets put-secret call-sidekick kafka_app_api_secret
 
 scripts/deploy.sh <profile> <catalog> SASL_SSL_SCRAM_SHA_256  # Redpanda; or SASL_SSL_PLAIN / SASL_SSL_MSK_IAM
-DEPLOY_PARAKEET=1 scripts/deploy.sh <profile> <catalog> SASL_SSL_PLAIN   # also registers Parakeet (GPU)
+DEPLOY_VOICE=1 scripts/deploy.sh <profile> <catalog> SASL_SSL_PLAIN   # also registers Parakeet and Kokoro (GPU)
 ```
 
 Manual equivalent, in order:
@@ -250,6 +254,7 @@ databricks bundle run call_sidekick_kb_index --target dev     # needs src/app/pl
 databricks bundle run call_sidekick_rtm_enrich --target dev --no-wait
 databricks bundle run call_sidekick_delta_history --target dev --no-wait
 databricks bundle run call_sidekick_parakeet_register --target dev   # once, GPU quota needed
+databricks bundle run call_sidekick_kokoro_register --target dev      # voice mode only
 ```
 
 Then restart the app once so it reads the real Lakebase secrets:
@@ -267,7 +272,8 @@ resource names in `resources/app.yml`. Values never live in git.
 |---|---|
 | `LAKEBASE_HOST`, `LAKEBASE_DB`, `LAKEBASE_USER`, `LAKEBASE_PASSWORD` | `lakebase-host`, `lakebase-db`, `lakebase-user`, `lakebase-password` |
 | `KAFKA_BOOTSTRAP`, `KAFKA_API_KEY`, `KAFKA_API_SECRET` | `kafka-bootstrap`, `kafka-api-key`, `kafka-api-secret` |
-| `STT_ENDPOINT`, `STT_ENDPOINT_URL` (optional data-plane URL), `FAST_MODEL`, `SMART_MODEL`, `EMBED_MODEL` | plain values set on the App (defaults in `src/app/config.py`: `parakeet-live`, `databricks-claude-haiku-5-5`, `databricks-claude-sonnet-5-5`, `databricks-gte-large-en`) |
+| `STT_ENDPOINT`, `FAST_MODEL`, `SMART_MODEL`, `EMBED_MODEL` | `parakeet-stt`, `fast-llm`, `smart-llm`, `embedding` (defaults in `src/app/config.py`: `sidekick-parakeet`, `databricks-claude-haiku-5-5`, `databricks-claude-sonnet-5-5`, `databricks-gte-large-en`) |
+| `TTS_ENDPOINT`, `VOICE_MODEL`, `TTS_VOICE` | `kokoro-tts`, `voice-llm`, plain `af_heart` (defaults: `sidekick-kokoro`, `databricks-claude-haiku-5-5`) |
 
 For MSK IAM, delete the two `kafka-api-*` resources in `resources/app.yml`.
 
@@ -279,8 +285,11 @@ For MSK IAM, delete the two `kafka-api-*` resources in `resources/app.yml`.
 - **Lakebase.** `no_suspension: true` at 0.5–2 CU. A warm endpoint is required:
   a cold start on the sink adds latency to the first enrichment of each burst. Expect
   continuous charges.
-- **GPU endpoint.** `GPU_MEDIUM` (A10G), `scale_to_zero_enabled=false`, always on.
-  This is the largest fixed cost. Scale-to-zero would break the STT first-word budget.
+- **GPU endpoints.** `GPU_MEDIUM` (A10G), `scale_to_zero_enabled=false`, always on. Parakeet is the largest
+  fixed cost. Scale-to-zero would break the STT first-word budget.
+- **Voice mode adds a second always-on A10G.** Kokoro (`sidekick-kokoro`) runs continuously, even when no one
+  uses voice. It is the second fixed GPU cost on top of Parakeet, so a voice-only deployment is about two
+  always-on A10G endpoints. Delete the Kokoro endpoint, or skip `DEPLOY_VOICE=1`, to remove it.
 - **Batch.** Post-call scoring runs every 30 minutes on a job cluster. It is idle-cheap.
   Check current pricing before a demo; this README does not quote dollar figures.
 

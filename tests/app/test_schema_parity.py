@@ -37,6 +37,7 @@ def _columns(ddl: str) -> dict[str, dict[str, str]]:
 
 def test_app_and_setup_job_define_the_same_tables_and_columns():
     app, job = _columns(DDL), _columns(_init_ddl())
-    assert set(app) == set(job) == {"calls", "utterances", "enrichments", "cards", "feedback"}
+    assert set(app) == set(job) == {"calls", "utterances", "enrichments", "cards", "feedback",
+                                    "voice_turns", "voice_items"}
     for table in app:
         assert app[table] == job[table], table

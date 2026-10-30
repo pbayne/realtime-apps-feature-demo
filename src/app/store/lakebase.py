@@ -22,7 +22,7 @@ import time
 from typing import Any, Optional
 
 from config import Settings
-from models import CallRecord, Card, Utterance
+from models import CallRecord, Card, Utterance, now_ms
 
 log = logging.getLogger("sidekick.store.lakebase")
 
@@ -45,6 +45,13 @@ CREATE TABLE IF NOT EXISTS cards (
   status TEXT, created_at_ms BIGINT, trace TEXT);
 CREATE TABLE IF NOT EXISTS feedback (
   card_id TEXT NOT NULL, call_id TEXT NOT NULL, action TEXT NOT NULL, edited_text TEXT, at_ms BIGINT);
+CREATE TABLE IF NOT EXISTS voice_turns (
+  session_id TEXT NOT NULL, turn INTEGER NOT NULL, role TEXT, user_text TEXT, agent_text TEXT,
+  interrupted BOOLEAN NOT NULL DEFAULT FALSE, timing TEXT, created_at_ms BIGINT,
+  PRIMARY KEY (session_id, turn));
+CREATE TABLE IF NOT EXISTS voice_items (
+  item_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, turn INTEGER, kind TEXT, text TEXT,
+  owner TEXT, due TEXT, source_doc TEXT, created_at_ms BIGINT);
 """
 
 
@@ -245,3 +252,39 @@ class LakebaseStore:
             "feedback": [dict(r) for r in fb],
             "as_of_ms": int(time.time() * 1000),
         }
+
+    # ------------------------------------------------------------ voice mode
+    async def put_voice_turn(self, session_id: str, row: dict[str, Any]) -> None:
+        # Upserted: an interrupted turn is written once when it ends, and a repair write must not duplicate it.
+        await self._pool.execute(
+            "INSERT INTO voice_turns (session_id, turn, role, user_text, agent_text, interrupted, timing, created_at_ms) "
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (session_id, turn) DO UPDATE SET role=EXCLUDED.role, "
+            "user_text=EXCLUDED.user_text, agent_text=EXCLUDED.agent_text, interrupted=EXCLUDED.interrupted, "
+            "timing=EXCLUDED.timing",
+            session_id, int(row["turn"]), row.get("role"), row.get("user_text"), row.get("agent_text"),
+            bool(row.get("interrupted")), _j(row.get("timing") or {}), int(row.get("created_at_ms") or now_ms()),
+        )
+
+    async def put_voice_item(self, session_id: str, item: dict[str, Any]) -> None:
+        await self._pool.execute(
+            "INSERT INTO voice_items (item_id, session_id, turn, kind, text, owner, due, source_doc, created_at_ms) "
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (item_id) DO NOTHING",
+            item["item_id"], session_id, int(item["turn"]), item.get("kind"), item.get("text"), item.get("owner"),
+            item.get("due"), item.get("source_doc"), int(item["created_at_ms"]),
+        )
+
+    async def voice_snapshot(self, session_id: str) -> dict[str, Any]:
+        turns = await self._pool.fetch(
+            "SELECT turn, role, user_text, agent_text, interrupted, timing, created_at_ms FROM voice_turns "
+            "WHERE session_id=$1 ORDER BY turn", session_id)
+        items = await self._pool.fetch(
+            "SELECT item_id, session_id, turn, kind, text, owner, due, source_doc, created_at_ms FROM voice_items "
+            "WHERE session_id=$1 ORDER BY created_at_ms, item_id", session_id)
+        out_turns = []
+        for r in turns:
+            d = dict(r)
+            if isinstance(d.get("timing"), str):
+                d["timing"] = json.loads(d["timing"])
+            out_turns.append(d)
+        return {"turns": out_turns, "items": [dict(r) for r in items]}
+

@@ -68,3 +68,13 @@ def test_replay_frames_mark_speech_per_channel():
     assert first_agent.speaker == "agent"
     assert src._speaking(first_agent.t_start_ms + 10) is True
     assert src._speaking(first_agent.t_start_ms - 500) is False
+
+
+def test_each_playbook_has_two_practice_scenarios_with_a_known_voice(registry):
+    from voice.tts import VOICES
+
+    for pb in registry.all():
+        assert len(pb.scenarios) == 2, pb.name
+        for sc in pb.scenarios:
+            assert sc.persona and sc.opening and sc.goals and sc.objections, (pb.name, sc.key)
+            assert sc.voice in VOICES, (pb.name, sc.key, sc.voice)

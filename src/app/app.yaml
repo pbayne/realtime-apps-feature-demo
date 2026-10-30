@@ -25,6 +25,13 @@ env:
   # Endpoint names come from the app's serving-endpoint resources.
   - name: STT_ENDPOINT
     valueFrom: parakeet-stt
+  # Voice mode (SPEC 9): Kokoro TTS and the voice chat model. TTS_VOICE is the default voice.
+  - name: TTS_ENDPOINT
+    valueFrom: kokoro-tts
+  - name: VOICE_MODEL
+    valueFrom: voice-llm
+  - name: TTS_VOICE
+    value: af_heart
   - name: FAST_MODEL
     valueFrom: fast-llm
   - name: SMART_MODEL

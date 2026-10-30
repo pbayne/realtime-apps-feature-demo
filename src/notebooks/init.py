@@ -205,6 +205,29 @@ TABLE_DDL = [
         edited_text TEXT,
         at_ms       BIGINT
     )""",
+    # Voice mode (SPEC 9.3): one row per user turn, and the structured items it produced.
+    """CREATE TABLE IF NOT EXISTS voice_turns (
+        session_id    TEXT NOT NULL,
+        turn          INTEGER NOT NULL,
+        role          TEXT,
+        user_text     TEXT,
+        agent_text    TEXT,
+        interrupted   BOOLEAN NOT NULL DEFAULT FALSE,
+        timing        TEXT,
+        created_at_ms BIGINT,
+        PRIMARY KEY (session_id, turn)
+    )""",
+    """CREATE TABLE IF NOT EXISTS voice_items (
+        item_id       TEXT PRIMARY KEY,
+        session_id    TEXT NOT NULL,
+        turn          INTEGER,
+        kind          TEXT,
+        text          TEXT,
+        owner         TEXT,
+        due           TEXT,
+        source_doc    TEXT,
+        created_at_ms BIGINT
+    )""",
     "CREATE INDEX IF NOT EXISTS cards_call_seq_idx ON cards (call_id, seq)",
     "CREATE INDEX IF NOT EXISTS feedback_card_idx ON feedback (card_id)",
     # Trigger: the app LISTENs on enrichment_ready and pushes `enrichment` events.
@@ -236,7 +259,7 @@ with dbapi.connect(
     ] + TABLE_DDL:
         cur.execute(stmt)
     # Table-level grants for both the sink writer and the app (same role in this build).
-    for t in ("calls", "utterances", "enrichments", "cards", "feedback"):
+    for t in ("calls", "utterances", "enrichments", "cards", "feedback", "voice_turns", "voice_items"):
         cur.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON {t} TO "{role}"')
     cur.execute(f'GRANT EXECUTE ON FUNCTION notify_enrichment_ready() TO "{role}"')
 print(f"Role {role} ready; SPEC section 3 tables, indexes, and enrichment_ready trigger in place.")

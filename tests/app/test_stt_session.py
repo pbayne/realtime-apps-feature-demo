@@ -1,6 +1,7 @@
 """StreamingSession end-to-end on synthetic frames: partials, finals, endpointing, fail-soft decode."""
 
 import asyncio
+import json
 import time
 
 from llm import LlmUnavailable
@@ -87,49 +88,101 @@ def test_energy_vad_thresholds():
 
 
 class _DownLlm:
-    async def invoke(self, endpoint, payload, timeout=None, url=None):
+    async def multipart(self, endpoint, route, *, files, data, timeout=None):
         raise LlmUnavailable("down")
-
-
-def test_parakeet_decode_is_fail_soft():
-    dec = ParakeetDecoder(_DownLlm(), "parakeet-live")
-    words = asyncio.run(dec.decode(Window(0, 1000, b"\x00\x00" * 16000, final=False)))
-    assert words == []
 
 
 class _FakeLlm:
     def __init__(self, body):
         self.body = body
-        self.payload = None
+        self.calls = []
 
-    async def invoke(self, endpoint, payload, timeout=None, url=None):
-        self.payload = payload
+    async def multipart(self, endpoint, route, *, files, data, timeout=None):
+        self.calls.append((endpoint, route, files, data))
         return self.body
 
 
-def test_parakeet_parses_word_timestamps_as_absolute_call_time():
-    """The endpoint adds offset_ms (register_parakeet.py), so word times come back on the call timeline."""
-    llm = _FakeLlm({"predictions": [{"words": [{"word": "fees", "start_ms": 5100, "end_ms": 5400},
-                                               {"word": "apply", "start_ms": 5450, "end_ms": 5800}]}]})
-    dec = ParakeetDecoder(llm, "parakeet-live", channel="customer")
-    words = asyncio.run(dec.decode(Window(5000, 6000, b"\x00\x00" * 16000, final=False)))
+def test_parakeet_decode_is_fail_soft():
+    dec = ParakeetDecoder(_DownLlm(), "sidekick-parakeet")
+    words = asyncio.run(dec.decode(Window(0, 1000, b"\x00\x00" * 16000, final=False)))
+    assert words == []
+
+
+def test_parakeet_words_are_absolute_call_time():
+    """Endpoint times are clip-relative seconds; the app adds the window offset (SPEC 3.3)."""
+    llm = _FakeLlm({"text": "fees apply", "words": [{"word": "fees", "start": 0.1, "end": 0.4},
+                                                   {"word": "apply", "start": 0.45, "end": 0.8}]})
+    words = asyncio.run(ParakeetDecoder(llm, "sidekick-parakeet").decode(Window(5000, 6000, b"\x00\x00" * 16000, final=False)))
     assert [(w.w, w.s, w.e) for w in words] == [("fees", 5100, 5400), ("apply", 5450, 5800)]
-    record = llm.payload["dataframe_records"][0]
-    assert set(record) == {"audio_b64", "offset_ms", "channel"}
-    assert record["offset_ms"] == 5000 and record["channel"] == "customer"
 
 
-def test_parakeet_accepts_mlflow_wrapped_predictions():
-    llm = _FakeLlm({"predictions": {"predictions": [{"words": [{"word": "hi", "start_ms": 10, "end_ms": 90}]}]}})
-    words = asyncio.run(ParakeetDecoder(llm, "p").decode(Window(0, 1000, b"\x00\x00" * 8000, final=True)))
-    assert [(w.w, w.s, w.e) for w in words] == [("hi", 10, 90)]
+def test_parakeet_multipart_contract():
+    """Route, multipart fields and WAV payload match SPEC 3.3 (v0.3): model + verbose_json + 16 kHz WAV."""
+    llm = _FakeLlm({"text": "hi", "words": [{"word": "hi", "start": 0.0, "end": 0.2}]})
+    asyncio.run(ParakeetDecoder(llm, "sidekick-parakeet").decode(Window(0, 1000, b"\x00\x00" * 16000, final=True)))
+    endpoint, route, files, data = llm.calls[0]
+    assert endpoint == "sidekick-parakeet" and route == "audio/transcriptions"
+    assert data == {"model": "sidekick-parakeet", "response_format": "verbose_json"}
+    name, wav, ctype = files["file"]
+    assert name == "audio.wav" and ctype == "audio/wav"
+    assert wav[:4] == b"RIFF" and wav[8:12] == b"WAVE"
+    import io
+    import wave
+    with wave.open(io.BytesIO(wav)) as f:
+        assert (f.getnchannels(), f.getsampwidth(), f.getframerate()) == (1, 2, 16000)
+        assert f.getnframes() == 16000
+
+
+def test_multipart_request_on_the_wire_uses_workspace_path_and_auth():
+    """Through the real LlmClient: POST /serving-endpoints/{ep}/audio/transcriptions, multipart body, auth header."""
+    import httpx
+    from config import Settings
+    from llm import LlmClient
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers.get("authorization")
+        seen["ctype"] = request.headers.get("content-type", "")
+        seen["body"] = request.read()
+        return httpx.Response(200, json={"text": "hello", "words": [{"word": "hello", "start": 0.0, "end": 0.5}]})
+
+    class Cfg:
+        host = "https://ws.example.com/"
+
+        def authenticate(self):
+            return {"Authorization": "Bearer t0"}
+
+    client = LlmClient(Settings(mode="local", llm_enabled=True), sdk_config=Cfg(),
+                       transport=httpx.MockTransport(handler))
+    words = asyncio.run(ParakeetDecoder(client, "sidekick-parakeet").decode(Window(0, 1000, b"\x00\x00" * 16000, final=True)))
+    assert seen["url"] == "https://ws.example.com/serving-endpoints/sidekick-parakeet/audio/transcriptions"
+    assert seen["auth"] == "Bearer t0"
+    assert seen["ctype"].startswith("multipart/form-data; boundary=")
+    assert b'name="response_format"' in seen["body"] and b"verbose_json" in seen["body"]
+    assert b'name="model"' in seen["body"] and b"RIFF" in seen["body"]
+    assert [w.w for w in words] == ["hello"]
 
 
 def test_parakeet_text_only_response_spreads_words_evenly():
-    llm = _FakeLlm({"predictions": [{"text": "one two three four"}]})
+    llm = _FakeLlm({"text": "one two three four"})
     words = asyncio.run(ParakeetDecoder(llm, "p").decode(Window(0, 1000, b"\x00\x00" * 8000, final=True)))
     assert [w.w for w in words] == ["one", "two", "three", "four"]
     assert words[0].s == 0 and words[-1].e == 1000
+
+
+def test_parakeet_segments_without_words_are_used():
+    from stt.parakeet import words_from_response
+
+    body = {"text": "one two", "segments": [{"start": 1.0, "end": 2.0, "text": "one two"}]}
+    words = words_from_response(body, offset_ms=4000, window_end_ms=9000)
+    assert [(w.w, w.s, w.e) for w in words] == [("one", 5000, 5500), ("two", 5500, 6000)]
+
+
+def test_parakeet_wraps_failed_decode_as_no_words_not_error():
+    llm = _FakeLlm({"text": ""})
+    assert asyncio.run(ParakeetDecoder(llm, "p").decode(Window(0, 1000, b"", final=True))) == []
 
 
 def test_word_starting_just_before_vad_onset_is_not_clipped():
@@ -159,3 +212,57 @@ def test_replay_scripts_round_trip_every_word():
                 return [ev.text async for ev in session.run(source.frames()) if ev.kind == "final"]
 
             assert asyncio.run(go()) == expected, f"{path.name}/{speaker}"
+
+
+def test_voice_transcriber_whisper_json_standin_contract():
+    """shared-whisper (e2-demo) takes {"inputs": [base64 WAV]} on /invocations and returns predictions as strings."""
+    import base64
+
+    import httpx
+    from config import Settings
+    from llm import LlmClient
+    from stt.parakeet import ParakeetTranscriber
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["body"] = json.loads(request.read())
+        return httpx.Response(200, json={"predictions": ["hello there"]})
+
+    class Cfg:
+        host = "https://ws.example.com"
+
+        def authenticate(self):
+            return {"Authorization": "Bearer t"}
+
+    llm = LlmClient(Settings(mode="local", llm_enabled=True), sdk_config=Cfg(), transport=httpx.MockTransport(handler))
+    wav = b"RIFF" + b"\x00" * 40
+    text = asyncio.run(ParakeetTranscriber(llm, "shared-whisper", protocol="whisper_json").transcribe(wav))
+    assert text == "hello there"
+    assert seen["url"] == "https://ws.example.com/serving-endpoints/shared-whisper/invocations"
+    assert base64.b64decode(seen["body"]["inputs"][0]) == wav
+
+
+def test_voice_transcriber_parakeet_protocol_is_multipart():
+    import httpx
+    from config import Settings
+    from llm import LlmClient
+    from stt.parakeet import ParakeetTranscriber
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["ctype"] = request.headers["content-type"]
+        return httpx.Response(200, json={"text": " fees apply "})
+
+    class Cfg:
+        host = "https://ws.example.com"
+
+        def authenticate(self):
+            return {"Authorization": "Bearer t"}
+
+    llm = LlmClient(Settings(mode="local", llm_enabled=True), sdk_config=Cfg(), transport=httpx.MockTransport(handler))
+    assert asyncio.run(ParakeetTranscriber(llm, "sidekick-parakeet").transcribe(b"RIFF" + b"\x00" * 40)) == "fees apply"
+    assert seen["ctype"].startswith("multipart/form-data")
+

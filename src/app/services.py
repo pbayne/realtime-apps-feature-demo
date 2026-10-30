@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -24,10 +25,14 @@ from session import CallSession, Deps
 from sidekick.playbooks import Playbook, PlaybookRegistry
 from sidekick.retrieval import Retriever, VectorSearchStub
 from store import build_store
+from stt.parakeet import ParakeetTranscriber
 from stt.replay import ReplayScript, load_script
 from stt.vad import Vad, build_vad
+from voice.session import VoiceDeps, VoiceSession
+from voice.tts import KokoroTts
 
 log = logging.getLogger("sidekick.services")
+VOICE_RE = re.compile(r"^[a-z]{2}_[a-z]+$")
 
 
 class ServiceError(Exception):
@@ -58,6 +63,17 @@ class Services:
                          retriever=self.retriever, registry=self.registry, hub=self.hub, vad=self.vad)
         self.local_enricher: Optional[LocalEnricher] = None
         self.sessions: dict[str, CallSession] = {}
+        # Voice mode (SPEC 9): Kokoro TTS and Parakeet over the same workspace auth as the LLM.
+        self.tts = KokoroTts(self.llm.workspace_auth, settings.tts_endpoint, timeout_s=settings.tts_timeout_s)
+        self.transcriber = ParakeetTranscriber(self.llm, settings.stt_endpoint,
+                                               timeout_s=settings.voice_stt_timeout_s,
+                                               protocol=settings.stt_protocol)
+        self.voice_sessions: dict[str, VoiceSession] = {}
+        self.voice_deps = VoiceDeps(
+            settings=settings, llm=self.llm, tts=self.tts, stt=self.transcriber, store=self.store,
+            retriever=self.retriever, calls=self.sessions, finish_call=self.finish_call,
+            new_practice_call=self.new_practice_call,
+        )
 
     # ------------------------------------------------------------ lifecycle
     async def start(self) -> None:
@@ -75,6 +91,12 @@ class Services:
     async def stop(self) -> None:
         if getattr(self, "_warmup", None) is not None:
             self._warmup.cancel()
+        for vs in list(self.voice_sessions.values()):
+            try:
+                await vs.close()
+            except Exception:  # noqa: BLE001
+                log.exception("voice session close on shutdown failed")
+        await self.tts.aclose()
         for session in list(self.sessions.values()):
             if not session.ended:
                 try:
@@ -126,6 +148,10 @@ class Services:
             call_id=str(uuid.uuid4()), playbook=playbook, mode=mode, script=script,
             started_at_ms=now_ms(), customer_id=customer_id,
         )
+        return await self._start_call(record, replay, speed)
+
+    async def _start_call(self, record: CallRecord, replay: Optional[ReplayScript],
+                          speed: Optional[float] = None) -> CallSession:
         try:
             await self.store.create_call(record)
         except Exception:  # noqa: BLE001 - store outage: the live call still works
@@ -136,6 +162,54 @@ class Services:
         if replay is not None:
             session.start_replay(replay, speed or self.settings.replay_speed)
         return session
+
+    # -------------------------------------------------------------- voice
+    async def new_practice_call(self, playbook: str) -> str:
+        """The live call a practice session plays into (mode `voice`: no audio socket, text in both channels)."""
+        record = CallRecord(call_id=str(uuid.uuid4()), playbook=playbook, mode="voice", script=None,
+                            started_at_ms=now_ms())
+        session = await self._start_call(record, None)
+        return session.call_id
+
+    async def finish_call(self, call_id: str) -> None:
+        session = self.sessions.get(call_id)
+        if session is not None and not session.ended:
+            await session.finish()
+
+    async def create_voice_session(self, role: str, playbook: str, scenario: Optional[str],
+                                   call_id: Optional[str], voice: Optional[str]) -> VoiceSession:
+        try:
+            pb: Playbook = self.registry.get(playbook)
+        except KeyError as exc:
+            raise ServiceError(404, str(exc)) from exc
+        sc = None
+        if role == "practice":
+            if call_id:
+                raise ServiceError(400, "a practice session creates its own call; do not pass call_id")
+            if not pb.scenarios:
+                raise ServiceError(404, f"no practice scenarios for playbook {playbook}")
+            sc = pb.scenario(scenario) if scenario else pb.scenarios[0]
+            if sc is None:
+                raise ServiceError(404, f"unknown practice scenario {scenario!r} for {playbook}")
+            call_id = await self.new_practice_call(pb.name)
+        else:
+            if scenario:
+                raise ServiceError(400, "scenario applies to practice sessions only")
+            if call_id and call_id not in self.sessions:
+                raise ServiceError(404, "call not active in this process")
+        chosen_voice = voice or (sc.voice if sc is not None else self.settings.tts_voice)
+        if not VOICE_RE.match(chosen_voice):
+            raise ServiceError(400, "voice must look like af_heart")
+        vs = VoiceSession(session_id=str(uuid.uuid4()), role=role, playbook=pb, voice=chosen_voice,
+                          deps=self.voice_deps, call_id=call_id, scenario=sc)
+        self.voice_sessions[vs.session_id] = vs
+        return vs
+
+    def voice_session(self, session_id: str) -> VoiceSession:
+        vs = self.voice_sessions.get(session_id)
+        if vs is None:
+            raise ServiceError(404, "voice session not active in this process")
+        return vs
 
     def session(self, call_id: str) -> CallSession:
         s = self.sessions.get(call_id)
@@ -155,4 +229,6 @@ class Services:
             "active_calls": sum(1 for s in self.sessions.values() if not s.ended),
             "playbooks": self.registry.names(),
             "enrich_rules": self.rules.source,
+            "voice": {"model": self.settings.voice_model, "tts": self.settings.tts_endpoint,
+                      "stt": self.settings.stt_endpoint, "active_sessions": sum(1 for v in self.voice_sessions.values() if not v.closed)},
         }

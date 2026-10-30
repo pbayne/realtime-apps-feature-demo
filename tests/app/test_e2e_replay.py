@@ -54,9 +54,9 @@ class FakeLlm(LlmClient):
         for piece in ["Acknowledge the concern, ", "then restate the fee ", "in one plain sentence."]:
             yield piece
 
-    async def invoke(self, endpoint, payload, *, timeout=None, url=None):
-        # Parakeet stand-in: text-only response, so words are spread across the decode window.
-        return {"predictions": [{"text": "what are the fees"}]}
+    async def multipart(self, endpoint, route, *, files, data, timeout=None):
+        # Parakeet stand-in (SPEC 3.3 contract): text-only verbose_json, so words spread across the window.
+        return {"text": "what are the fees"}
 
     async def embed(self, model, texts, *, timeout=None):
         out = []

@@ -29,11 +29,24 @@ class Settings(BaseSettings):
     fast_model: str = "databricks-claude-haiku-5-5"
     smart_model: str = "databricks-claude-sonnet-5-5"
     embed_model: str = "databricks-gte-large-en"
-    stt_endpoint: str = "parakeet-live"
-    stt_endpoint_url: Optional[str] = None  # route-optimized data-plane URL (register_parakeet.py prints it)
+    stt_endpoint: str = "sidekick-parakeet"  # Custom LLM Serving audio endpoint (register_parakeet.py)
+    # parakeet = multipart /audio/transcriptions (SPEC 3.3). whisper_json = {"inputs": [base64 WAV]} on
+    # /invocations, the contract of the Databricks-hosted system.ai whisper endpoint (e2-demo shared-whisper).
+    # Local-dev stand-in for voice mode only: the call path's windowed decoder needs the Parakeet contract.
+    stt_protocol: Literal["parakeet", "whisper_json"] = "parakeet"
     llm_timeout_s: float = 8.0
     llm_failure_threshold: int = 3          # consecutive failures before the breaker opens
     llm_breaker_cooldown_s: float = 30.0
+
+    # --- voice mode (SPEC section 9) ---
+    voice_model: str = "databricks-claude-haiku-5-5"   # thinking disabled by llm._model_extras
+    voice_max_tokens: int = 400
+    voice_timeout_s: float = 15.0          # per LLM stream (first token + reply)
+    tts_endpoint: str = "sidekick-kokoro"  # Custom LLM Serving TTS endpoint (register_kokoro.py)
+    tts_voice: str = "af_heart"
+    tts_timeout_s: float = 20.0
+    voice_stt_timeout_s: float = 10.0      # one whole user turn (<= 30 s of audio)
+    voice_max_audio_bytes: int = 2_000_000  # a 30 s 16 kHz mono PCM16 WAV is ~960 KB
 
     # --- retrieval ---
     retrieval_backend: Literal["auto", "memory", "keyword", "vector_search"] = "auto"

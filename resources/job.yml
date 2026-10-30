@@ -125,7 +125,7 @@ resources:
 
     call_sidekick_parakeet_register:
       name: call-sidekick-parakeet-register
-      description: One-off (re-run on model upgrades). Registers Parakeet to UC and creates the route-optimized GPU endpoint.
+      description: One-off (re-run on model upgrades). Registers Parakeet to UC and creates the GPU audio serving endpoint (not route-optimized).
       max_concurrent_runs: 1
       job_clusters:
         - job_cluster_key: gpu
@@ -152,3 +152,34 @@ resources:
               endpoint_name: ${var.parakeet_endpoint}
               workload_type: GPU_MEDIUM
               workload_size: Small
+
+    call_sidekick_kokoro_register:
+      name: call-sidekick-kokoro-register
+      description: One-off (re-run on model upgrades). Registers Kokoro-82M TTS to UC and creates the GPU endpoint for voice mode (scale-to-zero off).
+      max_concurrent_runs: 1
+      job_clusters:
+        - job_cluster_key: gpu
+          new_cluster:
+            spark_version: ${var.gpu_spark_version}
+            node_type_id: ${var.gpu_node_type}
+            num_workers: 0
+            data_security_mode: SINGLE_USER
+            single_user_name: ${workspace.current_user.userName}
+            spark_conf:
+              spark.master: local[*, 4]
+              spark.databricks.cluster.profile: singleNode
+            custom_tags:
+              ResourceClass: SingleNode
+      tasks:
+        - task_key: register_kokoro
+          job_cluster_key: gpu
+          notebook_task:
+            notebook_path: ../src/notebooks/register_kokoro.py
+            base_parameters:
+              uc_catalog: ${var.catalog}
+              uc_schema: ${resources.schemas.sidekick_schema.name}
+              uc_model: ${var.kokoro_model}
+              endpoint_name: ${var.kokoro_endpoint}
+              workload_type: GPU_MEDIUM
+              workload_size: Small
+              scale_to_zero: "false"

@@ -16,6 +16,8 @@ class MemoryStore:
         self.enrichments: dict[tuple[str, int], dict[str, Any]] = {}
         self.cards: dict[str, dict[str, Any]] = {}
         self.feedback: list[dict[str, Any]] = []
+        self.voice_turns: dict[str, dict[int, dict[str, Any]]] = {}
+        self.voice_items: dict[str, list[dict[str, Any]]] = {}
         self._waiters: dict[tuple[str, int], asyncio.Event] = {}
 
     async def start(self) -> None:
@@ -83,3 +85,17 @@ class MemoryStore:
             "feedback": [f for f in self.feedback if f["call_id"] == call_id],
             "as_of_ms": int(time.time() * 1000),
         }
+
+    async def put_voice_turn(self, session_id: str, row: dict[str, Any]) -> None:
+        self.voice_turns.setdefault(session_id, {})[int(row["turn"])] = {**row, "session_id": session_id}
+
+    async def put_voice_item(self, session_id: str, item: dict[str, Any]) -> None:
+        items = self.voice_items.setdefault(session_id, [])
+        items[:] = [i for i in items if i["item_id"] != item["item_id"]] + [{**item, "session_id": session_id}]
+
+    async def voice_snapshot(self, session_id: str) -> dict[str, Any]:
+        return {
+            "turns": sorted(self.voice_turns.get(session_id, {}).values(), key=lambda t: t["turn"]),
+            "items": list(self.voice_items.get(session_id, [])),
+        }
+

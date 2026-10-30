@@ -77,6 +77,37 @@ def test_pg_password_has_no_default():
 
 def test_notebooks_exist():
     for name in ("init.py", "rtm_enrich.py", "rtm_lib.py", "delta_history.py",
-                 "register_parakeet.py", "build_kb_index.py", "post_call_scoring.py",
-                 "enrich_rules.json"):
+                 "register_parakeet.py", "register_kokoro.py", "build_kb_index.py", "post_call_scoring.py",
+                 "enrich_rules.json",
+                 "parakeet_serving/asr_server.py", "kokoro_serving/kokoro_server.py", "kokoro_serving/adapter.py"):
         assert (NOTEBOOKS / name).exists(), name
+
+
+def test_voice_endpoints_are_custom_llm_serving_not_route_optimized():
+    text = (NOTEBOOKS / "register_parakeet.py").read_text(encoding="utf-8")
+    assert "route_optimized" not in text and "data_plane" not in text
+    assert "llm/v1/audio/transcriptions" in text and "/audio/transcriptions" in text
+    kokoro = (NOTEBOOKS / "register_kokoro.py").read_text(encoding="utf-8")
+    assert '"llm/v1/chat"' in kokoro and "scale_to_zero_enabled=False" in kokoro
+
+
+def test_voice_jobs_register_both_gpu_endpoints_with_scale_to_zero_off():
+    jobs = _load(ROOT / "resources" / "job.yml")["resources"]["jobs"]
+    for key, nb in (("call_sidekick_parakeet_register", "register_parakeet.py"),
+                     ("call_sidekick_kokoro_register", "register_kokoro.py")):
+        task = jobs[key]["tasks"][0]
+        assert task["notebook_task"]["notebook_path"].endswith(nb)
+        assert task["job_cluster_key"] == "gpu"
+        assert jobs[key]["job_clusters"][0]["new_cluster"]["node_type_id"] == "${var.gpu_node_type}"
+
+
+def test_app_serving_resources_cover_voice_mode():
+    doc = _load(ROOT / "resources" / "app.yml")
+    names = {r["name"]: r for r in doc["resources"]["apps"]["call_sidekick_app"]["resources"]}
+    assert names["kokoro-tts"]["serving_endpoint"]["name"] == "${var.kokoro_endpoint}"
+    assert names["voice-llm"]["serving_endpoint"]["name"] == "${var.voice_model}"
+    app_yaml = _load(ROOT / "src" / "app" / "app.yaml")
+    env = {e["name"]: e for e in app_yaml["env"]}
+    assert env["TTS_ENDPOINT"]["valueFrom"] == "kokoro-tts"
+    assert env["VOICE_MODEL"]["valueFrom"] == "voice-llm"
+    assert env["STT_ENDPOINT"]["valueFrom"] == "parakeet-stt"

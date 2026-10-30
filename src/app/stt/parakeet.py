@@ -1,4 +1,4 @@
-"""Streaming STT session (SPEC section 1 + section 3 audio contract).
+"""Streaming STT session (SPEC section 1) and the Parakeet client (SPEC section 3.3, contract v0.3).
 
 StreamingSession runs one channel. Per utterance:
   - VAD gate decides speech vs silence per frame (Frame.speech overrides it for replay).
@@ -9,26 +9,25 @@ StreamingSession runs one channel. Per utterance:
   - `endpoint_silence_ms` of silence ends the utterance: one final decode over the
     whole utterance is flushed and a final event is emitted.
 
-ParakeetDecoder calls the Parakeet serving endpoint (STT_ENDPOINT). This is the contract that
-src/notebooks/register_parakeet.py implements (MLflow pyfunc, dataframe_records):
+ParakeetDecoder and ParakeetTranscriber call the Parakeet serving endpoint with the field-eng
+audio-serving server (src/notebooks/parakeet_serving/asr_server.py):
 
-  request : {"dataframe_records": [{"audio_b64": "<base64 PCM16 LE mono 16 kHz, <= 30 s>",
-                                    "offset_ms": <window start on the call timeline>,
-                                    "channel": "agent" | "customer"}]}
-  response: {"predictions": [{"text": "...",
-                              "words": [{"word": "...", "start_ms": <absolute>, "end_ms": <absolute>}],
-                              "audio_ms": 4300, "channel": "...", "model": "..."}]}
+  request : multipart POST /serving-endpoints/{STT_ENDPOINT}/audio/transcriptions
+            file = 16 kHz mono PCM16 WAV (<= 30 s), model = endpoint name, response_format = verbose_json
+  response: {"duration", "text", "segments": [{"start","end","text"}], "words": [{"word","start","end"}]}
 
-Word times in the response are already on the call timeline (the endpoint adds offset_ms), so
-they are used as-is. A response with no word timestamps gets its text spread evenly over the window.
-The endpoint may also be reached through its route-optimized data-plane URL (STT_ENDPOINT_URL).
+Times in the response are seconds relative to the clip. The caller converts them to absolute call
+time: start_ms = offset_ms + round(start * 1000). The endpoint knows nothing about channels.
+Auth is the app's service principal (LlmClient.multipart). Route-optimized URLs are not used.
 """
 
 from __future__ import annotations
 
 import base64
+import io
 import logging
 import time
+import wave
 from collections import deque
 from dataclasses import dataclass
 from typing import AsyncIterator, Callable, Optional
@@ -176,68 +175,103 @@ class StreamingSession:
         )
 
 
-class ParakeetDecoder:
-    """Decoder over the Parakeet serving endpoint (see module docstring for the contract)."""
+STT_RATE = 16000
+STT_ROUTE = "audio/transcriptions"
 
-    def __init__(self, llm: LlmClient, endpoint: str, *, channel: Optional[str] = None,
-                 url: Optional[str] = None, timeout_s: float = 2.0) -> None:
+
+def pcm_to_wav(pcm: bytes, rate: int = STT_RATE) -> bytes:
+    """Wrap raw PCM16 mono in a WAV container (what the endpoint's multipart `file` expects)."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(rate)
+        f.writeframes(pcm)
+    return buf.getvalue()
+
+
+def transcription_request(wav: bytes, endpoint: str) -> tuple[dict, dict]:
+    """(files, data) for the multipart request. Kept separate so the contract is testable."""
+    files = {"file": ("audio.wav", wav, "audio/wav")}
+    data = {"model": endpoint, "response_format": "verbose_json"}
+    return files, data
+
+
+class ParakeetDecoder:
+    """Decoder over the Parakeet serving endpoint. Fail-soft: a failed window yields no words."""
+
+    def __init__(self, llm: LlmClient, endpoint: str, *, timeout_s: float = 2.0) -> None:
         self._llm = llm
         self._endpoint = endpoint
-        self._channel = channel
-        self._url = url or None
         self._timeout = timeout_s
-
-    def request_payload(self, window: Window) -> dict:
-        return {
-            "dataframe_records": [{
-                "audio_b64": base64.b64encode(window.pcm or b"").decode("ascii"),
-                "offset_ms": int(window.start_ms),
-                "channel": self._channel,
-            }]
-        }
 
     async def decode(self, window: Window) -> list[Word]:
         if not window.pcm:
             return []
+        files, data = transcription_request(pcm_to_wav(window.pcm), self._endpoint)
         try:
-            body = await self._llm.invoke(self._endpoint, self.request_payload(window),
-                                          timeout=self._timeout, url=self._url)
+            body = await self._llm.multipart(self._endpoint, STT_ROUTE, files=files, data=data,
+                                             timeout=self._timeout)
         except LlmUnavailable as exc:
             # Fail-soft: a bad window yields no words this tick, the channel keeps running.
             log.warning("STT decode failed (%s); no words this window", exc)
             return []
-        return _parse_words(_prediction(body), window)
+        return words_from_response(body, window.start_ms, window.end_ms)
 
 
-def _prediction(body: dict) -> dict:
-    """Accept {"predictions": [{...}]} and the MLflow-wrapped {"predictions": {"predictions": [...]}}."""
-    preds = body.get("predictions", body)
-    if isinstance(preds, dict) and "predictions" in preds:
-        preds = preds["predictions"]
-    if isinstance(preds, list):
-        return preds[0] if preds and isinstance(preds[0], dict) else {}
-    return preds if isinstance(preds, dict) else {}
+class ParakeetTranscriber:
+    """Whole-turn transcription for voice mode (SPEC 9.2): WAV in, text out. Raises LlmUnavailable.
+    protocol="whisper_json" is the local-dev stand-in for the Databricks-hosted whisper endpoint."""
+
+    def __init__(self, llm: LlmClient, endpoint: str, *, timeout_s: float = 10.0, protocol: str = "parakeet") -> None:
+        self._llm = llm
+        self._endpoint = endpoint
+        self._timeout = timeout_s
+        self._protocol = protocol
+
+    async def transcribe(self, wav: bytes) -> str:
+        if self._protocol == "whisper_json":
+            body = await self._llm.json_post(self._endpoint, {"inputs": [base64.b64encode(wav).decode("ascii")]},
+                                             timeout=self._timeout)
+            preds = body.get("predictions", body)
+            if isinstance(preds, list) and preds:
+                first = preds[0]
+                return str(first.get("text") if isinstance(first, dict) else first).strip()
+            return str(preds or "").strip()
+        files, data = transcription_request(wav, self._endpoint)
+        body = await self._llm.multipart(self._endpoint, STT_ROUTE, files=files, data=data, timeout=self._timeout)
+        return str(body.get("text") or "").strip()
 
 
-def _parse_words(pred: dict, window: Window) -> list[Word]:
-    raw = pred.get("words")
+def words_from_response(body: dict, offset_ms: float, window_end_ms: float) -> list[Word]:
+    """Parakeet verbose_json -> absolute Words. Word times are clip-relative seconds; offset_ms is the
+    window start on the call timeline. Without word timestamps, segment or full text is spread evenly."""
+    words = body.get("words") or []
     out: list[Word] = []
-    if raw:
-        for item in raw:
-            text = item.get("word") or item.get("w") or ""
-            s = item.get("start_ms", item.get("s"))
-            e = item.get("end_ms", item.get("e"))
-            if not text or s is None or e is None:
-                continue
-            # Already absolute: the endpoint added offset_ms.
-            out.append(Word(w=text, s=int(float(s)), e=int(float(e))))
+    for item in words:
+        text = (item.get("word") or "").strip()
+        if not text or item.get("start") is None or item.get("end") is None:
+            continue
+        out.append(Word(w=text, s=int(offset_ms + round(float(item["start"]) * 1000)),
+                        e=int(offset_ms + round(float(item["end"]) * 1000))))
+    if out:
         return out
-    text = (pred.get("text") or "").split()
-    if not text:
+    for seg in body.get("segments") or []:
+        seg_text = (seg.get("text") or "").strip()
+        if not seg_text or seg.get("start") is None or seg.get("end") is None:
+            continue
+        s0 = offset_ms + float(seg["start"]) * 1000
+        s1 = offset_ms + float(seg["end"]) * 1000
+        out.extend(_spread(seg_text, s0, s1))
+    if out:
+        return out
+    return _spread(body.get("text") or "", offset_ms, window_end_ms)
+
+
+def _spread(text: str, start_ms: float, end_ms: float) -> list[Word]:
+    tokens = text.split()
+    if not tokens:
         return []
-    span = max(window.end_ms - window.start_ms, 1)
-    step = span / len(text)
-    return [
-        Word(w=t, s=int(window.start_ms + i * step), e=int(window.start_ms + (i + 1) * step))
-        for i, t in enumerate(text)
-    ]
+    span = max(end_ms - start_ms, 1.0)
+    step = span / len(tokens)
+    return [Word(w=t, s=int(start_ms + i * step), e=int(start_ms + (i + 1) * step)) for i, t in enumerate(tokens)]

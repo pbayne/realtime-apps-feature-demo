@@ -72,11 +72,20 @@ variables:
 
   # --- Models and serving ---------------------------------------------------
   parakeet_endpoint:
-    description: Route-optimized GPU serving endpoint name for Parakeet STT (created by register_parakeet.py).
-    default: parakeet-live
+    description: GPU audio serving endpoint for Parakeet STT (Custom LLM Serving, created by register_parakeet.py). Not route-optimized.
+    default: sidekick-parakeet
   parakeet_model:
-    description: UC model name (under catalog.uc_schema) for the Parakeet pyfunc.
+    description: UC model name (under catalog.uc_schema) for the Parakeet serving model.
     default: parakeet_tdt_v3
+  kokoro_endpoint:
+    description: GPU serving endpoint for Kokoro TTS (Custom LLM Serving, created by register_kokoro.py). Voice mode only.
+    default: sidekick-kokoro
+  kokoro_model:
+    description: UC model name (under catalog.uc_schema) for the Kokoro serving model.
+    default: kokoro_82m
+  voice_model:
+    description: Chat model for voice mode (SPEC 9.4). Thinking is disabled by the app for Claude 5.x.
+    default: databricks-claude-haiku-5-5
   fast_model:
     description: Fast LLM serving endpoint for perception (SPEC FAST_MODEL).
     default: databricks-claude-haiku-5-5

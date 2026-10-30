@@ -1,0 +1,78 @@
+/* Voice orb. Colours follow data-state; --lvl (0..1) is written per frame from the audio level. */
+.orb {
+  --c1: #38bdf8;
+  --c2: #0369a1;
+  --lvl: 0;
+  position: relative;
+  width: 116px;
+  height: 116px;
+  border-radius: 9999px;
+  background:
+    radial-gradient(circle at 32% 26%, rgba(255, 255, 255, 0.55), transparent 42%),
+    radial-gradient(circle at 50% 62%, var(--c1), var(--c2));
+  box-shadow: 0 0 calc(40px + var(--lvl) * 60px) calc(var(--lvl) * 6px) color-mix(in srgb, var(--c1) 45%, transparent);
+  transform: scale(calc(1 + var(--lvl) * 0.22));
+  transition:
+    background 400ms ease,
+    box-shadow 300ms ease;
+}
+.orb::before {
+  /* Breathing halo. */
+  content: "";
+  position: absolute;
+  inset: -12px;
+  border-radius: inherit;
+  border: 1px solid color-mix(in srgb, var(--c1) 50%, transparent);
+  animation: orb-breathe 3.2s ease-in-out infinite;
+}
+.orb::after {
+  /* Orbit ring, used for thinking. */
+  content: "";
+  position: absolute;
+  inset: -22px;
+  border-radius: inherit;
+  border: 1px dashed transparent;
+  transition: border-color 300ms ease;
+}
+
+.orb[data-state="you"] { --c1: #2dd4bf; --c2: #0f766e; }
+.orb[data-state="sidekick"] { --c1: #ff6a4d; --c2: #ff3621; }
+.orb[data-state="interrupted"] { --c1: #fbbf24; --c2: #b45309; }
+.orb[data-state="thinking"] { --c1: #a78bfa; --c2: #5b21b6; }
+.orb[data-state="thinking"]::after { border-color: rgba(167, 139, 250, 0.45); animation: orb-spin 2.6s linear infinite; }
+.orb[data-state="ptt"] { --c1: #38bdf8; --c2: #0c4a6e; }
+.orb[data-state="muted"],
+.orb[data-state="off"],
+.orb[data-state="connecting"] {
+  --c1: #64748b;
+  --c2: #1e293b;
+  box-shadow: none;
+}
+.orb[data-state="muted"]::before,
+.orb[data-state="off"]::before,
+.orb[data-state="connecting"]::before {
+  animation: none;
+  opacity: 0;
+}
+.orb[data-state="connecting"] { animation: orb-pulse 1.4s ease-in-out infinite; }
+
+@keyframes orb-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.06); opacity: 0.15; }
+}
+@keyframes orb-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes orb-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb,
+  .orb::before,
+  .orb::after {
+    animation: none !important;
+    transition: none;
+  }
+}

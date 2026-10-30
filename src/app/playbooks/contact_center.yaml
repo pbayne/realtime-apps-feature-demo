@@ -71,3 +71,34 @@ prompts:
     You coach a customer-service agent on a live call. Write one card body under 35 words:
     empathetic, direct, policy-grounded. Use only the reference for policy facts. No promises
     you cannot back. No preamble, no quotes.
+# Voice mode practice scenarios (SPEC 9): Sidekick plays the customer. The voice model stays in
+# character; the agent's turns and the customer's replies also drive the call pipeline (cards, coverage).
+practice:
+  - key: billing_dispute
+    title: Double-charged customer
+    persona: >
+      Alex, 34, was charged twice for the same monthly plan. Frustrated and short on patience, and
+      wants a refund today. Calms down when the agent is specific about what happens next.
+    voice: af_nicole
+    opening: "I was charged twice this month. Two payments, same plan. I want that money back today."
+    objections:
+      - Say you shouldn't have been charged, and ask why it happened.
+      - Demand a refund today and say you will dispute the charge with your bank.
+      - Ask the agent to just confirm the refund is guaranteed.
+    goals:
+      - Give your name and the charge details once the agent asks for verification.
+      - Accept a credit or refund timeline only if it is specific and written down.
+  - key: cancellation_risk
+    title: Customer thinking about leaving
+    persona: >
+      Priya, 52, has been paying more since a price change and is struggling to keep up with the
+      bill. Polite, tired, and open to a deal. Mentions competitors as a way to get a better price.
+    voice: bf_emma
+    opening: "I want to cancel my plan. It's gotten too expensive and I'm honestly struggling to pay it."
+    objections:
+      - Say you are going elsewhere and a competitor is cheaper.
+      - Say you can't afford the monthly amount right now.
+      - Ask whether you are being treated fairly, and whether a complaint would help.
+    goals:
+      - Reveal that money is tight only when the agent asks an open question about it.
+      - Accept a payment plan or retention offer if it is explained clearly.
