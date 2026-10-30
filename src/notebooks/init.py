@@ -240,6 +240,12 @@ TABLE_DDL = [
         source_doc    TEXT,
         created_at_ms BIGINT
     )""",
+    # Per-user preferences (the app's theme choice). One row per owner (SPEC 13, admin area).
+    """CREATE TABLE IF NOT EXISTS user_prefs (
+        owner         TEXT PRIMARY KEY,
+        theme         TEXT NOT NULL,
+        updated_at_ms BIGINT NOT NULL
+    )""",
     "CREATE INDEX IF NOT EXISTS cards_call_seq_idx ON cards (call_id, seq)",
     "CREATE INDEX IF NOT EXISTS feedback_card_idx ON feedback (card_id)",
     # Trigger: the app LISTENs on enrichment_ready and pushes `enrichment` events.
@@ -271,7 +277,7 @@ with dbapi.connect(
     ] + TABLE_DDL:
         cur.execute(stmt)
     # Table-level grants for both the sink writer and the app (same role in this build).
-    for t in ("calls", "utterances", "enrichments", "cards", "feedback", "voice_turns", "voice_items"):
+    for t in ("calls", "utterances", "enrichments", "cards", "feedback", "voice_turns", "voice_items", "user_prefs"):
         cur.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON {t} TO "{role}"')
     cur.execute(f'GRANT EXECUTE ON FUNCTION notify_enrichment_ready() TO "{role}"')
 print(f"Role {role} ready; SPEC section 3 tables, indexes, and enrichment_ready trigger in place.")

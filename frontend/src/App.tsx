@@ -7,10 +7,12 @@ import { AdminRoute } from "./components/admin/AdminRoute";
 import { MOCK, useCallSession } from "./lib/useCallSession";
 import { useVoiceSession } from "./lib/voice/useVoiceSession";
 import { useAdminRoute } from "./lib/route";
+import { useSavedTheme } from "./lib/prefs";
 import type { StartOptions, VoiceRole, VoiceStartOptions } from "./lib/types";
 
 export default function App() {
   const adminPage = useAdminRoute();
+  useSavedTheme();
   const session = useCallSession();
   const voice = useVoiceSession();
   const { state } = session;
