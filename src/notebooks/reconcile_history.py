@@ -22,9 +22,17 @@
 
 # COMMAND ----------
 
+# MAGIC %pip install --quiet "pg8000==1.31.2" "scramp==1.4.6"
+
+# COMMAND ----------
+
 dbutils.widgets.text("uc_catalog", "main")
 dbutils.widgets.text("uc_schema", "call_sidekick")
-dbutils.widgets.text("lakebase_catalog", "call_sidekick_lakebase")   # UC catalog registered on the Lakebase database
+# source_mode: pg8000 (default) reads Lakebase over Postgres with the app role from the secret scope; uc_catalog
+# reads a Lakebase database registered in UC (needs CREATE CATALOG on the metastore, which FEVM users lack).
+dbutils.widgets.text("source_mode", "pg8000")
+dbutils.widgets.text("secret_scope", "call-sidekick")
+dbutils.widgets.text("lakebase_catalog", "call_sidekick_lakebase")   # uc_catalog mode only
 dbutils.widgets.text("lakebase_schema", "public")
 dbutils.widgets.text("watermark_hours", "48")
 dbutils.widgets.text("full_sync", "false")
@@ -41,6 +49,8 @@ import time
 
 catalog = validate_identifier("uc_catalog", dbutils.widgets.get("uc_catalog"))
 schema = validate_identifier("uc_schema", dbutils.widgets.get("uc_schema"))
+source_mode = dbutils.widgets.get("source_mode").strip()
+assert source_mode in ("pg8000", "uc_catalog"), f"source_mode must be pg8000 or uc_catalog, got {source_mode!r}"
 lb_catalog = validate_identifier("lakebase_catalog", dbutils.widgets.get("lakebase_catalog"))
 lb_schema = validate_identifier("lakebase_schema", dbutils.widgets.get("lakebase_schema"))
 watermark_hours = float(dbutils.widgets.get("watermark_hours"))
@@ -59,10 +69,35 @@ print(f"history {catalog}.{schema} <- lakebase {lb_catalog}.{lb_schema}; "
 
 # COMMAND ----------
 
-lb_schemas = [row[0] for row in spark.sql(f"SHOW SCHEMAS IN {quote(lb_catalog)}").collect()]
-if lb_schema not in lb_schemas:
-    raise RuntimeError(f"{lb_catalog}.{lb_schema} not found; schemas: {lb_schemas}. Check the postgres_catalogs "
-                       "resource (lakebase.yml) and that the Lakebase database is registered in Unity Catalog.")
+if source_mode == "pg8000":
+    # Read each Lakebase table over Postgres into a typed temp view; the SQL builders then read the views.
+    from pg8000 import dbapi
+
+    scope = dbutils.widgets.get("secret_scope")
+    conn = dbapi.connect(host=dbutils.secrets.get(scope, "lakebase_host"), database=dbutils.secrets.get(scope, "lakebase_db"),
+                         user=dbutils.secrets.get(scope, "lakebase_user"), password=dbutils.secrets.get(scope, "lakebase_password"),
+                         port=5432, ssl_context=True)
+    try:
+        cur = conn.cursor()
+        for name in table_names():
+            cur.execute("SELECT column_name, data_type FROM information_schema.columns "
+                        "WHERE table_schema = %s AND table_name = %s ORDER BY ordinal_position", (lb_schema, name))
+            cols = [(c, d) for c, d in cur.fetchall()]
+            if not cols:
+                raise RuntimeError(f"Lakebase table {lb_schema}.{name} not found (run the setup job)")
+            col_sql = ", ".join('"' + c.replace('"', '""') + '"' for c, _ in cols)
+            cur.execute(f'SELECT {col_sql} FROM "{lb_schema}"."{name}"')   # identifiers validated above
+            rows = [tuple(r) for r in cur.fetchall()]
+            spark.createDataFrame(rows, schema=spark_schema_ddl(cols)).createOrReplaceTempView(pg_source_view(name))
+            print(f"loaded {len(rows)} rows from lakebase {lb_schema}.{name}")
+    finally:
+        conn.close()
+    lb_catalog = PG_SOURCE
+else:
+    lb_schemas = [row[0] for row in spark.sql(f"SHOW SCHEMAS IN {quote(lb_catalog)}").collect()]
+    if lb_schema not in lb_schemas:
+        raise RuntimeError(f"{lb_catalog}.{lb_schema} not found; schemas: {lb_schemas}. Register the Lakebase "
+                           "database in Unity Catalog (needs CREATE CATALOG) or use source_mode=pg8000.")
 
 if grant_to:
     principal = quote(grant_to)
@@ -70,9 +105,10 @@ if grant_to:
     spark.sql(f"GRANT USE SCHEMA ON SCHEMA {quote(catalog)}.{quote(schema)} TO {principal}")
     for name in table_names():
         spark.sql(f"GRANT MODIFY, SELECT ON TABLE {table_ref(catalog, schema, name)} TO {principal}")
-    spark.sql(f"GRANT USE CATALOG ON CATALOG {quote(lb_catalog)} TO {principal}")
-    spark.sql(f"GRANT USE SCHEMA ON SCHEMA {quote(lb_catalog)}.{quote(lb_schema)} TO {principal}")
-    spark.sql(f"GRANT SELECT ON SCHEMA {quote(lb_catalog)}.{quote(lb_schema)} TO {principal}")
+    if source_mode == "uc_catalog":
+        spark.sql(f"GRANT USE CATALOG ON CATALOG {quote(lb_catalog)} TO {principal}")
+        spark.sql(f"GRANT USE SCHEMA ON SCHEMA {quote(lb_catalog)}.{quote(lb_schema)} TO {principal}")
+        spark.sql(f"GRANT SELECT ON SCHEMA {quote(lb_catalog)}.{quote(lb_schema)} TO {principal}")
     print(f"grants ensured for {grant_to}")
 
 # COMMAND ----------

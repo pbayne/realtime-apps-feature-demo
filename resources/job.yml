@@ -70,6 +70,8 @@ resources:
             base_parameters:
               uc_catalog: ${var.catalog}
               uc_schema: ${var.uc_schema}
+              source_mode: pg8000
+              secret_scope: ${var.secret_scope}
               lakebase_catalog: ${var.lakebase_catalog}
               lakebase_schema: public
               watermark_hours: "48"

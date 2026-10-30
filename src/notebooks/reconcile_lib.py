@@ -146,8 +146,30 @@ def table_ref(catalog: str, schema: str, table: str) -> str:
     return f"{quote(catalog)}.{quote(schema)}.{quote(table)}"
 
 
+# source_mode=pg8000: the notebook reads each Lakebase table over Postgres into a temp view named
+# pg_source_view(table), and passes PG_SOURCE as the catalog so the SQL builders read the views.
+PG_SOURCE = "__lakebase_pg__"
+
+
+def pg_source_view(table: str) -> str:
+    return f"lakebase_src_{table}"
+
+
+PG_TYPES = {"text": "STRING", "character varying": "STRING", "bigint": "BIGINT", "integer": "INT",
+            "smallint": "INT", "double precision": "DOUBLE", "real": "DOUBLE", "boolean": "BOOLEAN",
+            "numeric": "DOUBLE"}
+
+
+def spark_schema_ddl(columns: list[tuple[str, str]]) -> str:
+    """information_schema (column_name, data_type) -> a Spark DDL schema string. Unknown types read as STRING."""
+    return ", ".join(f"{quote(name)} {PG_TYPES.get(dtype.lower(), 'STRING')}" for name, dtype in columns)
+
+
 def source_ref(lb_catalog: str, lb_schema: str, table: str) -> str:
-    """The Lakebase table as the registered UC catalog exposes it: <catalog>.<postgres schema>.<table>."""
+    """The Lakebase table: the registered UC catalog (<catalog>.<postgres schema>.<table>), or in pg8000 mode the
+    temp view the notebook loaded it into."""
+    if lb_catalog == PG_SOURCE:
+        return quote(pg_source_view(table))
     return table_ref(lb_catalog, lb_schema, table)
 
 

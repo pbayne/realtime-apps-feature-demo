@@ -272,3 +272,15 @@ def test_cards_dedupe_prefers_a_feedback_status_over_shown():
 
 def test_table_ref_quotes_backticks_in_names():
     assert rl.table_ref("a`b", "s", "t") == "`a``b`.`s`.`t`"
+
+
+def test_pg8000_mode_reads_temp_views_with_typed_schemas():
+    import reconcile_lib as rl
+
+    assert rl.source_ref(rl.PG_SOURCE, "public", "calls") == "`lakebase_src_calls`"
+    spec = next(s for s in rl.TABLES if s.name == "utterances")
+    sql = rl.source_sql(spec, rl.PG_SOURCE, "public", cutoff=123)
+    assert "FROM `lakebase_src_utterances`" in sql and "lakebase_src_calls" not in sql.split("FROM `lakebase_src_utterances`")[0]
+    assert rl.spark_schema_ddl([("call_id", "text"), ("seq", "integer"), ("t_start_ms", "bigint"),
+                                ("sentiment", "double precision"), ("weird", "jsonb")]) == \
+        "`call_id` STRING, `seq` INT, `t_start_ms` BIGINT, `sentiment` DOUBLE, `weird` STRING"
