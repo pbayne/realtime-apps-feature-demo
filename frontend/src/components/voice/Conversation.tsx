@@ -76,7 +76,7 @@ function UserBubble({ ex }: { ex: Exchange }) {
             <span className="anim-blink size-1.5 rounded-full bg-sky-300" /> Transcribing…
           </div>
         ) : (
-          <p className="text-[14px] leading-relaxed text-slate-100">{ex.user}</p>
+          <p className="anim-solidify text-[14px] leading-relaxed text-slate-100">{ex.user}</p>
         )}
       </div>
     </div>
@@ -141,7 +141,7 @@ export function Composer({ disabled, onSend }: { disabled: boolean; onSend(text:
         disabled={disabled}
         placeholder={disabled ? "Session is not live" : "Type a turn…"}
         aria-label="Type a turn"
-        className="min-w-0 flex-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-ink)] px-3 py-2.5 text-[14px] outline-none placeholder:text-slate-500 focus:border-sky-400/60 disabled:opacity-50"
+        className="min-w-0 flex-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-ink)] px-3 py-2.5 text-[14px] outline-none placeholder:text-slate-500 focus-visible:outline-none focus:border-sky-400/60 disabled:opacity-50"
       />
       <button type="submit" disabled={disabled || !text.trim()} className="btn btn-ghost py-2.5">
         <Send className="size-3.5" /> Send

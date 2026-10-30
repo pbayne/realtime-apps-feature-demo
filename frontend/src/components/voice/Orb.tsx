@@ -27,20 +27,38 @@ const WAVE_COLOR: Record<OrbState, string> = {
 interface Props {
   state: OrbState;
   label: string;
-  readLevel(out: Uint8Array<ArrayBuffer>): void;
+  /** The user's mic level (0..1 after RMS). Drives the orb's size while they talk. */
+  readMic(out: Uint8Array<ArrayBuffer>): void;
+  /** Sidekick's (or the customer's) playback level. Drives the glow while they talk. */
+  readAgent(out: Uint8Array<ArrayBuffer>): void;
 }
 
-/** Central orb (scaled by audio level) with a live waveform strip underneath. Drawn outside React state. */
-export function Orb({ state, label, readLevel }: Props) {
+const rms = (data: Uint8Array<ArrayBuffer>) => {
+  let sum = 0;
+  for (let i = 0; i < data.length; i++) {
+    const x = (data[i] - 128) / 128;
+    sum += x * x;
+  }
+  return Math.min(1, Math.sqrt(sum / data.length) * 3.2);
+};
+
+/**
+ * Central orb with a waveform strip. Two levels, two cues: the mic swells the orb while the user speaks, and
+ * Sidekick's voice brightens its glow and rings while it talks. The waveform shows whichever is the active
+ * speaker. Everything is written straight to CSS variables per frame; React does not re-render for audio.
+ */
+export function Orb({ state, label, readMic, readAgent }: Props) {
   const orbRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef(state);
-  const readRef = useRef(readLevel);
+  const micRef = useRef(readMic);
+  const agentRef = useRef(readAgent);
 
   useEffect(() => {
     stateRef.current = state;
-    readRef.current = readLevel;
-  }, [state, readLevel]);
+    micRef.current = readMic;
+    agentRef.current = readAgent;
+  }, [state, readMic, readAgent]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -48,8 +66,11 @@ export function Orb({ state, label, readLevel }: Props) {
     if (!canvas || !orb) return;
     const g = canvas.getContext("2d");
     if (!g) return;
-    const data = new Uint8Array(new ArrayBuffer(512));
+    const mic = new Uint8Array(new ArrayBuffer(512));
+    const agent = new Uint8Array(new ArrayBuffer(512));
     let raf = 0;
+    let micLevel = 0;
+    let outLevel = 0;
 
     const frame = () => {
       const dpr = window.devicePixelRatio || 1;
@@ -59,24 +80,26 @@ export function Orb({ state, label, readLevel }: Props) {
         canvas.width = w;
         canvas.height = h;
       }
-      readRef.current(data);
+      micRef.current(mic);
+      agentRef.current(agent);
+      // Attack fast, release slow: the orb breathes with speech instead of flickering.
+      const mNow = rms(mic);
+      const oNow = rms(agent);
+      micLevel = mNow > micLevel ? mNow : micLevel * 0.85 + mNow * 0.15;
+      outLevel = oNow > outLevel ? oNow : outLevel * 0.9 + oNow * 0.1;
+      orb.style.setProperty("--mic", micLevel.toFixed(3));
+      orb.style.setProperty("--out", outLevel.toFixed(3));
+      orb.style.setProperty("--lvl", Math.max(micLevel, outLevel).toFixed(3));
 
-      let sum = 0;
-      for (let i = 0; i < data.length; i++) {
-        const x = (data[i] - 128) / 128;
-        sum += x * x;
-      }
-      const level = Math.min(1, Math.sqrt(sum / data.length) * 3.2);
-      orb.style.setProperty("--lvl", level.toFixed(3));
-
+      const active = stateRef.current === "sidekick" ? agent : mic;
       g.clearRect(0, 0, canvas.width, canvas.height);
       g.lineWidth = 2 * dpr;
       g.lineJoin = "round";
       g.strokeStyle = WAVE_COLOR[stateRef.current];
       g.beginPath();
-      for (let i = 0; i < data.length; i++) {
-        const x = (i / (data.length - 1)) * canvas.width;
-        const y = (data[i] / 255) * canvas.height;
+      for (let i = 0; i < active.length; i++) {
+        const x = (i / (active.length - 1)) * canvas.width;
+        const y = (active[i] / 255) * canvas.height;
         if (i === 0) g.moveTo(x, y);
         else g.lineTo(x, y);
       }

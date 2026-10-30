@@ -143,21 +143,48 @@ export interface VoiceTiming {
   total_ms?: number | null;
 }
 
-/** Server -> client voice events on /ws/voice/{session_id} (SPEC §9.2). */
+/** A provisional suggestion chip (SPEC 9.7): an item that is not yet pinned. */
+export type VoiceSuggestion = VoiceItem & { provisional: true };
+
+/** Live analysis of the latest user (or rep) speech, from the `live` event (SPEC 9.7). */
+export interface LiveEvent {
+  type: "live";
+  turn: number;
+  speaker: string;
+  kind: "partial" | "final";
+  sentiment: number;
+  intent: string;
+  signals: string[];
+  coverage: CoverageItem[] | null;
+}
+
+/** Server -> client voice events on /ws/voice/{session_id} (SPEC §9.2, streaming and live events §9.2a, §9.7). */
 export type VoiceServerEvent =
   | { type: "user_text"; turn: number; text: string; stt_ms?: number | null }
+  | { type: "user_partial"; turn: number; text: string; seq?: number; first_word_ms?: number | null }
   | { type: "agent_text"; turn: number; delta: string }
   | { type: "audio"; turn: number; seq: number; rate: number; pcm_b64: string }
   | { type: "item"; turn: number; item: VoiceItem }
+  | { type: "suggestion"; turn: number; item: VoiceSuggestion }
+  | { type: "suggestion_retire"; turn: number; item_ids: string[]; reason: string }
+  | LiveEvent
   | { type: "turn_done"; turn: number; interrupted: boolean; timing?: VoiceTiming }
+  | { type: "status"; turn?: number; stage: "stt" | "tts"; state: "warming" | "ready" | "failed"; message?: string; elapsed_ms?: number }
+  | { type: "stream_started"; sample_rate: number; endpoint_silence_ms: number; frame_ms: number }
+  | { type: "stream_stopped"; flush: boolean; dropped_frames: number }
+  | { type: "session_ended"; reason: string }
   | { type: "error"; turn: number; stage: "stt" | "llm" | "tts"; message: string };
 
-/** Client -> server on /ws/voice/{session_id}. Binary frames carry one user turn as WAV.
- *  `feedback` is a SPEC gap: card resolutions in practice mode are sent on the same socket. */
+/** Client -> server on /ws/voice/{session_id}. Binary frames are one WAV turn (RIFF header) or streamed PCM16
+ *  frames while a stream is open. `feedback` is a SPEC gap: card resolutions in practice mode share this socket. */
 export type VoiceClientMessage =
   | { type: "interrupt" }
   | { type: "text"; text: string }
   | { type: "config"; voice?: string; role?: VoiceRole }
+  | { type: "stream_start"; sample_rate: 16000; endpoint_silence_ms?: number }
+  | { type: "stream_stop"; flush: boolean }
+  | { type: "pin"; item_id: string }
+  | { type: "dismiss"; item_id: string }
   | { type: "feedback"; card_id: string; action: "accept" | "reject" | "edit"; text?: string };
 
 /** Anything that can arrive on the voice socket: voice turn events plus the call events of practice mode. */

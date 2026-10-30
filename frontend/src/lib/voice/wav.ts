@@ -3,6 +3,17 @@
 
 export const VOICE_RATE = 16000;
 
+/** Float samples (-1..1) as little-endian PCM16 bytes: the raw frames of a streamed turn (SPEC 9.2). */
+export function pcm16(samples: Float32Array): ArrayBuffer {
+  const out = new ArrayBuffer(samples.length * 2);
+  const view = new DataView(out);
+  for (let i = 0; i < samples.length; i++) {
+    const x = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(i * 2, Math.round(x * 32767), true);
+  }
+  return out;
+}
+
 export function wav(frames: Float32Array[], rate: number = VOICE_RATE): ArrayBuffer {
   const samples = frames.reduce((n, f) => n + f.length, 0);
   const view = new DataView(new ArrayBuffer(44 + samples * 2));
