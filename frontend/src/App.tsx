@@ -3,11 +3,14 @@ import { Console } from "./components/Console";
 import { PostCallSummary } from "./components/PostCallSummary";
 import { StartScreen } from "./components/StartScreen";
 import { VoiceConsole } from "./components/voice/VoiceConsole";
+import { AdminRoute } from "./components/admin/AdminRoute";
 import { MOCK, useCallSession } from "./lib/useCallSession";
 import { useVoiceSession } from "./lib/voice/useVoiceSession";
+import { useAdminRoute } from "./lib/route";
 import type { StartOptions, VoiceRole, VoiceStartOptions } from "./lib/types";
 
 export default function App() {
+  const adminPage = useAdminRoute();
   const session = useCallSession();
   const voice = useVoiceSession();
   const { state } = session;
@@ -54,6 +57,11 @@ export default function App() {
     },
     [voice.start],
   );
+
+  // Admin area (#/admin/*) renders over whatever is underneath; it never starts or ends a call.
+  if (adminPage) {
+    return <AdminRoute page={adminPage} />;
+  }
 
   if (voiceActive) {
     return <VoiceConsole api={voice} onNew={voice.reset} />;

@@ -1,7 +1,14 @@
 @import "tailwindcss";
 
+/*
+ * Theme tokens (docs/THEMES.md). The @theme block holds the Midnight defaults so Tailwind utilities
+ * (bg-[var(--color-ink)], text-[var(--color-muted)], ...) keep working. Every other theme is a
+ * [data-theme="<id>"] block below. Blocks are unlayered so they beat the layered @theme defaults.
+ * A preview tile can set data-theme on its own element to show a theme without switching the page.
+ * Palette families (slate, sky, emerald, ...) are remapped for the light themes further down.
+ */
 @theme {
-  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-sans: "DM Sans", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   --color-ink: #0a1322; /* page background: dark navy */
@@ -14,6 +21,195 @@
   --color-lava-deep: #d92a18;
 }
 
+/* ---- Midnight (default, the original look) ------------------------------------------------- */
+:root,
+[data-theme="midnight"] {
+  --color-on-accent: #ffffff;
+  --color-lava-hover: #b82311;
+  --color-scheme: dark;
+  --panel-blur: none;
+  --panel-shadow: none;
+  --radius-panel: 14px;
+  --radius-control: 9px;
+  --glow-1: rgba(255, 54, 33, 0.05);
+  --glow-2: rgba(56, 189, 248, 0.06);
+  --scroll-thumb: #2a3c60;
+  --selection: rgba(56, 189, 248, 0.35);
+  --shadow-accent: rgba(255, 54, 33, 0.7);
+  --hover-tint: rgba(255, 255, 255, 0.08);
+  --ghost-tint: rgba(255, 255, 255, 0.04);
+  --c-pos: #6ee7b7;
+  --c-pos-base: #34d399;
+  --c-neg: #fda4af;
+  --c-neg-base: #f43f5e;
+  --c-warn: #fcd34d;
+  --c-warn-base: #f59e0b;
+  --c-info: #93c5fd;
+  --c-info-base: #60a5fa;
+  --c-neutral: #9aabc4;
+  --c-neutral-base: #8ea0bd;
+  --c-accent: #7dd3fc;
+  --c-accent-base: #38bdf8;
+  --accent-btn-from: #d92a18;
+  --accent-btn-to: #d92a18;
+}
+
+/* ---- Aurora: modern glassy dark, violet and teal gradients, translucent blurred panels ----- */
+[data-theme="aurora"] {
+  --color-ink: #0b0a1f;
+  --color-panel: rgba(255, 255, 255, 0.055);
+  --color-raised: rgba(255, 255, 255, 0.1);
+  --color-line: rgba(196, 181, 253, 0.2);
+  --color-text: #f5f3ff;
+  --color-muted: #bdb8e0;
+  --color-lava: #a78bfa;
+  --color-lava-deep: #6d28d9;
+  --color-lava-hover: #5b21b6;
+  --color-on-accent: #ffffff;
+  --color-scheme: dark;
+  --panel-blur: blur(16px) saturate(140%);
+  --panel-shadow: 0 18px 50px -24px rgba(76, 29, 149, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --radius-panel: 18px;
+  --radius-control: 12px;
+  --glow-1: rgba(139, 92, 246, 0.26);
+  --glow-2: rgba(45, 212, 191, 0.16);
+  --scroll-thumb: rgba(196, 181, 253, 0.3);
+  --selection: rgba(167, 139, 250, 0.4);
+  --shadow-accent: rgba(124, 58, 237, 0.65);
+  --hover-tint: rgba(255, 255, 255, 0.12);
+  --ghost-tint: rgba(255, 255, 255, 0.06);
+  --c-pos: #6ee7d0;
+  --c-pos-base: #2dd4bf;
+  --c-neg: #fda4c7;
+  --c-neg-base: #f472b6;
+  --c-warn: #fcd98a;
+  --c-warn-base: #fbbf24;
+  --c-info: #c4b5fd;
+  --c-info-base: #a78bfa;
+  --c-neutral: #bdb8e0;
+  --c-neutral-base: #a5a0d0;
+  --c-accent: #99e6ff;
+  --c-accent-base: #67d4f5;
+  --accent-btn-from: #6d28d9;
+  --accent-btn-to: #0f766e;
+}
+
+/* ---- Daylight: clean modern light --------------------------------------------------------- */
+[data-theme="daylight"] {
+  --color-ink: #f5f7fb;
+  --color-panel: #ffffff;
+  --color-raised: #eceff6;
+  --color-line: #d3dae6;
+  --color-text: #0f172a;
+  --color-muted: #475569;
+  --color-lava: #ff3621;
+  --color-lava-deep: #c52a14;
+  --color-lava-hover: #a52211;
+  --color-on-accent: #ffffff;
+  --color-scheme: light;
+  --panel-blur: none;
+  --panel-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 10px 30px -18px rgba(15, 23, 42, 0.18);
+  --radius-panel: 14px;
+  --radius-control: 9px;
+  --glow-1: rgba(255, 54, 33, 0.04);
+  --glow-2: rgba(14, 165, 233, 0.05);
+  --scroll-thumb: #c3cde0;
+  --selection: rgba(14, 165, 233, 0.25);
+  --shadow-accent: rgba(197, 42, 20, 0.45);
+  --hover-tint: rgba(15, 23, 42, 0.06);
+  --ghost-tint: rgba(15, 23, 42, 0.03);
+  --c-pos: #047857;
+  --c-pos-base: #10b981;
+  --c-neg: #be123c;
+  --c-neg-base: #f43f5e;
+  --c-warn: #92400e;
+  --c-warn-base: #f59e0b;
+  --c-info: #1d4ed8;
+  --c-info-base: #3b82f6;
+  --c-neutral: #475569;
+  --c-neutral-base: #64748b;
+  --c-accent: #0369a1;
+  --c-accent-base: #0ea5e9;
+  --accent-btn-from: #c52a14;
+  --accent-btn-to: #c52a14;
+}
+
+/* ---- Databricks: lava and navy on oat surfaces ------------------------------------------- */
+[data-theme="databricks"] {
+  --color-ink: #f7f4ee;
+  --color-panel: #ffffff;
+  --color-raised: #efebe2;
+  --color-line: #d8d0c0;
+  --color-text: #1b3139;
+  --color-muted: #4a5e67;
+  --color-lava: #ff3621;
+  --color-lava-deep: #b52b17;
+  --color-lava-hover: #97230f;
+  --color-on-accent: #ffffff;
+  --color-scheme: light;
+  --panel-blur: none;
+  --panel-shadow: 0 1px 2px rgba(27, 49, 57, 0.08), 0 12px 28px -20px rgba(27, 49, 57, 0.3);
+  --radius-panel: 10px;
+  --radius-control: 8px;
+  --glow-1: rgba(255, 54, 33, 0.05);
+  --glow-2: rgba(27, 49, 57, 0.04);
+  --scroll-thumb: #cbbfa9;
+  --selection: rgba(255, 54, 33, 0.22);
+  --shadow-accent: rgba(181, 43, 23, 0.4);
+  --hover-tint: rgba(27, 49, 57, 0.07);
+  --ghost-tint: rgba(27, 49, 57, 0.03);
+  --c-pos: #1d6b4f;
+  --c-pos-base: #1f9d6b;
+  --c-neg: #a3202e;
+  --c-neg-base: #e0394a;
+  --c-warn: #7a4a06;
+  --c-warn-base: #e8a317;
+  --c-info: #1b4f9c;
+  --c-info-base: #3a7bd5;
+  --c-neutral: #4a5e67;
+  --c-neutral-base: #6b7d85;
+  --c-accent: #9a2a10;
+  --c-accent-base: #ff3621;
+  --accent-btn-from: #b52b17;
+  --accent-btn-to: #b52b17;
+}
+
+/* Light themes: remap the Tailwind palette families the components use for text, so tinted text stays AA. */
+[data-theme="daylight"],
+[data-theme="databricks"] {
+  --color-white: #0f172a;
+  --color-slate-100: #0f172a;
+  --color-slate-200: #1e293b;
+  --color-slate-300: #334155;
+  --color-slate-400: #475569;
+  --color-slate-500: #4b5563;
+  --color-slate-600: #94a3b8;
+  --color-slate-700: #cbd5e1;
+  --color-sky-100: #0c4a6e;
+  --color-sky-200: #075985;
+  --color-sky-300: #0369a1;
+  --color-sky-400: #0284c7;
+  --color-amber-50: #451a03;
+  --color-amber-100: #78350f;
+  --color-amber-200: #92400e;
+  --color-amber-300: #b45309;
+  --color-amber-400: #d97706;
+  --color-emerald-100: #064e3b;
+  --color-emerald-200: #065f46;
+  --color-emerald-300: #047857;
+  --color-emerald-400: #059669;
+  --color-rose-100: #881337;
+  --color-rose-200: #9f1239;
+  --color-rose-300: #be123c;
+  --color-rose-400: #e11d48;
+  --color-teal-100: #134e4a;
+  --color-teal-200: #115e59;
+  --color-teal-300: #0f766e;
+  --color-teal-400: #0d9488;
+  --color-violet-300: #6d28d9;
+}
+
+/* Chip and button colours by theme (the component classes below read these). */
 @layer base {
   html,
   body,
@@ -24,14 +220,15 @@
     background: var(--color-ink);
     color: var(--color-text);
     font-family: var(--font-sans);
+    color-scheme: var(--color-scheme);
     -webkit-font-smoothing: antialiased;
     background-image:
-      radial-gradient(1200px 500px at 85% -10%, rgba(255, 54, 33, 0.05), transparent 60%),
-      radial-gradient(900px 500px at -10% 0%, rgba(56, 189, 248, 0.06), transparent 60%);
+      radial-gradient(1200px 500px at 85% -10%, var(--glow-1), transparent 60%),
+      radial-gradient(900px 500px at -10% 0%, var(--glow-2), transparent 60%);
     background-attachment: fixed;
   }
   ::selection {
-    background: rgba(56, 189, 248, 0.35);
+    background: var(--selection);
   }
 }
 
@@ -39,7 +236,10 @@
   .panel {
     background: var(--color-panel);
     border: 1px solid var(--color-line);
-    border-radius: 14px;
+    border-radius: var(--radius-panel);
+    backdrop-filter: var(--panel-blur);
+    -webkit-backdrop-filter: var(--panel-blur);
+    box-shadow: var(--panel-shadow);
   }
   .chip {
     display: inline-flex;
@@ -54,42 +254,42 @@
     border: 1px solid transparent;
   }
   .chip-pos {
-    color: #6ee7b7;
-    background: rgba(52, 211, 153, 0.12);
-    border-color: rgba(52, 211, 153, 0.3);
+    color: var(--c-pos);
+    background: color-mix(in srgb, var(--c-pos-base) 12%, transparent);
+    border-color: color-mix(in srgb, var(--c-pos-base) 30%, transparent);
   }
   .chip-neg {
-    color: #fda4af;
-    background: rgba(244, 63, 94, 0.12);
-    border-color: rgba(244, 63, 94, 0.3);
+    color: var(--c-neg);
+    background: color-mix(in srgb, var(--c-neg-base) 12%, transparent);
+    border-color: color-mix(in srgb, var(--c-neg-base) 30%, transparent);
   }
   .chip-neutral {
-    color: var(--color-muted);
-    background: rgba(142, 160, 189, 0.1);
-    border-color: rgba(142, 160, 189, 0.22);
+    color: var(--c-neutral);
+    background: color-mix(in srgb, var(--c-neutral-base) 10%, transparent);
+    border-color: color-mix(in srgb, var(--c-neutral-base) 22%, transparent);
   }
   .chip-intent {
-    color: #93c5fd;
-    background: rgba(96, 165, 250, 0.1);
-    border-color: rgba(96, 165, 250, 0.25);
+    color: var(--c-info);
+    background: color-mix(in srgb, var(--c-info-base) 10%, transparent);
+    border-color: color-mix(in srgb, var(--c-info-base) 25%, transparent);
     font-family: var(--font-mono);
   }
   .chip-objection {
-    color: #fcd34d;
-    background: rgba(245, 158, 11, 0.12);
-    border-color: rgba(245, 158, 11, 0.3);
+    color: var(--c-warn);
+    background: color-mix(in srgb, var(--c-warn-base) 12%, transparent);
+    border-color: color-mix(in srgb, var(--c-warn-base) 30%, transparent);
   }
   .chip-risk {
-    color: #fda4af;
-    background: rgba(244, 63, 94, 0.1);
-    border-color: rgba(244, 63, 94, 0.28);
+    color: var(--c-neg);
+    background: color-mix(in srgb, var(--c-neg-base) 10%, transparent);
+    border-color: color-mix(in srgb, var(--c-neg-base) 28%, transparent);
   }
   .btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 6px;
-    border-radius: 9px;
+    border-radius: var(--radius-control);
     padding: 6px 12px;
     font-size: 13px;
     font-weight: 600;
@@ -106,29 +306,29 @@
   }
   .btn-ghost {
     color: var(--color-text);
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--ghost-tint);
     border: 1px solid var(--color-line);
   }
   .btn-ghost:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--hover-tint);
   }
   .btn-primary {
-    color: #fff;
+    color: var(--color-on-accent);
     /* lava-deep, not lava: white on #FF3621 is 3.6:1, below AA for button text. */
-    background: var(--color-lava-deep);
+    background: linear-gradient(120deg, var(--accent-btn-from), var(--accent-btn-to));
     border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 6px 24px -10px rgba(255, 54, 33, 0.7);
+    box-shadow: 0 6px 24px -10px var(--shadow-accent);
   }
   .btn-primary:hover:not(:disabled) {
-    background: #b82311;
+    filter: brightness(0.92);
   }
   .btn-danger {
-    color: #fda4af;
-    background: rgba(244, 63, 94, 0.08);
-    border: 1px solid rgba(244, 63, 94, 0.35);
+    color: var(--c-neg);
+    background: color-mix(in srgb, var(--c-neg-base) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--c-neg-base) 35%, transparent);
   }
   .btn-danger:hover:not(:disabled) {
-    background: rgba(244, 63, 94, 0.16);
+    background: color-mix(in srgb, var(--c-neg-base) 16%, transparent);
   }
   .kbd-label {
     font-size: 11px;
@@ -139,7 +339,7 @@
   }
   .scroll-thin {
     scrollbar-width: thin;
-    scrollbar-color: #2a3c60 transparent;
+    scrollbar-color: var(--scroll-thumb) transparent;
   }
 }
 

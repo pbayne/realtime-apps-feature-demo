@@ -8,6 +8,7 @@ import { isThinking, type VoiceState } from "../../lib/voice/state";
 import type { VoiceSession } from "../../lib/voice/useVoiceSession";
 import type { VoiceOption } from "../../lib/types";
 import { Brand } from "../Brand";
+import { AdminGear } from "../admin/AdminGear";
 import { ContextPanel } from "../ContextPanel";
 import { SidekickFeed } from "../SidekickFeed";
 import { Composer, Conversation } from "./Conversation";
@@ -205,6 +206,7 @@ export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void 
             </button>
           )}
         </div>
+        <AdminGear />
       </header>
 
       {state.warming && (
