@@ -119,6 +119,9 @@ variables:
   vs_endpoint:
     description: Vector Search endpoint name.
     default: call-sidekick-vs
+  warehouse_id:
+    description: SQL warehouse id for the admin insights page (app resource sql-warehouse, CAN_USE). Empty leaves the page in its empty state. Set with BUNDLE_VAR_warehouse_id.
+    default: ""
 
 # Direct-safe resources (serverless jobs, apps, Lakebase, GPU endpoints). Kafka-only resources are under targets.kafka.
 include:

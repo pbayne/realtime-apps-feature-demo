@@ -4,6 +4,7 @@ import { FALLBACK_PLAYBOOKS, FALLBACK_SCRIPTS, FALLBACK_VOICES, MOCK_VOICES, get
 import { MOCK, MOCK_SPEED, URL_PARAMS } from "../lib/useCallSession";
 import type { Mode, PlaybookSummary, StartOptions, VoiceOption, VoiceRole, VoiceStartOptions } from "../lib/types";
 import { Brand } from "./Brand";
+import { AdminGear } from "./admin/AdminGear";
 import { VoiceStartPanel } from "./voice/VoiceStartPanel";
 import { isMicBlocked, MIC_BLOCKED } from "../lib/micErrors";
 
@@ -112,11 +113,14 @@ export function StartScreen({ error, onStart, onStartVoice }: Props) {
     <div className="flex min-h-full flex-col">
       <header className="flex items-center justify-between px-8 py-4">
         <Brand />
-        {MOCK && (
-          <span className="chip border-[var(--color-line)] text-[var(--color-muted)]">
-            <Sparkles className="size-3" /> Mock mode · simulated stream{MOCK_SPEED !== 1 ? ` · ${MOCK_SPEED}x` : ""}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {MOCK && (
+            <span className="chip border-[var(--color-line)] text-[var(--color-muted)]">
+              <Sparkles className="size-3" /> Mock mode · simulated stream{MOCK_SPEED !== 1 ? ` · ${MOCK_SPEED}x` : ""}
+            </span>
+          )}
+          <AdminGear />
+        </div>
       </header>
 
       <main className="mx-auto grid w-full max-w-5xl flex-1 items-center gap-8 px-6 pb-10 pt-2 md:grid-cols-[1.1fr_1fr]">

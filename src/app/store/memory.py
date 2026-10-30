@@ -19,6 +19,14 @@ class MemoryStore:
         self.voice_turns: dict[str, dict[int, dict[str, Any]]] = {}
         self.voice_items: dict[str, list[dict[str, Any]]] = {}
         self._waiters: dict[tuple[str, int], asyncio.Event] = {}
+        self.prefs: dict[str, dict[str, Any]] = {}
+
+    async def get_prefs(self, owner: str) -> Optional[dict[str, Any]]:
+        row = self.prefs.get(owner)
+        return dict(row) if row else None
+
+    async def put_prefs(self, owner: str, theme: str, updated_at_ms: int) -> None:
+        self.prefs[owner] = {"owner": owner, "theme": theme, "updated_at_ms": updated_at_ms}
 
     async def start(self) -> None:
         return None

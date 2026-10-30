@@ -102,3 +102,8 @@ resources:
         - name: voice-llm
           description: Voice mode model (haiku, thinking disabled)
           serving_endpoint: {name: "${var.voice_model}", permission: CAN_QUERY}
+
+        # Admin insights (SPEC 13): SQL Statement Execution over the history tables. Empty state when unset.
+        - name: sql-warehouse
+          description: SQL warehouse for the admin insights page (read-only queries over the history tables)
+          sql_warehouse: {id: "${var.warehouse_id}", permission: CAN_USE}

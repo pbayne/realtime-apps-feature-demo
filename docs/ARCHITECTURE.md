@@ -114,12 +114,12 @@ from `scripts/voice_smoke.py` (macOS `say`, 16 kHz), small samples (n = 1–3 pe
 
 | Stage | Value |
 |---|---|
-| End of speech → final transcript (Parakeet rolling window, includes the 700 ms endpoint silence) | 0.84–0.92 s |
+| End of speech → final transcript (Parakeet rolling window, includes the 700 ms endpoint silence) | 0.84–0.97 s (2026-10-30, latest run) |
 | Parakeet window decode round trip (from a laptop; in region is lower) | p50 312 ms |
 | Voice model first token, practice prompt | 0.41 s (0.52–0.65 s standalone; first call after idle ~3.2 s) |
 | Voice model first token, assistant prompt (+ KB retrieval) | 1.03 s |
-| Kokoro first audio per sentence | 107–144 ms |
-| **Turn start → first audible reply** | practice **0.60–0.69 s**, assistant **1.29 s** |
+| Kokoro first audio per sentence | 107–167 ms |
+| **Turn start → first audible reply** | practice **0.60–0.69 s**, assistant **0.82 s** (2026-10-30; was 1.29 s before the per-turn Vector Search call that failed was removed, so the assistant turn no longer waits on it) |
 | Kokoro cold start from scale-to-zero | 112 s |
 | Zerobus history | 41 queued / 41 written / 0 dropped / 0 failed |
 

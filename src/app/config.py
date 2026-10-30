@@ -140,6 +140,12 @@ class Settings(BaseSettings):
     playbooks_dir: Path = APP_DIR / "playbooks"
     replay_dir: Path = APP_DIR / "data" / "replay"
 
+    # --- admin area (SPEC 13) ---
+    app_default_theme: str = "midnight"        # theme for users with no saved preference (admin/prefs.py THEME_IDS)
+    admin_emails: str = "patrick.bayne@databricks.com"  # comma-separated allowlist for /api/admin/* (case-insensitive)
+    databricks_warehouse_id: Optional[str] = None  # SQL warehouse for insights (app resource sql_warehouse); unset = empty state
+    insights_cache_s: float = 60.0             # per-process cache of insight results
+
     # --- history: Zerobus Ingest -> UC Delta (backbone=direct, SPEC section 3.7) ---
     history_catalog: str = "main"
     history_schema: str = "call_sidekick"

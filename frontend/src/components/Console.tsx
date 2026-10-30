@@ -4,6 +4,7 @@ import { fmtClock } from "../lib/format";
 import type { CallState, CallStatus } from "../lib/store";
 import type { Speaker } from "../lib/types";
 import { Brand } from "./Brand";
+import { AdminGear } from "./admin/AdminGear";
 import { ContextPanel } from "./ContextPanel";
 import { SidekickFeed } from "./SidekickFeed";
 import { TranscriptPanel } from "./TranscriptPanel";
@@ -63,6 +64,7 @@ export function Console({ state, channel, sttBrowser, notice, onEnd, onChannel, 
         <span className="font-mono text-[13px] tabular-nums text-slate-300">{fmtClock(elapsed)}</span>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
+          <AdminGear />
           {isMic && running && (
             <>
               <div className="flex items-center gap-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5" role="group" aria-label="Mic channel">

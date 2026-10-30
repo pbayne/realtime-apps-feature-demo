@@ -588,3 +588,12 @@ https://github.com/databricks/zerobus-sdk/blob/main/python/README.md
 - **Secrets.** `lakebase_password` is read from the secret scope only. It is no longer a job parameter or bundle variable.
   `ROTATE_PG_PASSWORD=1` rotates it and restarts the app.
 
+
+## 13. Changes from v0.6 **[v0.7]** (summary): admin area
+
+- **Routes (UI).** `#/admin/themes`, `#/admin/architecture`, `#/admin/insights`, reached from a gear icon in the start screen and both console headers. Themes and architecture are open to every user. Insights is admin only.
+- **Preferences.** `GET/PUT /api/prefs` store the caller's theme in Lakebase `user_prefs` (owner PK, theme, updated_at_ms; DDL in `store/lakebase.py` and `notebooks/init.py`, parity test enforced). The owner is `X-Forwarded-Email`, never a body field. Unknown themes are refused (422). No identity is 403. Default for users without a choice: `APP_DEFAULT_THEME`. Four themes: midnight, aurora, daylight, databricks (`docs/THEMES.md`).
+- **Identity.** `GET /api/me` returns `email`, `is_admin` and `default_theme`. `is_admin` is membership in `ADMIN_EMAILS` (case-insensitive, default `patrick.bayne@databricks.com`).
+- **Insights.** `GET /api/admin/insights?days=1..90` (admin only; 403 otherwise) reads the UC history tables through the SQL Statement Execution API on `DATABRICKS_WAREHOUSE_ID` (app resource `sql-warehouse`, bundle var `warehouse_id`, CAN_USE). Values are bound parameters; only the validated catalog and schema appear in the SQL text. Each section fails on its own. Results are cached for `INSIGHTS_CACHE_S` (60 s). With no warehouse the page shows an empty state. `GET /api/admin/calls/{id}` is the drill-down (transcript, cards, post-call summary).
+- **Talk-track insights.** Daily serverless job `call-sidekick-talk-track-insights` (06:00 UTC) asks `ai_query` over the last 7 days of transcripts and cards for recurring objections, responses that worked, KB gaps and coverage gaps, and appends the run to `talk_track_insights`. Invalid items are dropped and counted. The insights page shows the latest run (`MAX(run_id)`).
+- **Architecture explorer.** `#/admin/architecture` is the How it's built page. It holds the component model, the step-through of one utterance, and the scale-path toggle. View state (component, step, toggles, presentation) lives in the URL hash. The timings are the measured numbers in `docs/ARCHITECTURE.md` section 3.3 (2026-10-30).

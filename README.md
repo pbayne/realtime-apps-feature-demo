@@ -192,10 +192,10 @@ Targets are in SPEC 7 and 9.5. Measured numbers and their labels are in [`docs/A
 
 | Stage | Practice mode | Assistant mode |
 |---|---|---|
-| End of speech → final transcript (includes the 700 ms endpoint silence) | 0.84–0.90 s | 0.92 s |
+| End of speech → final transcript (includes the 700 ms endpoint silence) | 0.84–0.97 s | 0.84–0.97 s |
 | Turn start → voice model first token (`databricks-claude-haiku-4-5`) | 0.41 s | 1.03 s (with KB retrieval) |
-| Kokoro first audio for a sentence | 107–137 ms | 123 ms |
-| **Turn start → first audible reply** | **0.60–0.69 s** | **1.29 s** |
+| Kokoro first audio for a sentence | 107–167 ms | 107–167 ms |
+| **Turn start → first audible reply** | **0.60–0.69 s** | **0.82 s** (was 1.29 s before the per-turn Vector Search call was removed) |
 | History via Zerobus | 41/41 records written, 0 dropped | |
 
 The first request to the voice model after idle took ~3 s once; the session pre-warm covers it.
@@ -203,6 +203,16 @@ The first request to the voice model after idle took ~3 s once; the session pre-
 Earlier live replay (direct backbone, e2-demo LLMs) measured in-process enrichment p50 0 ms (max 3 ms).
 Customer final to card.start was p50 301 ms (`advisor_coach/fee_objection`) and 1002 ms (`contact_center/billing_dispute`).
 Card.done was p50 1992 ms and 2299 ms. Small samples (n = 5–7 cards).
+
+## Admin area
+
+Reached from the gear icon in the start screen and both console headers. Details: SPEC section 13, colour contrast in [`docs/THEMES.md`](docs/THEMES.md).
+
+- **Theme** (`#/admin/themes`, every user): four looks (Midnight, Aurora, Daylight, Databricks). The choice is saved per user in Lakebase (`user_prefs`) and applied before first paint from a local cache. Default: `APP_DEFAULT_THEME`.
+- **How it's built** (`#/admin/architecture`, every user): the architecture as clickable components, with the measured numbers. "Play the flow" steps through one utterance. `?k=1` shows the scale path (Kafka and Spark Real-Time Mode), `?p=1` is presentation mode, and the URL holds the state for sharing.
+- **Insights** (`#/admin/insights`, admins only): calls, sentiment, latency, objections, card outcomes and recent calls over the UC history tables, with a call drill-down. It needs a SQL warehouse: `BUNDLE_VAR_warehouse_id=<id>` at deploy (app resource `sql-warehouse`, CAN_USE). Without one the page is empty.
+- **Admins** are the `ADMIN_EMAILS` allowlist (default `patrick.bayne@databricks.com`, case-insensitive). Insights uses the app's service principal, so grant that principal `SELECT` on the history tables and on `talk_track_insights`.
+- **Talk-track insights job** (`call-sidekick-talk-track-insights`, daily 06:00 UTC, serverless) writes `talk_track_insights`. The insights page shows its latest run.
 
 ## Secrets and app env
 

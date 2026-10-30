@@ -126,6 +126,32 @@ resources:
               idle_minutes: "15"
               max_calls_per_run: "200"
 
+    call_sidekick_talk_track_insights:
+      name: call-sidekick-talk-track-insights
+      description: Daily. Last 7 days of transcripts and cards -> ai_query -> talk_track_insights (recurring objections, responses that worked, KB gaps, coverage gaps). Feeds the admin insights page (SPEC 13).
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ?"
+        timezone_id: UTC
+        pause_status: UNPAUSED
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "6"
+      tasks:
+        - task_key: talk_track_insights
+          environment_key: default
+          notebook_task:
+            notebook_path: ../src/notebooks/talk_track_insights.py
+            base_parameters:
+              uc_catalog: ${var.catalog}
+              uc_schema: ${var.uc_schema}
+              scoring_endpoint: ${var.smart_model}
+              days: "7"
+              max_calls: "150"
+              utterances_table: ${var.scoring_utterances_table}
+              cards_table: ${var.scoring_cards_table}
+
     call_sidekick_parakeet_register:
       name: call-sidekick-parakeet-register
       description: One-off (re-run on model upgrades). Registers Parakeet to UC and creates the GPU audio serving endpoint (not route-optimized; scale-to-zero per gpu_scale_to_zero). Serverless GPU.

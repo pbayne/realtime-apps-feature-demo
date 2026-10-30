@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS voice_turns (
 CREATE TABLE IF NOT EXISTS voice_items (
   item_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, turn INTEGER, kind TEXT, text TEXT,
   owner TEXT, due TEXT, source_doc TEXT, created_at_ms BIGINT);
+CREATE TABLE IF NOT EXISTS user_prefs (
+  owner TEXT PRIMARY KEY, theme TEXT NOT NULL, updated_at_ms BIGINT NOT NULL);
 """
 
 
@@ -276,6 +278,18 @@ class LakebaseStore:
             "feedback": [dict(r) for r in fb],
             "as_of_ms": int(time.time() * 1000),
         }
+
+    # ------------------------------------------------------------ preferences
+    async def get_prefs(self, owner: str) -> Optional[dict[str, Any]]:
+        rec = await self._pool.fetchrow("SELECT owner, theme, updated_at_ms FROM user_prefs WHERE owner=$1", owner)
+        return dict(rec) if rec else None
+
+    async def put_prefs(self, owner: str, theme: str, updated_at_ms: int) -> None:
+        await self._pool.execute(
+            "INSERT INTO user_prefs (owner, theme, updated_at_ms) VALUES ($1,$2,$3) "
+            "ON CONFLICT (owner) DO UPDATE SET theme=EXCLUDED.theme, updated_at_ms=EXCLUDED.updated_at_ms",
+            owner, theme, updated_at_ms,
+        )
 
     # ------------------------------------------------------------ voice mode
     async def put_voice_turn(self, session_id: str, row: dict[str, Any]) -> None:

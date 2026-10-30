@@ -1,13 +1,23 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en" data-theme="midnight">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="dark light" />
     <title>Call Sidekick</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <script type="module" crossorigin src="/assets/index-BgQyJ_YC.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-84Unkkxc.css">
+    <!-- Theme before first paint (no flash). The cache is written by lib/theme.ts after the server preference loads. -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("sidekick.theme");
+          var known = ["midnight", "aurora", "daylight", "databricks"];
+          if (t && known.indexOf(t) !== -1) document.documentElement.setAttribute("data-theme", t);
+        } catch (e) {}
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-C4jjADAc.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-SbYpapCb.css">
   </head>
   <body>
     <div id="root"></div>

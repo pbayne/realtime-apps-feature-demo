@@ -33,11 +33,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal, Optional
 
+from admin import insights as admin_insights
+from admin import prefs as admin_prefs
 from config import get_settings
 from fastapi import FastAPI, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -288,6 +291,87 @@ async def delete_voice_session(session_id: str, request: Request):
 async def end_voice_session(session_id: str, request: Request):
     """POST twin of DELETE: navigator.sendBeacon (used on page hide) can only send POST."""
     return await _end_voice_session(session_id, request)
+
+
+# ----------------------------------------------------------------- identity and preferences (SPEC 13)
+
+class PutPrefs(BaseModel):
+    theme: Literal["midnight", "aurora", "daylight", "databricks"]
+
+
+def _is_admin(request: Request) -> bool:
+    return admin_prefs.is_admin(_caller(request), admin_prefs.parse_admin_emails(_svc(request).settings.admin_emails))
+
+
+@app.get("/api/me")
+async def get_me(request: Request):
+    """Who the proxy says the caller is, and whether they see the admin-only pages (ADMIN_EMAILS)."""
+    svc = _svc(request)
+    return {
+        "email": _caller(request),
+        "is_admin": _is_admin(request),
+        "default_theme": admin_prefs.resolve_default(svc.settings.app_default_theme),
+    }
+
+
+@app.get("/api/prefs")
+async def get_prefs(request: Request):
+    svc = _svc(request)
+    caller = _caller(request)
+    if caller is None:
+        raise ServiceError(403, "the app could not identify the caller")
+    try:
+        return await admin_prefs.get_theme(svc.store, caller, admin_prefs.resolve_default(svc.settings.app_default_theme))
+    except Exception as exc:  # noqa: BLE001 - Lakebase down: the UI keeps its cached theme
+        log.warning("prefs unavailable: %r", exc)
+        raise ServiceError(503, "preferences are unavailable right now") from exc
+
+
+@app.put("/api/prefs")
+async def put_prefs(body: PutPrefs, request: Request):
+    svc = _svc(request)
+    caller = _caller(request)
+    if caller is None:
+        raise ServiceError(403, "the app could not identify the caller")
+    try:
+        return await admin_prefs.set_theme(svc.store, caller, body.theme, now_ms())
+    except ValueError as exc:
+        raise ServiceError(400, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        log.warning("prefs write failed: %r", exc)
+        raise ServiceError(503, "preferences could not be saved right now") from exc
+
+
+def _insights_for(svc: Services) -> admin_insights.Insights:
+    """Built on first use: the SQL warehouse comes from DATABRICKS_WAREHOUSE_ID; without it the page is empty."""
+    existing = getattr(svc, "insights", None)
+    if existing is None:
+        s = svc.settings
+        wh = s.databricks_warehouse_id
+        executor = admin_insights.make_sdk_executor(wh) if wh and s.mode == "databricks" else None
+        existing = admin_insights.Insights(s.history_catalog, s.history_schema, wh, s.insights_cache_s, executor)
+        svc.insights = existing
+    return existing
+
+
+def _admin_only(request: Request) -> None:
+    if not _is_admin(request):
+        raise ServiceError(403, "admin only")
+
+
+@app.get("/api/admin/insights")
+async def admin_insights_overview(request: Request, days: int = Query(default=7, ge=1, le=90)):
+    _admin_only(request)
+    return await _insights_for(_svc(request)).overview(days)
+
+
+@app.get("/api/admin/calls/{call_id}")
+async def admin_call_detail(call_id: str, request: Request):
+    """Drill-down from the insights page: transcript, cards and the post-call summary, from Delta."""
+    _admin_only(request)
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", call_id):
+        raise ServiceError(404, "unknown call")
+    return {"call_id": call_id, **(await _insights_for(_svc(request)).call_detail(call_id))}
 
 
 # ----------------------------------------------------------------- WebSockets
