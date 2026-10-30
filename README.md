@@ -193,6 +193,16 @@ Earlier live replay (direct backbone, e2-demo LLMs) measured in-process enrichme
 Customer final to card.start was p50 301 ms (`advisor_coach/fee_objection`) and 1002 ms (`contact_center/billing_dispute`).
 Card.done was p50 1992 ms and 2299 ms. Small samples (n = 5–7 cards).
 
+## Admin area
+
+Reached from the gear icon in the start screen and both console headers. Details: SPEC section 13, colour contrast in [`docs/THEMES.md`](docs/THEMES.md).
+
+- **Theme** (`#/admin/themes`, every user): four looks (Midnight, Aurora, Daylight, Databricks). The choice is saved per user in Lakebase (`user_prefs`) and applied before first paint from a local cache. Default: `APP_DEFAULT_THEME`.
+- **How it's built** (`#/admin/architecture`, every user): the architecture as clickable components, with the measured numbers. "Play the flow" steps through one utterance. `?k=1` shows the scale path (Kafka and Spark Real-Time Mode), `?p=1` is presentation mode, and the URL holds the state for sharing.
+- **Insights** (`#/admin/insights`, admins only): calls, sentiment, latency, objections, card outcomes and recent calls over the UC history tables, with a call drill-down. It needs a SQL warehouse: `BUNDLE_VAR_warehouse_id=<id>` at deploy (app resource `sql-warehouse`, CAN_USE). Without one the page is empty.
+- **Admins** are the `ADMIN_EMAILS` allowlist (default `patrick.bayne@databricks.com`, case-insensitive). Insights uses the app's service principal, so grant that principal `SELECT` on the history tables and on `talk_track_insights`.
+- **Talk-track insights job** (`call-sidekick-talk-track-insights`, daily 06:00 UTC, serverless) writes `talk_track_insights`. The insights page shows its latest run.
+
 ## Secrets and app env
 
 Values never live in git. `deploy.sh` writes the scope keys; `resources/app.yml` binds them as app secret resources,
