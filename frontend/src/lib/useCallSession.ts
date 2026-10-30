@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { createCall, endCall } from "./api";
 import { startMicCapture, type MicCapture } from "./audio";
+import { describeStartError } from "./micErrors";
 import { openAudioSocket } from "./connection";
 import { openCallSocket, type CallConnection, type ConnStatus } from "./connection";
 import { browserSttSupported, startBrowserStt, type BrowserStt } from "./browserStt";
@@ -113,7 +114,7 @@ export function useCallSession() {
         }
       } catch (err) {
         teardownMedia();
-        dispatch({ type: "error", message: err instanceof Error ? err.message : String(err) });
+        dispatch({ type: "error", message: describeStartError(err) });
       }
     },
     [handleEvent, handleStatus, handleTerminal, teardownMedia],

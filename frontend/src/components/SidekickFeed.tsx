@@ -49,7 +49,7 @@ export function SidekickFeed({ state, onResolve }: Props) {
       <div className="scroll-thin min-h-0 flex-1 space-y-3 overflow-y-auto px-3.5 py-3.5">
         {all.length === 0 && (
           <div className="rounded-xl border border-dashed border-[var(--color-line)] px-4 py-8 text-center text-[13px] text-[var(--color-muted)]">
-            <Sparkles className="mx-auto mb-2 size-5 text-slate-500" />
+            <Sparkles className="mx-auto mb-2 size-5 text-slate-400" />
             Cards appear here after a customer turn, each with its source and a confidence score.
           </div>
         )}
@@ -121,7 +121,7 @@ function CardItem({
       <article className="anim-card-in flex items-center gap-2.5 rounded-xl border border-[var(--color-line)] bg-[var(--color-raised)]/50 px-3 py-2">
         <Icon className="size-3.5 shrink-0" style={{ color: meta.color }} />
         <span className="min-w-0 flex-1 truncate text-[12.5px] text-slate-300">{card.title}</span>
-        <span className="text-[10.5px] uppercase tracking-wider text-[var(--color-muted)]">
+        <span className="text-[11px] uppercase tracking-wider text-[var(--color-muted)]">
           {resolution ?? "shown"}
         </span>
         {!compact && (
@@ -149,7 +149,7 @@ function CardItem({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="text-[10.5px] font-semibold uppercase tracking-[0.09em]" style={{ color: meta.color }}>
+            <span className="text-[11px] font-semibold uppercase tracking-[0.09em]" style={{ color: meta.color }}>
               {KIND_LABEL[card.kind]}
             </span>
             {isCompliance && !resolved && (
@@ -157,7 +157,7 @@ function CardItem({
                 <Pin className="size-2.5" /> pinned
               </span>
             )}
-            <span className="ml-auto text-[10.5px] text-[var(--color-muted)]">seq {card.seq}</span>
+            <span className="ml-auto text-[11px] text-[var(--color-muted)]">seq {card.seq}</span>
           </div>
           <h3 className="mt-0.5 text-[14.5px] font-semibold leading-snug text-white">{card.title}</h3>
         </div>
@@ -169,7 +169,7 @@ function CardItem({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             rows={3}
-            className="w-full resize-none rounded-lg border border-sky-400/40 bg-[var(--color-ink)] p-2.5 text-[13.5px] leading-relaxed outline-none focus:border-sky-300"
+            className="w-full resize-none rounded-lg border border-sky-400/40 bg-[var(--color-ink)] p-2.5 text-[13.5px] leading-relaxed focus:border-sky-300"
             autoFocus
           />
           <div className="mt-2 flex justify-end gap-2">
@@ -265,7 +265,7 @@ function ConfidenceBar({ value }: { value: number }) {
   const color = confidenceColor(value);
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2" title={`confidence ${pct}%`}>
-      <span className="text-[10.5px] uppercase tracking-wider text-[var(--color-muted)]">conf</span>
+      <span className="text-[11px] uppercase tracking-wider text-[var(--color-muted)]">conf</span>
       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/[0.07]">
         <div className="h-full rounded-full transition-[width] duration-500" style={{ width: `${pct}%`, background: color }} />
       </div>

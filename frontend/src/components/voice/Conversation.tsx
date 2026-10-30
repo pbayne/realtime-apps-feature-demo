@@ -28,7 +28,14 @@ export function Conversation({ exchanges, role, agentLabel }: Props) {
 
   return (
     <div className="relative min-h-0 flex-1">
-      <div ref={scroller} onScroll={onScroll} className="scroll-thin absolute inset-0 space-y-3 overflow-y-auto px-4 py-4">
+      <div
+        ref={scroller}
+        onScroll={onScroll}
+        tabIndex={0}
+        role="region"
+        aria-label="Conversation"
+        className="scroll-thin absolute inset-0 space-y-3 overflow-y-auto px-4 py-4"
+      >
         {exchanges.length === 0 && (
           <div className="grid h-full place-items-center text-center text-[13px] text-[var(--color-muted)]">
             <div>
@@ -70,7 +77,7 @@ function UserBubble({ ex }: { ex: Exchange }) {
   return (
     <div className="flex justify-end">
       <div className="max-w-[80%] rounded-2xl rounded-br-md border border-sky-400/20 bg-sky-400/[0.08] px-3.5 py-2">
-        <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-sky-200/80">You</div>
+        <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-sky-200/80">You</div>
         {pending ? (
           <div className="flex items-center gap-1.5 py-1 text-[13px] text-[var(--color-muted)]">
             <span className="anim-blink size-1.5 rounded-full bg-sky-300" /> Transcribing…
@@ -93,7 +100,7 @@ function AgentBubble({ ex, label }: { ex: Exchange; label: string }) {
           cut ? "border-amber-400/30 bg-amber-400/[0.06]" : "border-[var(--color-line)] bg-[var(--color-raised)]"
         }`}
       >
-        <div className="mb-0.5 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-muted)]">
+        <div className="mb-0.5 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--color-muted)]">
           {label}
           {cut && <span className="chip border-amber-400/40 bg-amber-400/10 normal-case tracking-normal text-amber-200">cut off</span>}
         </div>
@@ -109,7 +116,7 @@ function AgentBubble({ ex, label }: { ex: Exchange; label: string }) {
         )}
         {ex.error && <p className="mt-1 text-[12px] text-rose-300">{ex.error}</p>}
         {ex.done && ex.timing?.first_audio_ms != null && (
-          <p className="mt-1 font-mono text-[10.5px] text-[var(--color-muted)]">first audio {fmtMs(ex.timing.first_audio_ms)}</p>
+          <p className="mt-1 font-mono text-[11px] text-[var(--color-muted)]">first audio {fmtMs(ex.timing.first_audio_ms)}</p>
         )}
       </div>
     </div>
@@ -141,7 +148,7 @@ export function Composer({ disabled, onSend }: { disabled: boolean; onSend(text:
         disabled={disabled}
         placeholder={disabled ? "Session is not live" : "Type a turn…"}
         aria-label="Type a turn"
-        className="min-w-0 flex-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-ink)] px-3 py-2.5 text-[14px] outline-none placeholder:text-slate-500 focus-visible:outline-none focus:border-sky-400/60 disabled:opacity-50"
+        className="min-w-0 flex-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-ink)] px-3 py-2.5 text-[14px] placeholder:text-slate-400 focus:border-sky-400/60 disabled:opacity-50"
       />
       <button type="submit" disabled={disabled || !text.trim()} className="btn btn-ghost py-2.5">
         <Send className="size-3.5" /> Send

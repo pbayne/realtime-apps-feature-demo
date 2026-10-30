@@ -66,11 +66,12 @@ export function Console({ state, channel, sttBrowser, notice, onEnd, onChannel, 
           {isMic && running && (
             <>
               <div className="flex items-center gap-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5" role="group" aria-label="Mic channel">
-                <span className="px-2 text-[10.5px] uppercase tracking-wider text-[var(--color-muted)]">Mic is</span>
+                <span className="px-2 text-[11px] uppercase tracking-wider text-[var(--color-muted)]">Mic is</span>
                 {(["customer", "agent"] as Speaker[]).map((ch) => (
                   <button
                     key={ch}
                     type="button"
+                    aria-pressed={channel === ch}
                     onClick={() => onChannel(ch)}
                     className={`rounded-md px-2.5 py-1 text-[12px] font-semibold capitalize transition-colors ${
                       channel === ch ? "bg-[var(--color-raised)] text-white" : "text-[var(--color-muted)] hover:text-slate-200"
@@ -99,8 +100,14 @@ export function Console({ state, channel, sttBrowser, notice, onEnd, onChannel, 
         </div>
       </header>
 
+      {state.status === "reconnecting" && (
+        <div role="status" className="flex items-center gap-2 border-b border-amber-400/25 bg-amber-400/[0.08] px-5 py-2 text-[12.5px] text-amber-100">
+          <span className="anim-live-dot size-1.5 shrink-0 rounded-full bg-amber-300" aria-hidden />
+          <span className="min-w-0 flex-1">Connection dropped. Reconnecting… the call is still open.</span>
+        </div>
+      )}
       {notice && (
-        <div className="flex items-center gap-2 border-b border-amber-400/20 bg-amber-400/10 px-5 py-2 text-[12.5px] text-amber-100">
+        <div role="alert" className="flex items-center gap-2 border-b border-amber-400/20 bg-amber-400/10 px-5 py-2 text-[12.5px] text-amber-100">
           <Headphones className="size-3.5" /> {notice}
         </div>
       )}

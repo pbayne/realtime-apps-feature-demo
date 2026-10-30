@@ -59,7 +59,7 @@ export function LiveRead({ live, series, coverage, compact = false }: Props) {
   return (
     <section aria-label="Live read" className={`panel ${compact ? "px-3 py-2.5" : "px-4 py-3"}`}>
       <div className="flex items-baseline justify-between gap-2">
-        <h2 className="kbd-label text-[10px]">Live read</h2>
+        <h2 className="kbd-label text-[11px]">Live read</h2>
         <p className="flex items-baseline gap-2 text-[12px]">
           <span className="font-semibold" style={{ color: tint }}>
             {tone}
@@ -67,7 +67,7 @@ export function LiveRead({ live, series, coverage, compact = false }: Props) {
           <span className="font-mono tabular-nums text-[var(--color-muted)]">
             {live ? `${v >= 0 ? "+" : ""}${v.toFixed(2)}` : "—"}
           </span>
-          {live?.partial && <span className="chip chip-neutral text-[10px]">while speaking</span>}
+          {live?.partial && <span className="chip chip-neutral text-[11px]">while speaking</span>}
         </p>
       </div>
 

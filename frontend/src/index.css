@@ -9,7 +9,7 @@
   --color-raised: #162540; /* cards / bubbles */
   --color-line: #213352; /* borders */
   --color-text: #e8eef8;
-  --color-muted: #8ea0bd;
+  --color-muted: #9aabc4; /* AA on every surface, incl. tinted chips (5.4:1 worst case) */
   --color-lava: #ff3621; /* brand accent: sparingly */
   --color-lava-deep: #d92a18;
 }
@@ -114,12 +114,13 @@
   }
   .btn-primary {
     color: #fff;
-    background: var(--color-lava);
+    /* lava-deep, not lava: white on #FF3621 is 3.6:1, below AA for button text. */
+    background: var(--color-lava-deep);
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 6px 24px -10px rgba(255, 54, 33, 0.7);
   }
   .btn-primary:hover:not(:disabled) {
-    background: var(--color-lava-deep);
+    background: #b82311;
   }
   .btn-danger {
     color: #fda4af;

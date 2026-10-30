@@ -8,6 +8,7 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import { beaconVoiceSessionEnd, createVoiceSession, endCall, endVoiceSession, getVoiceSnapshot } from "../api";
 import type { ConnStatus } from "../connection";
 import { openMockCall } from "../mock";
+import { micNotice } from "../micErrors";
 import { TERMINAL_MESSAGES, type TerminalReason } from "../reconnectPolicy";
 import { initialCallState, reducer as callReducer, type CallStatus, type Resolution } from "../store";
 import { MOCK, MOCK_SPEED } from "../useCallSession";
@@ -278,8 +279,7 @@ export function useVoiceSession() {
         await mic.start();
       } catch (err) {
         if (!alive()) return;
-        const why = err instanceof Error ? err.message : String(err);
-        dispatch({ type: "notice", message: `Microphone unavailable (${why}). Type your turns instead.` });
+        dispatch({ type: "notice", message: micNotice(err) });
         return;
       }
       if (alive() && modeRef.current === "hands_free") openStream();

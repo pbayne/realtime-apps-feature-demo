@@ -31,7 +31,7 @@ function Tile({
       <div className={`mt-0.5 font-mono font-semibold tabular-nums ${strong ? "text-[18px]" : "text-[14px]"} ${HEALTH_CLASS[h]}`}>
         {fmtMs(value ?? null)}
       </div>
-      {!compact && <div className="truncate text-[10.5px] text-[var(--color-muted)]">{hint}</div>}
+      {!compact && <div className="truncate text-[11px] text-[var(--color-muted)]">{hint}</div>}
     </div>
   );
 }

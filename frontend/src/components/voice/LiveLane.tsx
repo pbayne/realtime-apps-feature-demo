@@ -30,7 +30,7 @@ export function LiveLane({ chips, onPin, onDismiss }: Props) {
               className="anim-card-in flex items-start gap-2 rounded-lg border border-sky-400/20 bg-[var(--color-raised)]/70 py-1.5 pl-2.5 pr-1.5"
             >
               <div className="min-w-0 flex-1">
-                <p className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-sky-200/80">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-sky-200/80">
                   {OUTCOME_LABEL[chip.kind]}
                 </p>
                 <p className="text-[13px] leading-snug text-slate-100">{chip.text}</p>

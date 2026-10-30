@@ -47,7 +47,7 @@ function CoverageSection({ state }: { state: CallState }) {
       ) : (
         <ul className="space-y-1.5">
           {state.coverage.map((c) => (
-            <li key={c.key} className={`flex items-center gap-2.5 text-[13px] transition-colors ${c.covered ? "text-slate-100" : "text-slate-500"}`}>
+            <li key={c.key} className={`flex items-center gap-2.5 text-[13px] transition-colors ${c.covered ? "text-slate-100" : "text-slate-400"}`}>
               {c.covered ? <CheckCircle2 className="size-4 shrink-0 text-teal-300" /> : <Circle className="size-4 shrink-0" />}
               <span className={c.covered ? "" : ""}>{c.label}</span>
             </li>
@@ -75,7 +75,7 @@ function SentimentSection({ state }: { state: CallState }) {
       }
     >
       <Sparkline values={series.map((p) => p.value)} />
-      <div className="mt-1.5 flex justify-between text-[10.5px] text-[var(--color-muted)]">
+      <div className="mt-1.5 flex justify-between text-[11px] text-[var(--color-muted)]">
         <span>call start</span>
         <span>{series.length} turns scored</span>
       </div>
@@ -152,7 +152,7 @@ function LatencySection({ metrics }: { metrics: MetricSample[] }) {
   const latestOf = (key: keyof Omit<MetricSample, "at">) =>
     [...metrics].reverse().find((m) => typeof m[key] === "number")?.[key] ?? null;
   return (
-    <Block title="Latency" icon={<Gauge className="size-3.5" />} right={<span className="text-[10.5px] text-[var(--color-muted)]">latest · avg</span>}>
+    <Block title="Latency" icon={<Gauge className="size-3.5" />} right={<span className="text-[11px] text-[var(--color-muted)]">latest · avg</span>}>
       <div className="space-y-2">
         {LATENCY_ROWS.map((row) => {
           const value = latestOf(row.key);
@@ -166,7 +166,7 @@ function LatencySection({ metrics }: { metrics: MetricSample[] }) {
                   <span className={`size-1.5 rounded-full ${HEALTH_DOT[h]}`} />
                   {row.label}
                 </span>
-                <span className="text-[10.5px] text-[var(--color-muted)]">target {row.hint}</span>
+                <span className="text-[11px] text-[var(--color-muted)]">target {row.hint}</span>
               </div>
               <div className="mt-1 flex items-baseline justify-between">
                 <span className={`font-mono text-[18px] font-semibold tabular-nums ${HEALTH_CLASS[h]}`}>{fmtMs(value)}</span>
@@ -176,7 +176,7 @@ function LatencySection({ metrics }: { metrics: MetricSample[] }) {
           );
         })}
       </div>
-      <p className="mt-2 text-[10.5px] leading-snug text-[var(--color-muted)]">
+      <p className="mt-2 text-[11px] leading-snug text-[var(--color-muted)]">
         Latencies run from the customer's final transcript. Green within target, amber up to 1.5x, red beyond.
       </p>
     </Block>

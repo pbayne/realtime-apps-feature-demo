@@ -45,7 +45,7 @@
 }
 
 /* Visible focus for every control (keyboard users), without a ring on mouse clicks. In the base layer, so a
-   component can still opt out with a utility (for example focus-visible:outline-none on the composer field). */
+   component can still opt out with a utility (form fields keep it: they do not set outline-none). */
 @layer base {
   :focus-visible {
     outline: 2px solid #38bdf8;

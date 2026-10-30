@@ -55,7 +55,7 @@ export function Outcomes({ items, compact = false }: Props) {
           if (!group.length) return null;
           return (
             <section key={kind}>
-              <h3 className="mb-1.5 flex items-center justify-between text-[10.5px] font-semibold uppercase tracking-[0.09em] text-sky-200/80">
+              <h3 className="mb-1.5 flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.09em] text-sky-200/80">
                 {OUTCOME_LABEL[kind]}
                 <span className="font-mono text-[var(--color-muted)]">{group.length}</span>
               </h3>
@@ -86,7 +86,7 @@ export function Outcomes({ items, compact = false }: Props) {
                           {isNew && <span className="chip border-sky-400/40 bg-sky-400/15 text-sky-100">newest</span>}
                           {item.owner && <span className="chip chip-neutral">owner: {item.owner}</span>}
                           {item.due && <span className="chip chip-neutral">due: {item.due}</span>}
-                          {item.source_doc && <span className="truncate font-mono text-[10.5px] text-[var(--color-muted)]">{item.source_doc}</span>}
+                          {item.source_doc && <span className="truncate font-mono text-[11px] text-[var(--color-muted)]">{item.source_doc}</span>}
                         </div>
                       )}
                     </li>

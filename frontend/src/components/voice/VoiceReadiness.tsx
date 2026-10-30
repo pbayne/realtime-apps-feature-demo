@@ -69,7 +69,7 @@ export function VoiceReadiness() {
         {w.state === "warm" ? (
           <Zap className="size-4 shrink-0 text-emerald-300" />
         ) : w.state === "warming" ? (
-          <Loader2 className="size-4 shrink-0 animate-spin text-sky-300" />
+          <Loader2 className="size-4 shrink-0 motion-safe:animate-spin text-sky-300" />
         ) : (
           <Flame className="size-4 shrink-0 text-amber-300" />
         )}

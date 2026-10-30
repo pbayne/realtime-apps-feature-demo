@@ -21,7 +21,7 @@ export function captionTail(text: string, words = 14): string {
 export function LiveCaption({ caption, listening }: Props) {
   return (
     <div className="flex min-h-[44px] items-center gap-2.5 border-t border-[var(--color-line)] px-4 py-2">
-      <span className="kbd-label shrink-0 text-[10px]">Hearing</span>
+      <span className="kbd-label shrink-0 text-[11px]">Hearing</span>
       <p aria-live="polite" className="min-w-0 flex-1 truncate text-[14px] leading-snug">
         {caption ? (
           <span className="caption-shimmer" data-testid="caption">

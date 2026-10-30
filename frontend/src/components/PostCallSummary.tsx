@@ -43,7 +43,7 @@ export function PostCallSummary({ state, onNewCall }: { state: CallState; onNewC
             </div>
             <ul className="mt-4 space-y-2 text-[13px]">
               {state.coverage.map((c) => (
-                <li key={c.key} className={`flex items-center gap-2.5 ${c.covered ? "text-slate-100" : "text-slate-500"}`}>
+                <li key={c.key} className={`flex items-center gap-2.5 ${c.covered ? "text-slate-100" : "text-slate-400"}`}>
                   {c.covered ? <CheckCircle2 className="size-4 text-teal-300" /> : <Circle className="size-4" />}
                   {c.label}
                 </li>

@@ -1,10 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Headphones, Mic, PlayCircle, Radio, Sparkles } from "lucide-react";
+import { Headphones, Mic, MicOff, PlayCircle, Radio, RotateCcw, Sparkles } from "lucide-react";
 import { FALLBACK_PLAYBOOKS, FALLBACK_SCRIPTS, FALLBACK_VOICES, MOCK_VOICES, getPlaybooks, getScripts, getVoices } from "../lib/api";
 import { MOCK, MOCK_SPEED, URL_PARAMS } from "../lib/useCallSession";
 import type { Mode, PlaybookSummary, StartOptions, VoiceOption, VoiceRole, VoiceStartOptions } from "../lib/types";
 import { Brand } from "./Brand";
 import { VoiceStartPanel } from "./voice/VoiceStartPanel";
+import { isMicBlocked, MIC_BLOCKED } from "../lib/micErrors";
 
 type Source = Mode | "talk";
 
@@ -109,7 +110,7 @@ export function StartScreen({ error, onStart, onStartVoice }: Props) {
 
   return (
     <div className="flex min-h-full flex-col">
-      <header className="flex items-center justify-between px-8 py-5">
+      <header className="flex items-center justify-between px-8 py-4">
         <Brand />
         {MOCK && (
           <span className="chip border-[var(--color-line)] text-[var(--color-muted)]">
@@ -118,7 +119,7 @@ export function StartScreen({ error, onStart, onStartVoice }: Props) {
         )}
       </header>
 
-      <main className="mx-auto grid w-full max-w-5xl flex-1 items-center gap-8 px-6 pb-16 pt-4 md:grid-cols-[1.1fr_1fr]">
+      <main className="mx-auto grid w-full max-w-5xl flex-1 items-center gap-8 px-6 pb-10 pt-2 md:grid-cols-[1.1fr_1fr]">
         <section>
           <p className="kbd-label">{source === "talk" ? "Voice" : "New call"}</p>
           <h1 className="mt-2 text-[34px] font-semibold leading-[1.1] tracking-tight">
@@ -130,13 +131,19 @@ export function StartScreen({ error, onStart, onStartVoice }: Props) {
               : "Live transcription, enrichment and suggestion cards stream into one console. The sidekick stays quiet unless it has something grounded to say."}
           </p>
 
-          {(error || backendNote) && (
-            <div className="mt-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-[13px] text-rose-200">
-              {error ?? backendNote}
+          {error && !isMicBlocked(error) && (
+            <div role="alert" className="mt-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-[13px] text-rose-200">
+              {error}
             </div>
           )}
+          {backendNote && !error && (
+            <p role="status" className="mt-6 flex gap-2 rounded-lg border border-amber-400/25 bg-amber-400/[0.07] px-4 py-3 text-[13px] text-amber-100">
+              <Radio className="mt-0.5 size-4 shrink-0 text-amber-300" />
+              <span>{backendNote} Scripted calls need the backend, but Live mic and Talk still work once it is up.</span>
+            </p>
+          )}
 
-          <div className="mt-8">
+          <div className="mt-7">
             <p className="kbd-label mb-2">Playbook</p>
             <div className="grid gap-2">
               {playbooks.map((p) => {
@@ -145,11 +152,12 @@ export function StartScreen({ error, onStart, onStartVoice }: Props) {
                   <button
                     key={p.name}
                     type="button"
+                    aria-pressed={active}
                     onClick={() => setPlaybook(p.name)}
                     className={`flex items-center justify-between rounded-xl border px-4 py-3 text-left transition-colors ${
                       active
                         ? "border-sky-400/60 bg-sky-400/[0.07]"
-                        : "border-[var(--color-line)] bg-[var(--color-panel)] hover:border-slate-500"
+                        : "border-[var(--color-line)] bg-[var(--color-panel)] hover:border-slate-400"
                     }`}
                   >
                     <div>
@@ -170,7 +178,7 @@ export function StartScreen({ error, onStart, onStartVoice }: Props) {
           </div>
         </section>
 
-        <section className="panel p-6">
+        <section className="panel p-5">
           <p className="kbd-label">Source</p>
           <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-[var(--color-ink)] p-1">
             <ModeButton active={source === "replay"} onClick={() => setSource("replay")} icon={<PlayCircle className="size-4" />} label="Replay" />
@@ -187,7 +195,7 @@ export function StartScreen({ error, onStart, onStartVoice }: Props) {
                 id="script"
                 value={script}
                 onChange={(e) => setScript(e.target.value)}
-                className="w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-ink)] px-3 py-2.5 text-[14px] outline-none focus:border-sky-400/60"
+                className="w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-ink)] px-3 py-2.5 text-[14px] focus:border-sky-400/60"
               >
                 {scripts.length === 0 && <option value="">No scripts for this playbook</option>}
                 {scripts.map((s) => (
@@ -196,9 +204,15 @@ export function StartScreen({ error, onStart, onStartVoice }: Props) {
                   </option>
                 ))}
               </select>
-              <p className="mt-3 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
-                Replays a dual-channel recording at real speaking pace. No microphone or audio socket needed.
-              </p>
+              {scripts.length === 0 ? (
+                <p className="mt-3 text-[12.5px] leading-relaxed text-amber-100/90">
+                  No scripted calls for this playbook. They load from the backend, so start it or pick Live mic or Talk.
+                </p>
+              ) : (
+                <p className="mt-3 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
+                  Replays a dual-channel recording at real speaking pace. No microphone or audio socket needed.
+                </p>
+              )}
             </div>
           )}
 
@@ -227,7 +241,8 @@ export function StartScreen({ error, onStart, onStartVoice }: Props) {
             />
           )}
 
-          <button type="button" disabled={disabled} onClick={submit} className="btn btn-primary mt-7 w-full py-3 text-[15px]">
+          {error && isMicBlocked(error) && source !== "replay" && <MicBlocked onRetry={submit} disabled={busy} />}
+          <button type="button" disabled={disabled} onClick={submit} className="btn btn-primary mt-6 w-full py-3 text-[15px]">
             {label}
           </button>
           {MOCK && <p className="mt-3 text-center text-[11.5px] text-[var(--color-muted)]">Mock mode ignores the backend and mic.</p>}
@@ -241,6 +256,7 @@ function ModeButton({ active, onClick, icon, label }: { active: boolean; onClick
   return (
     <button
       type="button"
+      aria-pressed={active}
       onClick={onClick}
       className={`flex items-center justify-center gap-2 rounded-lg px-2 py-2.5 text-[13.5px] font-semibold transition-colors ${
         active ? "bg-[var(--color-raised)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-slate-200"
@@ -249,5 +265,26 @@ function ModeButton({ active, onClick, icon, label }: { active: boolean; onClick
       {icon}
       {label}
     </button>
+  );
+}
+
+/** Microphone refused by the browser. Says what to change and retries the same start. */
+function MicBlocked({ onRetry, disabled }: { onRetry(): void; disabled: boolean }) {
+  return (
+    <div role="alert" className="mt-6 rounded-xl border border-amber-400/35 bg-amber-400/[0.08] p-4 text-amber-50">
+      <div className="flex gap-3">
+        <MicOff className="mt-0.5 size-5 shrink-0 text-amber-300" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <p className="text-[14px] font-semibold">{MIC_BLOCKED}</p>
+          <p className="mt-1 text-[13px] leading-relaxed text-amber-100/90">
+            Your browser stopped Sidekick from using the microphone. Click the lock or site-settings icon in the address bar,
+            set Microphone to Allow, then try again.
+          </p>
+          <button type="button" onClick={onRetry} disabled={disabled} className="btn btn-ghost mt-3 py-1.5 text-[12.5px]">
+            <RotateCcw className="size-3.5" /> Try again
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

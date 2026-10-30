@@ -3,6 +3,7 @@ import { Headphones, Mic, MicOff, PhoneOff, Radio, Sparkles, Users, X } from "lu
 import { getVoices, MOCK_VOICES } from "../../lib/api";
 import { fmtClock } from "../../lib/format";
 import { MOCK, MOCK_SPEED } from "../../lib/useCallSession";
+import { isMicBlocked } from "../../lib/micErrors";
 import { isThinking, type VoiceState } from "../../lib/voice/state";
 import type { VoiceSession } from "../../lib/voice/useVoiceSession";
 import type { VoiceOption } from "../../lib/types";
@@ -185,7 +186,7 @@ export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void 
               onChange={(e) => api.setVoice(e.target.value)}
               disabled={!running}
               aria-label="Voice"
-              className="rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1 text-[12px] text-slate-200 outline-none disabled:opacity-50"
+              className="rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1 text-[12px] text-slate-200 disabled:opacity-50"
             >
               {voiceList.map((v) => (
                 <option key={v.id} value={v.id}>
@@ -213,9 +214,24 @@ export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void 
           <span className="font-mono tabular-nums text-sky-200">{fmtClock(warmingFor)}</span>
         </div>
       )}
+      {state.status === "reconnecting" && (
+        <div role="status" className="flex items-center gap-2 border-b border-amber-400/25 bg-amber-400/[0.08] px-5 py-2 text-[12.5px] text-amber-100">
+          <span className="anim-live-dot size-1.5 shrink-0 rounded-full bg-amber-300" aria-hidden />
+          <span className="min-w-0 flex-1">Connection dropped. Reconnecting… the conversation is kept.</span>
+        </div>
+      )}
       {state.notice && (
         <div role="alert" className="flex items-center gap-2 border-b border-amber-400/20 bg-amber-400/10 px-5 py-2 text-[12.5px] text-amber-100">
-          <Headphones className="size-3.5" /> {state.notice}
+          {isMicBlocked(state.notice) ? <MicOff className="size-3.5 shrink-0" /> : <Headphones className="size-3.5 shrink-0" />}
+          <span className="min-w-0">{state.notice}</span>
+        </div>
+      )}
+      {state.status === "ended" && !state.error && (
+        <div role="status" className="flex flex-wrap items-center gap-3 border-b border-[var(--color-line)] bg-[var(--color-panel)] px-5 py-2 text-[12.5px] text-slate-200">
+          <span className="min-w-0 flex-1">Session ended. The transcript and outcomes stay here until you start a new session.</span>
+          <button type="button" onClick={onNew} className="btn btn-ghost py-1 text-[12px]">
+            Start a new session
+          </button>
         </div>
       )}
       {stopped && (
@@ -359,7 +375,7 @@ function Controls({ api, running }: { api: VoiceSession; running: boolean }) {
           onPointerCancel={() => api.pttUp()}
           className={`btn py-1.5 text-[13px] ${state.userSpeaking ? "border border-teal-400/50 bg-teal-400/20 text-teal-100" : "btn-ghost"}`}
         >
-          <Mic className="size-3.5" /> Hold to talk <span className="font-mono text-[10.5px] text-[var(--color-muted)]">Space</span>
+          <Mic className="size-3.5" /> Hold to talk <span className="font-mono text-[11px] text-[var(--color-muted)]">Space</span>
         </button>
       )}
 
@@ -371,7 +387,7 @@ function Controls({ api, running }: { api: VoiceSession; running: boolean }) {
         className={`btn py-1.5 text-[13px] ${state.muted ? "border border-amber-400/40 bg-amber-400/10 text-amber-100" : "btn-ghost"}`}
       >
         {state.muted ? <MicOff className="size-3.5" /> : <Mic className="size-3.5" />}
-        {state.muted ? "Unmute" : "Mute"} <span className="font-mono text-[10.5px] text-[var(--color-muted)]">M</span>
+        {state.muted ? "Unmute" : "Mute"} <span className="font-mono text-[11px] text-[var(--color-muted)]">M</span>
       </button>
     </div>
   );

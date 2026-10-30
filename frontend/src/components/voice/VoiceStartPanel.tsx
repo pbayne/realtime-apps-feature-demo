@@ -17,14 +17,14 @@ interface Props {
 }
 
 const selectCls =
-  "w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-ink)] px-3 py-2.5 text-[14px] outline-none focus:border-sky-400/60";
+  "w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-ink)] px-3 py-2.5 text-[14px] focus:border-sky-400/60";
 
 export function VoiceStartPanel(p: Props) {
   const scenarios = playbookScenarios(p.playbook);
   const active = scenarios.find((s) => s.name === p.scenario);
 
   return (
-    <div className="mt-5 space-y-5">
+    <div className="mt-4 space-y-4">
       <div>
         <p className="kbd-label mb-2">Role</p>
         <div className="grid grid-cols-2 gap-1 rounded-xl bg-[var(--color-ink)] p-1">
@@ -52,7 +52,7 @@ export function VoiceStartPanel(p: Props) {
             value={p.callId}
             onChange={(e) => p.onCallId(e.target.value)}
             placeholder="e.g. c-123, or leave blank"
-            className={`${selectCls} placeholder:text-slate-500`}
+            className={`${selectCls} placeholder:text-slate-400`}
           />
           <p className="mt-2 text-[12px] leading-relaxed text-[var(--color-muted)]">
             A linked call adds its transcript, cards and coverage to Sidekick's context.
