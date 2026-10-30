@@ -4,9 +4,11 @@ Auth comes from the databricks-sdk Config (DATABRICKS_CONFIG_PROFILE locally, Ap
 injected env in production). Headers are re-authenticated per request so OAuth
 tokens refresh. Claude 5.x rejects `temperature`, so it is never sent.
 
-Degradation: every call can raise LlmUnavailable. A small circuit breaker opens
-after `llm_failure_threshold` consecutive failures and short-circuits calls for
-`llm_breaker_cooldown_s`, so an outage costs one timeout, not one per turn.
+Degradation: every call can raise LlmUnavailable. There is one small circuit breaker per model (or per
+endpoint for audio and JSON calls). It opens after `llm_failure_threshold` consecutive failures and
+short-circuits that model's calls for `llm_breaker_cooldown_s`, so an outage of one model costs one timeout
+per model, not one per turn, and a failing model does not stop the others. Calls made under WARMUP (the
+prewarm pings in services.py) are not counted at all.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import asyncio
 import json
 import logging
 import time
+from contextvars import ContextVar
 from typing import Any, AsyncIterator, Optional, Sequence
 
 import httpx
@@ -45,15 +48,28 @@ def is_cold_failure(exc: BaseException) -> bool:
     return isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError))
 
 
+# Set by the prewarm pings (services.py). A warm-up failure is expected while a scale-to-zero endpoint starts,
+# so it must not open a breaker or change the health report.
+WARMUP: ContextVar[bool] = ContextVar("llm_warmup", default=False)
+
+
+class _Breaker:
+    __slots__ = ("streak", "open_until")
+
+    def __init__(self) -> None:
+        self.streak = 0
+        self.open_until = 0.0
+
+
 class LlmClient:
     def __init__(self, settings: Settings, *, sdk_config: Any = None, transport: httpx.AsyncBaseTransport | None = None):
         self._s = settings
         self._sdk_config = sdk_config
         self._transport = transport
         self._http: Optional[httpx.AsyncClient] = None
-        self._fail_streak = 0
-        self._breaker_open_until = 0.0
-        self.last_error: Optional[str] = None
+        self._breakers: dict[str, _Breaker] = {}
+        self.last_error: Optional[str] = None          # full text, for logs only
+        self.last_error_type: Optional[str] = None     # the exception class name: the only error detail /api/health shows
 
     # ------------------------------------------------------------------ state
     @property
@@ -62,8 +78,13 @@ class LlmClient:
 
     @property
     def available(self) -> bool:
-        """False when disabled or the breaker is open."""
-        return self.enabled and time.monotonic() >= self._breaker_open_until
+        """False when disabled or any model's breaker is open."""
+        now = time.monotonic()
+        return self.enabled and not any(now < b.open_until for b in self._breakers.values())
+
+    def breaker_open(self, key: str) -> bool:
+        b = self._breakers.get(key)
+        return b is not None and time.monotonic() < b.open_until
 
     @property
     def fast_model(self) -> str:
@@ -78,25 +99,35 @@ class LlmClient:
         return self._s.embed_model
 
     def status(self) -> dict[str, Any]:
+        now = time.monotonic()
         return {
             "enabled": self.enabled,
             "available": self.available,
-            "last_error": self.last_error,
+            "last_error": self.last_error_type,
+            "breakers_open": sorted(k for k, b in self._breakers.items() if now < b.open_until),
             "fast_model": self._s.fast_model,
             "smart_model": self._s.smart_model,
             "embed_model": self._s.embed_model,
         }
 
-    def _record_ok(self) -> None:
-        self._fail_streak = 0
+    def _breaker(self, key: str) -> _Breaker:
+        return self._breakers.setdefault(key, _Breaker())
 
-    def _record_fail(self, exc: BaseException) -> None:
+    def _record_ok(self, key: str) -> None:
+        if not WARMUP.get():
+            self._breaker(key).streak = 0
+
+    def _record_fail(self, key: str, exc: BaseException) -> None:
+        if WARMUP.get():
+            return
+        self.last_error_type = type(exc).__name__
         self.last_error = f"{type(exc).__name__}: {exc}"[:300]
-        self._fail_streak += 1
-        if self._fail_streak >= self._s.llm_failure_threshold:
-            self._breaker_open_until = time.monotonic() + self._s.llm_breaker_cooldown_s
-            self._fail_streak = 0
-            log.warning("LLM breaker open for %.0fs: %s", self._s.llm_breaker_cooldown_s, self.last_error)
+        b = self._breaker(key)
+        b.streak += 1
+        if b.streak >= self._s.llm_failure_threshold:
+            b.open_until = time.monotonic() + self._s.llm_breaker_cooldown_s
+            b.streak = 0
+            log.warning("LLM breaker open for %s for %.0fs: %s", key, self._s.llm_breaker_cooldown_s, self.last_error)
 
     # ------------------------------------------------------------- plumbing
     def _config(self) -> Any:
@@ -131,11 +162,11 @@ class LlmClient:
             self._http = httpx.AsyncClient(timeout=self._s.llm_timeout_s, transport=self._transport)
         return self._http
 
-    async def _guard(self) -> None:
+    async def _guard(self, key: str) -> None:
         if not self.enabled:
             raise LlmUnavailable("LLM disabled (LLM_ENABLED=false)")
-        if not self.available:
-            raise LlmUnavailable("LLM circuit breaker open")
+        if self.breaker_open(key):
+            raise LlmUnavailable(f"LLM circuit breaker open for {key}")
 
     # ------------------------------------------------------------ endpoints
     async def chat(
@@ -147,7 +178,7 @@ class LlmClient:
         timeout: Optional[float] = None,
     ) -> str:
         """Non-streaming chat completion. Returns the assistant text."""
-        await self._guard()
+        await self._guard(model)
         payload = {"messages": list(messages), "max_tokens": max_tokens, **_model_extras(model)}
         try:
             url, headers = await self._url_and_headers(model, "invocations")
@@ -156,10 +187,10 @@ class LlmClient:
                 raise LlmUnavailable(f"HTTP {resp.status_code}: {resp.text[:200]}")
             body = resp.json()
             text = content_text(body["choices"][0]["message"]["content"])
-            self._record_ok()
+            self._record_ok(model)
             return text
         except Exception as exc:  # noqa: BLE001 - every failure is a degradation, not a crash
-            self._record_fail(exc)
+            self._record_fail(model, exc)
             raise LlmUnavailable(str(exc)) from exc
 
     async def chat_stream(
@@ -171,7 +202,7 @@ class LlmClient:
         timeout: Optional[float] = None,
     ) -> AsyncIterator[str]:
         """Streaming chat completion (SSE). Yields text deltas."""
-        await self._guard()
+        await self._guard(model)
         payload = {"messages": list(messages), "max_tokens": max_tokens, "stream": True, **_model_extras(model)}
         try:
             url, headers = await self._url_and_headers(model, "invocations")
@@ -193,42 +224,42 @@ class LlmClient:
                         delta = content_text((choice.get("delta") or {}).get("content"))
                         if delta:
                             yield delta
-            self._record_ok()
+            self._record_ok(model)
         except GeneratorExit:
             raise
         except Exception as exc:  # noqa: BLE001
-            self._record_fail(exc)
+            self._record_fail(model, exc)
             raise LlmUnavailable(str(exc)) from exc
 
     async def embed(self, model: str, texts: Sequence[str], *, timeout: Optional[float] = None) -> list[list[float]]:
         """Embeddings via the serving endpoint's OpenAI-style `input` payload."""
-        await self._guard()
+        await self._guard(model)
         try:
             url, headers = await self._url_and_headers(model, "invocations")
             resp = await self._client().post(url, headers=headers, json={"input": list(texts)}, timeout=timeout or self._s.llm_timeout_s)
             if resp.status_code >= 400:
                 raise LlmUnavailable(f"HTTP {resp.status_code}: {resp.text[:200]}")
             data = sorted(resp.json()["data"], key=lambda d: d.get("index", 0))
-            self._record_ok()
+            self._record_ok(model)
             return [d["embedding"] for d in data]
         except Exception as exc:  # noqa: BLE001
-            self._record_fail(exc)
+            self._record_fail(model, exc)
             raise LlmUnavailable(str(exc)) from exc
 
     async def json_post(self, endpoint: str, payload: dict[str, Any], *, timeout: Optional[float] = None) -> dict[str, Any]:
         """Raw JSON POST to {endpoint}/invocations, e.g. the Databricks whisper endpoint's {"inputs": [...]} contract.
         Same auth and breaker as the other calls."""
-        await self._guard()
+        await self._guard(endpoint)
         try:
             url, headers = await self._url_and_headers(endpoint, "invocations")
             resp = await self._client().post(url, headers=headers, json=payload, timeout=timeout or self._s.llm_timeout_s)
             if resp.status_code >= 400:
                 raise LlmUnavailable(f"HTTP {resp.status_code}: {resp.text[:200]}")
             body = resp.json()
-            self._record_ok()
+            self._record_ok(endpoint)
             return body
         except Exception as exc:  # noqa: BLE001
-            self._record_fail(exc)
+            self._record_fail(endpoint, exc)
             raise LlmUnavailable(str(exc)) from exc
 
     async def multipart(self, endpoint: str, route: str, *, files: dict[str, Any], data: dict[str, str],
@@ -236,7 +267,7 @@ class LlmClient:
         """Multipart POST to a serving endpoint route, e.g. `audio/transcriptions` for Parakeet
         (SPEC 3.3). Same workspace auth and circuit breaker as the JSON calls. Content-Type is left to
         httpx so the multipart boundary is set. Returns the parsed JSON body."""
-        await self._guard()
+        await self._guard(endpoint)
         try:
             host, headers = await self.workspace_auth()
             url = f"{host}/serving-endpoints/{endpoint}/{route}"
@@ -246,10 +277,10 @@ class LlmClient:
                 raise LlmUnavailable(f"HTTP {resp.status_code}: {resp.text[:200]}",
                                      cold=resp.status_code in COLD_STATUS)
             body = resp.json()
-            self._record_ok()
+            self._record_ok(endpoint)
             return body
         except Exception as exc:  # noqa: BLE001 - every failure is a degradation, not a crash
-            self._record_fail(exc)
+            self._record_fail(endpoint, exc)
             raise LlmUnavailable(str(exc), cold=is_cold_failure(exc)) from exc
 
     async def aclose(self) -> None:
