@@ -24,7 +24,6 @@ resources:
               branch_name: ${var.branch_name}
               database_name: ${var.database_name}
               pg_role: ${var.pg_role}
-              pg_password: ${var.pg_password}
               secret_scope: ${var.secret_scope}
               backbone: ${var.backbone}
               kafka_security: ${var.kafka_security}

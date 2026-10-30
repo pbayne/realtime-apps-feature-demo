@@ -19,8 +19,8 @@
 # MAGIC   `kafka_bootstrap`, `kafka_api_key` (username), `kafka_api_secret` (password)
 # MAGIC - `SASL_SSL_MSK_IAM`: `kafka_bootstrap` (the IAM bootstrap string). No key needed.
 # MAGIC
-# MAGIC The database role password is never printed. It comes from the `pg_password`
-# MAGIC bundle variable, which `scripts/deploy.sh` generates.
+# MAGIC The database role password is never printed. It is read from the `lakebase_password`
+# MAGIC secret in the scope, which `scripts/deploy.sh` writes once (or on `ROTATE_PG_PASSWORD=1`).
 
 # COMMAND ----------
 
@@ -43,7 +43,6 @@ DEFAULTS = {
     "branch_name": "production",
     "database_name": "databricks_postgres",
     "pg_role": "sidekick_writer",
-    "pg_password": "",
     "secret_scope": "call-sidekick",
     "backbone": "direct",                   # direct (no Kafka; default, serverless OK) | kafka (classic cluster + topics)
     "kafka_security": "SASL_SSL_PLAIN",     # SASL_SSL_PLAIN | SASL_SSL_SCRAM_SHA_256 | SASL_SSL_SCRAM_SHA_512 | SASL_SSL_MSK_IAM
@@ -58,9 +57,6 @@ p = {k: dbutils.widgets.get(k) for k in DEFAULTS}
 
 import re
 
-if len(p["pg_password"]) < 24:
-    raise ValueError("pg_password must be supplied and contain at least 24 characters")
-
 if p["backbone"] not in ("direct", "kafka"):
     raise ValueError(f"backbone must be direct or kafka, got {p['backbone']!r}")
 
@@ -70,6 +66,12 @@ SCOPE = p["secret_scope"]
 for field in ("project_id", "branch_name", "database_name", "pg_role", "secret_scope"):
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,62}", p[field]):
         raise ValueError(f"Invalid {field}: expected a simple identifier, got {p[field]!r}")
+
+# Role password: from the secret scope (written by scripts/deploy.sh). Never printed.
+role_password = dbutils.secrets.get(SCOPE, "lakebase_password")
+if len(role_password) < 24:
+    raise ValueError(f"lakebase_password in scope '{SCOPE}' must be at least 24 characters; "
+                     "run scripts/deploy.sh with ROTATE_PG_PASSWORD=1 to regenerate it")
 
 # COMMAND ----------
 
@@ -145,7 +147,7 @@ admin_pg_token = post("/api/2.0/postgres/credentials", {"endpoint": endpoint_nam
 
 role = p["pg_role"]
 db = p["database_name"]
-pw_lit = "'" + p["pg_password"].replace("'", "''") + "'"
+pw_lit = "'" + role_password.replace("'", "''") + "'"
 
 TABLE_DDL = [
     """CREATE TABLE IF NOT EXISTS calls (
@@ -337,6 +339,8 @@ else:
 # MAGIC %md ## 7. Refresh Lakebase connection secrets
 # MAGIC
 # MAGIC - `lakebase_endpoint` (`project_id.branch_id`) is the native sink's `endpoint` option.
+# MAGIC - `lakebase_password` is not written here: it is the source of the role password above and is
+# MAGIC   written by `scripts/deploy.sh` only.
 # MAGIC - The other four are for password auth in the Databricks App, which runs
 # MAGIC   in its own security context.
 
@@ -346,7 +350,6 @@ lakebase_endpoint = f"{p['project_id']}.{p['branch_name']}"
 for key, val in [("lakebase_host", lakebase_host),
                  ("lakebase_db", db),
                  ("lakebase_user", role),
-                 ("lakebase_password", p["pg_password"]),
                  ("lakebase_endpoint", lakebase_endpoint)]:
     post("/api/2.0/secrets/put", {"scope": SCOPE, "key": key, "string_value": val})
-print(f"Wrote 5 Lakebase secrets to scope `{SCOPE}`.")
+print(f"Wrote 4 Lakebase connection secrets to scope `{SCOPE}` (lakebase_password unchanged).")

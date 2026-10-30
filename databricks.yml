@@ -35,8 +35,6 @@ variables:
   pg_role:
     description: Postgres role used by the app (and the RTM sink in kafka mode).
     default: sidekick_writer
-  pg_password:
-    description: Strong password for pg_role (>= 24 chars). No default on purpose; deploy.sh generates one per deployment.
 
   # --- Zerobus history (direct backbone) ------------------------------------
   zerobus_principal:

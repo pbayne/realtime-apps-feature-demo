@@ -2,6 +2,7 @@
 the direct target deploys no RTM or Kafka resources and only serverless jobs, the kafka target carries the
 classic RTM and Delta jobs, and deploy.sh registers the GPU endpoints before the app deploy."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -114,8 +115,43 @@ def test_dev_target_has_no_hardcoded_host():
     assert dev["mode"] == "development"
 
 
-def test_pg_password_has_no_default():
-    assert "default" not in BUNDLE["variables"]["pg_password"]
+def test_pg_password_is_not_a_bundle_variable_or_job_parameter():
+    # The Lakebase password lives only in the secret scope (lakebase_password), never in job parameters.
+    for path in (ROOT / "databricks.yml", ROOT / "resources" / "job.yml"):
+        assert "pg_password" not in path.read_text(encoding="utf-8"), path.name
+    assert "pg_password" not in BUNDLE["variables"]
+    for name, target in BUNDLE["targets"].items():
+        assert "pg_password" not in ((target or {}).get("variables") or {}), name
+
+
+def test_setup_job_passes_no_password_parameter():
+    params = _direct_jobs()["call_sidekick_setup"]["tasks"][0]["notebook_task"]["base_parameters"]
+    assert not [k for k in params if "password" in k.lower()], params
+
+
+def test_setup_notebook_reads_password_from_secret_scope_and_does_not_print_it():
+    text = (NOTEBOOKS / "init.py").read_text(encoding="utf-8")
+    assert "pg_password" not in text
+    assert 'dbutils.secrets.get(SCOPE, "lakebase_password")' in text
+    # The ALTER ROLE that syncs the role to the secret stays.
+    assert 'f\'{verb} ROLE "{role}" WITH LOGIN PASSWORD {pw_lit}\'' in text
+    # The password value is never printed or written back by the notebook.
+    assert "print(role_password" not in text and '"lakebase_password"' not in text.split("## 7.")[-1]
+
+
+def test_deploy_script_writes_lakebase_password_only_when_absent_or_rotating():
+    lines = (ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8").splitlines()
+    text = "\n".join(lines)
+    writes = [i for i, line in enumerate(lines) if "put_secret lakebase_password" in line]
+    assert len(writes) == 1, "exactly one write of lakebase_password"
+    guard = lines[max(0, writes[0] - 3):writes[0]]
+    assert any(re.search(r"^if .*ROTATE_PG_PASSWORD.*have_secret lakebase_password", line) for line in guard), guard
+    # The password is never a bundle variable and never a command-line argument.
+    assert "BUNDLE_VAR_pg_password" not in text
+    assert "--string-value" not in text
+    # The app restart after a write comes after the app deploy.
+    restart = text.index('if [[ "$lakebase_password_written" == "1" ]]')
+    assert text.index("bundle run call_sidekick_app") < restart < text.index("apps stop call-sidekick")
 
 
 def test_notebooks_exist():

@@ -23,6 +23,8 @@
 #   DEPLOY_VOICE=1        also register both GPU endpoints for voice mode: Parakeet (STT) and Kokoro (TTS)
 #   DEPLOY_PARAKEET=1     register only the Parakeet endpoint. Implied by DEPLOY_VOICE=1.
 #   SIDEKICK_SCOPE        secret scope name (default call-sidekick)
+#   ROTATE_PG_PASSWORD=1  generate a new lakebase_password (the setup job re-ALTERs the role; the app is restarted).
+#                         Without it the password is written only when the key is absent.
 #   BUNDLE_VAR_*          any bundle variable can be overridden, e.g. BUNDLE_VAR_project_id
 #
 # Order (the app's serving_endpoint resources must exist when the app is deployed):
@@ -32,11 +34,13 @@
 #   4. direct: init_history job (Zerobus tables and grants)
 #   5. GPU endpoints, when requested (serverless GPU, blocking). Phase 1 may have failed on app
 #      serving-endpoint bindings if the endpoints did not exist yet; that is expected on a first deploy.
-#   6. bundle deploy (phase 2) so the app binds the endpoints, then the app
+#   6. bundle deploy (phase 2) so the app binds the endpoints, then the app; restart the app if the
+#      Lakebase password was written in this run (see 1c)
 #   7. KB index job (blocking)
 #   8. kafka: RTM enrichment and Delta history jobs (continuous, --no-wait)
 #
-# The generated Postgres password is stored in the secret scope by the setup job. It is never printed.
+# The Lakebase password is written to the secret scope by this script (once, or on ROTATE_PG_PASSWORD=1). The setup
+# job reads it and ALTERs the role to match. It is never printed.
 set -euo pipefail
 
 if [[ $# -lt 1 || $# -gt 3 ]]; then
@@ -150,21 +154,32 @@ else
   done
 fi
 
+# --- 1c. Lakebase password (lakebase_password) -----------------------------
+# The setup job reads this key and ALTERs the role to match; the app binds it as a secret resource.
+# It is written only when absent, or when ROTATE_PG_PASSWORD=1. Why not on every deploy: the setup job
+# re-ALTERs the role each run, but the running app keeps pooled connections authenticated with the old
+# password and only picks up the secret at process start, so a per-deploy password breaks new connections.
+# The value goes through stdin (put_secret), so it never appears in argv, the log or the bundle variables.
+lakebase_password_written=0
+if [[ "${ROTATE_PG_PASSWORD:-0}" == "1" ]] || ! have_secret lakebase_password; then
+  put_secret lakebase_password "$(openssl rand -hex 24)"
+  lakebase_password_written=1
+  echo "wrote lakebase_password to scope '$scope' (value not printed)"
+fi
+
 # The app's secret bindings need these keys to exist at deploy time. The setup job
 # overwrites them with real values. Placeholders are written only if absent.
-for key in lakebase_host lakebase_db lakebase_user lakebase_password lakebase_endpoint; do
+for key in lakebase_host lakebase_db lakebase_user lakebase_endpoint; do
   if ! have_secret "$key"; then
     put_secret "$key" placeholder
   fi
 done
 
 # --- 2. Bundle variables, validate, deploy (phase 1) ----------------------
-password=$(openssl rand -hex 24)
 export BUNDLE_VAR_catalog=$catalog
 export BUNDLE_VAR_uc_schema=$uc_schema
 export BUNDLE_VAR_secret_scope=$scope
 export BUNDLE_VAR_kafka_security=$kafka_security
-export BUNDLE_VAR_pg_password=$password
 export BUNDLE_VAR_zerobus_principal=$zerobus_principal
 export BUNDLE_VAR_gpu_scale_to_zero=${GPU_SCALE_TO_ZERO:-true}
 case "$BUNDLE_VAR_gpu_scale_to_zero" in true|false) ;; *) echo "GPU_SCALE_TO_ZERO must be true or false" >&2; exit 2 ;; esac
@@ -203,6 +218,16 @@ if [[ "${DEPLOY_VOICE:-0}" == "1" || "${DEPLOY_PARAKEET:-0}" == "1" ]]; then
 fi
 db bundle run call_sidekick_app --target "$target"
 
+# A new Lakebase password reaches the app only when its process starts (secret-backed env vars are read at start),
+# and the app's pool keeps authenticated connections alive. So after a write in this run, stop and start the app.
+# bundle run deploys the source and does not document a restart of a running app; stop/start is the restart the
+# script's previous closing hint used, so it is kept here.
+if [[ "$lakebase_password_written" == "1" ]]; then
+  db apps stop call-sidekick
+  db apps start call-sidekick
+  echo "restarted app call-sidekick so it reads the new lakebase_password"
+fi
+
 # --- 7. KB index (blocking; cheap) ----------------------------------------
 db bundle run call_sidekick_kb_index --target "$target"
 
@@ -217,7 +242,6 @@ cat <<EOM
 Deployment complete (backbone=$backbone, bundle target=$target).
 - Setup job, app, KB index finished. Post-call scoring is scheduled every 30 minutes (UTC).
 $(if [[ "$backbone" == "direct" ]]; then echo "- Direct backbone: no RTM cluster or Kafka job. History goes to Zerobus tables in $catalog.$uc_schema."; else echo "- Kafka backbone: RTM enrichment and Delta history are running (--no-wait). Requires a classic workspace."; fi)
-- The Postgres password is stored in secret scope '$scope' under lakebase_password.
-- Restart the app once after the first setup run so it picks up the real secret values:
-    databricks apps stop call-sidekick --profile $profile && databricks apps start call-sidekick --profile $profile
+- The Postgres password is in secret scope '$scope' under lakebase_password. It is kept across deploys;
+  set ROTATE_PG_PASSWORD=1 to rotate it (the setup job re-ALTERs the role and the app is restarted).
 EOM
