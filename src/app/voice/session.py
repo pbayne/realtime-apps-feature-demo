@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
 from config import Settings
+from history import schema as hs
 from llm import LlmClient, LlmUnavailable
 from models import now_ms
 from sidekick.playbooks import Playbook, PracticeScenario
@@ -66,6 +67,7 @@ class VoiceDeps:
     calls: dict[str, Any]                      # call_id -> CallSession (services.sessions)
     finish_call: Callable[[str], Awaitable[None]]
     new_practice_call: Callable[[str], Awaitable[str]]
+    history: Any = None                        # HistorySink (SPEC 3.7); None in tests means no history
 
 
 @dataclass
@@ -420,6 +422,8 @@ class VoiceSession:
                 await self.deps.store.put_voice_item(self.session_id, item)
             except Exception:  # noqa: BLE001 - persistence is best effort during the session
                 log.exception("voice item persist failed")
+            if self.deps.history is not None:
+                self.deps.history.emit("voice_items", hs.voice_item_row(self.session_id, item))
             self._emit({"type": "item", "turn": rec.turn, "item": _wire_item(item)})
         row = {"turn": rec.turn, "role": self.role, "user_text": rec.user_text, "agent_text": agent_text,
                "interrupted": interrupted, "timing": dict(rec.timing), "created_at_ms": now_ms()}
@@ -429,6 +433,8 @@ class VoiceSession:
                 await self.deps.store.put_voice_turn(self.session_id, row)
             except Exception:  # noqa: BLE001
                 log.exception("voice turn persist failed")
+            if self.deps.history is not None:
+                self.deps.history.emit("voice_turns", hs.voice_turn_row(self.session_id, row))
         self._emit({"type": "turn_done", "turn": rec.turn, "interrupted": interrupted, "timing": rec.timing})
 
     # ------------------------------------------------------------ helpers

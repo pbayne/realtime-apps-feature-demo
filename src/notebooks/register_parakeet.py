@@ -7,7 +7,10 @@
 # MAGIC `parakeet_serving/asr_server.py` (FastAPI + NeMo, bf16, 5 ms micro-batching) answers
 # MAGIC `POST /v1/audio/transcriptions` on port 8080. The model is logged with task `llm/v1/audio/transcriptions`.
 # MAGIC
-# MAGIC Endpoint: `GPU_MEDIUM` (A10G on AWS), workload `Small`, scale-to-zero **off**. It is **not** route-optimized.
+# MAGIC Endpoint: `GPU_MEDIUM` (A10G on AWS), workload `Small`. Scale-to-zero is set by the `gpu_scale_to_zero` widget
+# MAGIC (default `true` for dev cost). With scale-to-zero on, the first request after idle waits for a cold GPU
+# MAGIC (minutes), so warm the endpoint before a demo (`scripts/warmup_voice.py`) or set `gpu_scale_to_zero=false`.
+# MAGIC It is **not** route-optimized.
 # MAGIC The app calls it through the workspace host with its service principal (`LlmClient.multipart`).
 # MAGIC
 # MAGIC ## Contract (what the app sends and reads)
@@ -34,6 +37,7 @@ dbutils.widgets.text("model_name", "parakeet_tdt_v3")
 dbutils.widgets.text("endpoint_name", "sidekick-parakeet")
 dbutils.widgets.dropdown("workload_type", "GPU_MEDIUM", ["GPU_SMALL", "GPU_MEDIUM", "GPU_LARGE", "MULTIGPU_MEDIUM"])
 dbutils.widgets.text("workload_size", "Small")
+dbutils.widgets.dropdown("gpu_scale_to_zero", "true", ["true", "false"])   # false = always on (demos, latency)
 dbutils.widgets.dropdown("stage", "deploy", ["deploy", "verify"])
 
 catalog = dbutils.widgets.get("uc_catalog").strip()
@@ -44,6 +48,7 @@ workload_type = dbutils.widgets.get("workload_type").strip()
 workload_size = dbutils.widgets.get("workload_size").strip()
 STAGE = dbutils.widgets.get("stage")
 
+SCALE_TO_ZERO = dbutils.widgets.get("gpu_scale_to_zero").strip().lower() == "true"
 UC_MODEL_NAME = f"{catalog}.{schema}.{model_name}"
 MODEL_REPO_ID = "nvidia/parakeet-tdt-0.6b-v3"   # Hugging Face model
 MODEL_DIR = "parakeet-tdt-0.6b-v3"              # weights folder: the entrypoint loads it by this name
@@ -197,7 +202,7 @@ print(UC_MODEL_NAME, "version", version)
 
 # COMMAND ----------
 
-# MAGIC %md ## 5. Create or update the endpoint (GPU, no scale-to-zero, not route-optimized)
+# MAGIC %md ## 5. Create or update the endpoint (GPU, scale-to-zero per the widget, not route-optimized)
 
 # COMMAND ----------
 
@@ -210,7 +215,7 @@ served_entities = [ServedEntityInput(
     entity_version=str(version),
     workload_type=ServingModelWorkloadType(workload_type),
     workload_size=workload_size,
-    scale_to_zero_enabled=False,
+    scale_to_zero_enabled=SCALE_TO_ZERO,
 )]
 existing = {e.name for e in w.serving_endpoints.list()}
 if endpoint_name in existing:

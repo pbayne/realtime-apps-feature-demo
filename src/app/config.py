@@ -1,5 +1,10 @@
 """Settings for the sidekick app (pydantic-settings; env vars, optional .env).
 
+BACKBONE selects the data path (SPEC section 1 / docs/ARCHITECTURE.md):
+  direct (default): no Kafka. Each final is enriched in-process; Lakebase holds live state;
+                    history goes to Delta through Zerobus Ingest (HistorySink).
+  kafka:            utterances go to Kafka for Spark Real-Time Mode (enrichment comes back through
+                    Lakebase); history goes to Delta through the Kafka jobs.
 MODE=local swaps Kafka -> in-memory bus and Lakebase -> in-memory store.
 Every other knob has a SPEC-sourced default and can be overridden by env.
 """
@@ -10,7 +15,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP_DIR = Path(__file__).resolve().parent            # src/app (bundled into the Databricks App)
@@ -20,9 +25,15 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
 
     mode: Literal["local", "databricks"] = "local"
+    # SPEC section 1 / docs/ARCHITECTURE.md. direct = no Kafka (default); kafka = scale mode with RTM.
+    backbone: Literal["direct", "kafka"] = "direct"
     # auto = memory in local, kafka/lakebase in databricks. Explicit values override.
+    # With backbone=direct the bus is always "none" (no Kafka client is created).
     bus_backend: Literal["auto", "memory", "kafka"] = "auto"
     store_backend: Literal["auto", "memory", "lakebase"] = "auto"
+    # HistorySink (SPEC section 3.7). auto: direct+databricks -> zerobus, direct+local -> memory,
+    # kafka -> none (history flows over Kafka to delta_history.py). Explicit values override.
+    history_backend: Literal["auto", "memory", "zerobus", "none"] = "auto"
 
     # --- models (SPEC section 6) ---
     llm_enabled: bool = True
@@ -39,7 +50,7 @@ class Settings(BaseSettings):
     llm_breaker_cooldown_s: float = 30.0
 
     # --- voice mode (SPEC section 9) ---
-    voice_model: str = "databricks-claude-haiku-5-5"   # thinking disabled by llm._model_extras
+    voice_model: str = "databricks-claude-haiku-4-5"   # measured fastest first token on e2-demo (ARCHITECTURE.md)
     voice_max_tokens: int = 400
     voice_timeout_s: float = 15.0          # per LLM stream (first token + reply)
     tts_endpoint: str = "sidekick-kokoro"  # Custom LLM Serving TTS endpoint (register_kokoro.py)
@@ -87,7 +98,19 @@ class Settings(BaseSettings):
     playbooks_dir: Path = APP_DIR / "playbooks"
     replay_dir: Path = APP_DIR / "data" / "replay"
 
-    # --- Kafka (databricks mode) ---
+    # --- history: Zerobus Ingest -> UC Delta (backbone=direct, SPEC section 3.7) ---
+    history_catalog: str = "main"
+    history_schema: str = "call_sidekick"
+    zerobus_endpoint: Optional[str] = None     # <workspace-id>.zerobus.<region>.cloud.databricks.com
+    zerobus_client_id: Optional[str] = None    # service principal application id
+    zerobus_client_secret: Optional[str] = None
+    databricks_host: Optional[str] = None      # Zerobus unity_catalog_url; Apps sets DATABRICKS_HOST
+    history_queue_max: int = 10000             # bounded in-process queue; drop-oldest when full
+    history_batch_max: int = 500               # records per flush per table
+    history_flush_interval_s: float = 0.5
+    history_flush_timeout_s: float = 10.0      # shutdown drain budget
+
+    # --- Kafka (databricks mode, backbone=kafka) ---
     kafka_bootstrap_servers: Optional[str] = None
     # Same mode names as the notebooks (rtm_lib.KAFKA_SECURITY_MODES). When set, it overrides
     # kafka_security_protocol / kafka_sasl_mechanism below.
@@ -119,11 +142,30 @@ class Settings(BaseSettings):
             raise ValueError("stt_frame_s must be >= 0.3 (SPEC section 1)")
         return v
 
+    @model_validator(mode="after")
+    def _check_backbone(self) -> "Settings":
+        if self.backbone == "direct" and self.bus_backend == "kafka":
+            raise ValueError("BACKBONE=direct does not use Kafka; set BACKBONE=kafka to use BUS_BACKEND=kafka")
+        if self.backbone == "kafka" and self.history_backend == "zerobus":
+            raise ValueError("HISTORY_BACKEND=zerobus is the direct-mode history path; in kafka mode history "
+                             "flows over Kafka to delta_history.py (use auto or none)")
+        return self
+
     @property
     def effective_bus(self) -> str:
+        if self.backbone == "direct":
+            return "none"
         if self.bus_backend != "auto":
             return self.bus_backend
         return "memory" if self.mode == "local" else "kafka"
+
+    @property
+    def effective_history(self) -> str:
+        if self.history_backend != "auto":
+            return self.history_backend
+        if self.backbone == "kafka":
+            return "none"
+        return "memory" if self.mode == "local" else "zerobus"
 
     @property
     def effective_store(self) -> str:

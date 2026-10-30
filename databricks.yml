@@ -3,12 +3,20 @@ bundle:
 
 # Everything environment-specific is a variable. Supply secrets and overrides via
 # BUNDLE_VAR_<name> env vars (scripts/deploy.sh does this) or --var flags.
+#
+# Two backbones (docs/ARCHITECTURE.md). Pick one with the target:
+#   dev   (default) backbone=direct: no Kafka, no RTM cluster. Serverless jobs and GPU endpoints.
+#   kafka backbone=kafka: adds the RTM cluster and the RTM and Delta-history jobs (targets.kafka below).
+#         Needs a classic workspace (RTM and the Kafka jobs run on classic compute).
 variables:
+  backbone:
+    description: "direct (default, no Kafka) or kafka (Kafka + Spark Real-Time Mode). Set by the kafka target."
+    default: direct
   catalog:
-    description: Unity Catalog catalog for the schema, checkpoint volume, bronze/gold tables, and models.
-    default: main
+    description: Unity Catalog catalog for the schema, checkpoint volume, Kafka-mode bronze/gold tables, and models.
+    default: realtime_call_sidekick_catalog
   uc_schema:
-    description: UC schema that holds bronze/gold tables, the checkpoint volume, the KB table, and the Parakeet model.
+    description: UC schema for history tables (Zerobus), Lakebase-side artifacts, the KB table, and the Parakeet model.
     default: call_sidekick
   app_name:
     description: Databricks App name.
@@ -19,29 +27,41 @@ variables:
     description: Lakebase Autoscaling project id. Must be unique within the workspace.
     default: call-sidekick
   branch_name:
-    description: Lakebase branch the sink and app write to.
+    description: Lakebase branch the app writes to.
     default: production
   database_name:
     description: Postgres database inside the Lakebase project.
     default: databricks_postgres
   pg_role:
-    description: Postgres role used by the RTM sink and the app (one role in this build).
+    description: Postgres role used by the app (and the RTM sink in kafka mode).
     default: sidekick_writer
   pg_password:
     description: Strong password for pg_role (>= 24 chars). No default on purpose; deploy.sh generates one per deployment.
 
-  # --- Secrets and Kafka ----------------------------------------------------
+  # --- Zerobus history (direct backbone) ------------------------------------
+  zerobus_principal:
+    description: Application id (UUID) of the service principal the app uses for Zerobus Ingest (same value as the zerobus_client_id secret). init_history grants it MODIFY+SELECT.
+    default: ""
+
+  scoring_utterances_table:
+    description: Source table for post-call scoring (under uc_schema). direct = Zerobus history; kafka target overrides to bronze_utterances.
+    default: utterances
+  scoring_cards_table:
+    description: Source table for post-call scoring (under uc_schema). direct = Zerobus history; kafka target overrides to bronze_cards.
+    default: cards
+
+  # --- Secrets and Kafka (kafka backbone) ----------------------------------
   secret_scope:
-    description: Secret scope holding Lakebase and Kafka connection values (see README "Secrets").
+    description: Secret scope holding Lakebase, Zerobus and (kafka mode) Kafka connection values (see README "Secrets").
     default: call-sidekick
   kafka_security:
-    description: "Kafka auth mode: SASL_SSL_PLAIN (Confluent Cloud), SASL_SSL_SCRAM_SHA_256 / _512 (Redpanda Cloud) or SASL_SSL_MSK_IAM (AWS MSK; jobs only)."
+    description: "Kafka auth mode (kafka backbone only): SASL_SSL_PLAIN (Confluent Cloud), SASL_SSL_SCRAM_SHA_256 / _512 (Redpanda Cloud) or SASL_SSL_MSK_IAM (AWS MSK; jobs only)."
     default: SASL_SSL_PLAIN
   kafka_topics:
-    description: Comma-separated topics the setup job creates if missing.
+    description: Comma-separated topics the setup job creates if missing (kafka backbone only).
     default: utterances,cards
   kafka_partitions:
-    description: Partitions per topic. Keep 4 to match the RTM sizing in resources/cluster.yml.
+    description: Partitions per topic. Keep 4 to match the RTM sizing in targets.kafka.resources.clusters.
     default: "4"
   kafka_replication_factor:
     description: Replication factor for new topics (MSK / Confluent require >= 3 on multi-AZ clusters).
@@ -52,23 +72,23 @@ variables:
 
   # --- Compute --------------------------------------------------------------
   dbr_version:
-    description: Databricks Runtime for RTM and batch clusters. RTM Kafka needs 16.4+; the Lakebase sink needs 18.3+.
+    description: Databricks Runtime for the kafka-backbone classic clusters. RTM Kafka needs 16.4+; the Lakebase sink needs 18.3+.
     default: 18.3.x-scala2.13
   rtm_node_type:
-    description: Node type for the RTM cluster (AWS). Workers must give >= 2 cores per Kafka partition (8 cores for 4 partitions).
+    description: Node type for the RTM cluster (kafka backbone, AWS). Workers must give >= 2 cores per Kafka partition (8 cores for 4 partitions).
     default: m5d.xlarge
   rtm_num_workers:
-    description: RTM worker count. Fixed (autoscale must be off). 2 x m5d.xlarge = 8 worker cores.
+    description: RTM worker count (kafka backbone). Fixed (autoscale must be off). 2 x m5d.xlarge = 8 worker cores.
     default: "2"
   batch_node_type:
-    description: Node type for batch and streaming-to-Delta jobs (AWS).
+    description: Node type for the kafka-backbone Delta history job (classic, AWS).
     default: m5d.xlarge
-  gpu_node_type:
-    description: GPU node type for the one-off Parakeet registration job (AWS g5 = A10G).
-    default: g5.xlarge
-  gpu_spark_version:
-    description: GPU ML runtime for register_parakeet. Verify the exact string in your workspace (databricks clusters spark-versions).
-    default: 17.3.x-gpu-ml-scala2.13
+  gpu_scale_to_zero:
+    description: "Scale-to-zero for the Parakeet and Kokoro GPU endpoints (\"true\" | \"false\"). Default true for dev cost. With true the first voice turn after idle waits minutes for a cold GPU: warm up with scripts/warmup_voice.py before demos, or set false for demos and latency measurements."
+    default: "true"
+  gpu_accelerator:
+    description: Serverless GPU accelerator for the Parakeet and Kokoro registration jobs. The reference audio notebooks use an A10 on serverless GPU (environment Standard v6).
+    default: GPU_1xA10
 
   # --- Models and serving ---------------------------------------------------
   parakeet_endpoint:
@@ -84,8 +104,8 @@ variables:
     description: UC model name (under catalog.uc_schema) for the Kokoro serving model.
     default: kokoro_82m
   voice_model:
-    description: Chat model for voice mode (SPEC 9.4). Thinking is disabled by the app for Claude 5.x.
-    default: databricks-claude-haiku-5-5
+    description: Chat model for voice mode (SPEC 9.4). Fastest first token measured on e2-demo (docs/ARCHITECTURE.md); re-measure in region.
+    default: databricks-claude-haiku-4-5
   fast_model:
     description: Fast LLM serving endpoint for perception (SPEC FAST_MODEL).
     default: databricks-claude-haiku-5-5
@@ -99,6 +119,7 @@ variables:
     description: Vector Search endpoint name.
     default: call-sidekick-vs
 
+# Direct-safe resources (serverless jobs, apps, Lakebase, GPU endpoints). Kafka-only resources are under targets.kafka.
 include:
   - resources/*.yml
 
@@ -113,5 +134,91 @@ targets:
   dev:
     default: true
     mode: development
-    # No host or profile here on purpose. Pick the workspace at deploy time with
+    # backbone=direct. No host or profile here on purpose. Pick the workspace at deploy time with
     # --profile <name> or DATABRICKS_CONFIG_PROFILE, so the same bundle targets any workspace.
+    variables:
+      backbone: direct
+
+  kafka:
+    mode: development
+    variables:
+      backbone: kafka
+      scoring_utterances_table: bronze_utterances
+      scoring_cards_table: bronze_cards
+    # Kafka backbone only (SPEC 1, docs/ARCHITECTURE.md). Classic compute: the RTM cluster and the
+    # Delta-history job need a classic workspace. Deploy with `-t kafka`.
+    resources:
+      clusters:
+        # RTM cluster. Real-Time Mode (docs: structured-streaming/real-time/setup) needs:
+        #   - classic compute, dedicated (SINGLE_USER) access mode
+        #   - DBR 16.4+ for Kafka RTM; DBR 18.3+ for the native Lakebase postgresql sink
+        #   - autoscaling OFF (fixed num_workers), Photon OFF, on-demand (no spot)
+        #   - spark.databricks.streaming.realTimeMode.enabled=true
+        # Sizing: 4 Kafka partitions -> 4 tasks. RTM requires total task slots >= tasks
+        # across all stages. 2 x m5d.xlarge = 8 worker cores = 2 cores per partition.
+        rtm_cluster:
+          cluster_name: call-sidekick-rtm
+          spark_version: ${var.dbr_version}
+          data_security_mode: SINGLE_USER
+          single_user_name: ${workspace.current_user.userName}
+          runtime_engine: STANDARD              # Photon off
+          node_type_id: ${var.rtm_node_type}
+          driver_node_type_id: ${var.rtm_node_type}
+          num_workers: ${var.rtm_num_workers}   # autoscale off
+          autotermination_minutes: 120
+          aws_attributes:
+            availability: ON_DEMAND             # no spot
+            first_on_demand: 1
+          spark_conf:
+            spark.databricks.streaming.realTimeMode.enabled: "true"
+      jobs:
+        call_sidekick_rtm_enrich:
+          name: call-sidekick-rtm-enrich
+          description: Kafka utterances -> RTM -> built-in enrichment -> Lakebase enrichments (native postgresql sink). Continuous; cancel to stop. Kafka backbone only.
+          max_concurrent_runs: 1
+          # Continuous: no timeout. Stop with `databricks jobs cancel-run`.
+          tasks:
+            - task_key: rtm_enrich
+              existing_cluster_id: ${resources.clusters.rtm_cluster.id}
+              notebook_task:
+                notebook_path: ./src/notebooks/rtm_enrich.py
+                base_parameters:
+                  secret_scope: ${var.secret_scope}
+                  kafka_security: ${var.kafka_security}
+                  utterances_topic: utterances
+                  starting_offsets: latest
+                  checkpoint_path: /Volumes/${var.catalog}/${var.uc_schema}/checkpoints/rtm_enrich
+                  rules_path: ${workspace.file_path}/src/notebooks/enrich_rules.json
+                  lakebase_database: ${var.database_name}
+                  sink_batchinterval: 50 milliseconds
+                  sink_batchsize: "500"
+
+        call_sidekick_delta_history:
+          name: call-sidekick-delta-history
+          description: Kafka utterances and cards -> UC bronze Delta (micro-batch, not RTM). Continuous at a 5 s trigger. Kafka backbone only; the direct backbone writes history through Zerobus.
+          max_concurrent_runs: 1
+          job_clusters:
+            - job_cluster_key: batch
+              new_cluster: &batch_cluster
+                spark_version: ${var.dbr_version}
+                node_type_id: ${var.batch_node_type}
+                num_workers: 1
+                data_security_mode: SINGLE_USER
+                single_user_name: ${workspace.current_user.userName}
+                runtime_engine: STANDARD
+                aws_attributes:
+                  availability: ON_DEMAND
+          tasks:
+            - task_key: delta_history
+              job_cluster_key: batch
+              notebook_task:
+                notebook_path: ./src/notebooks/delta_history.py
+                base_parameters:
+                  secret_scope: ${var.secret_scope}
+                  kafka_security: ${var.kafka_security}
+                  utterances_topic: utterances
+                  cards_topic: cards
+                  bronze_utterances_table: ${var.catalog}.${var.uc_schema}.bronze_utterances
+                  bronze_cards_table: ${var.catalog}.${var.uc_schema}.bronze_cards
+                  checkpoint_root: /Volumes/${var.catalog}/${var.uc_schema}/checkpoints/delta_history
+                  trigger_mode: processing_time

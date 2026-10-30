@@ -100,7 +100,8 @@ def _collect(ws, until_type="call.ended", timeout_s=90):
 
 def test_healthz_and_catalogue(client):
     health = client.get("/healthz").json()
-    assert health["mode"] == "local" and health["bus"] == "memory" and health["store"] == "memory"
+    assert health["mode"] == "local" and health["backbone"] == "direct" and health["bus"] == "none"
+    assert health["store"] == "memory" and health["history"]["backend"] == "memory"
     assert health["llm"]["available"] is True
     names = [p["name"] for p in client.get("/api/playbooks").json()["playbooks"]]
     assert names == ["advisor_coach", "contact_center"]

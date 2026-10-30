@@ -1,1 +1,2 @@
-"""Enrichment: pure rules transform (rules.py) and the local RTM stand-in (local_enricher.py)."""
+"""Enrichment: pure rules transform (rules.py); in-process enricher for the direct backbone and the
+local stand-in for the RTM job for the kafka backbone (direct.py)."""

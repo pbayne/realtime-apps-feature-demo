@@ -24,7 +24,11 @@ from typing import Any, Optional
 
 from bus.base import EventBus
 from config import Settings
+from enrich.direct import DirectEnricher
 from enrich.rules import enrich
+from history import schema as hs
+from history.base import HistorySink
+from history.memory import NullHistorySink
 from hub import Hub
 from llm import LlmClient
 from models import CallRecord, Card, Utterance, new_id, now_ms
@@ -67,6 +71,8 @@ class Deps:
     registry: PlaybookRegistry
     hub: Hub
     vad: Vad
+    history: Optional[HistorySink] = None      # SPEC 3.7: Zerobus (direct) or none (kafka)
+    enricher: Optional[DirectEnricher] = None  # direct backbone: in-process enrichment
 
 
 @dataclass
@@ -104,6 +110,8 @@ class CallSession:
     def __post_init__(self) -> None:
         self.playbook = self.deps.registry.get(self.record.playbook)
         self.coverage = {m.key: False for m in self.playbook.methodology}
+        self._history: HistorySink = self.deps.history or NullHistorySink()
+        self._enricher = self.deps.enricher or DirectEnricher(self.deps.registry.rules_for)
         self._seq = 0
         self._events: asyncio.Queue[Optional[TranscriptEvent]] = asyncio.Queue()
         self._turn_q: asyncio.Queue[_PendingTurn] = asyncio.Queue()
@@ -264,8 +272,11 @@ class CallSession:
             await self._drain()
             await self._stop_workers()
             self.ended = True
+            ended_at = now_ms()
+            self.record.ended_at_ms, self.record.status = ended_at, "ended"
+            self._history.emit("calls", hs.call_row(self.record))
             try:
-                await self.deps.store.end_call(self.call_id, now_ms())
+                await self.deps.store.end_call(self.call_id, ended_at)
             except Exception:  # noqa: BLE001
                 log.exception("end_call failed")
             self.deps.hub.emit(self.call_id, {"type": "call.ended"})
@@ -326,17 +337,16 @@ class CallSession:
         t_final = time.monotonic()
         call_id, deps, pb = self.call_id, self.deps, self.playbook
         emitted = now_ms()
-        try:
-            await deps.store.put_utterance(Utterance(
-                call_id=call_id, seq=ev.seq, speaker=ev.speaker, text=ev.text,
-                t_start_ms=ev.t_start_ms, t_end_ms=ev.t_end_ms, emitted_at_ms=emitted, playbook=pb.name,
-            ))
-        except Exception:  # noqa: BLE001 - store outage must not stop the sidekick
-            log.exception("put_utterance failed")
-        await deps.bus.publish(self.settings.kafka_utterances_topic, call_id, {
-            "call_id": call_id, "seq": ev.seq, "speaker": ev.speaker, "text": ev.text, "is_final": True,
-            "t_start_ms": ev.t_start_ms, "t_end_ms": ev.t_end_ms, "emitted_at_ms": emitted, "playbook": pb.name,
-        })
+        direct = self.settings.backbone == "direct"
+        utt = Utterance(call_id=call_id, seq=ev.seq, speaker=ev.speaker, text=ev.text,
+                        t_start_ms=ev.t_start_ms, t_end_ms=ev.t_end_ms, emitted_at_ms=emitted, playbook=pb.name)
+        self._spawn(self._persist_utterance(utt))   # live state; a store outage never reaches the card path
+        self._history.emit("utterances", hs.utterance_row(utt))
+        if not direct:
+            await deps.bus.publish(self.settings.kafka_utterances_topic, call_id, {
+                "call_id": call_id, "seq": ev.seq, "speaker": ev.speaker, "text": ev.text, "is_final": True,
+                "t_start_ms": ev.t_start_ms, "t_end_ms": ev.t_end_ms, "emitted_at_ms": emitted, "playbook": pb.name,
+            })
 
         # Customer finals start perception and retrieval now, so neither waits for enrichment.
         perc_task: Optional[asyncio.Task[Perception]] = None
@@ -347,17 +357,26 @@ class CallSession:
             perc_task = self._spawn(perceive(deps.llm, pb, ev.text, recent, self.settings.perception_budget_s))
             ret_task, speculative = self._retrieval_for_final(ev.text)
 
-        # enrichment: RTM (or local stand-in) first, same pure transform as fallback
         t0 = time.monotonic()
-        row = None
-        try:
-            row = await deps.store.wait_enrichment(call_id, ev.seq, self.settings.rtm_wait_ms / 1000.0)
-        except Exception:  # noqa: BLE001
-            log.exception("wait_enrichment failed")
-        rtm_ms = (time.monotonic() - t0) * 1000.0
-        source = "rtm" if row is not None else "local_fallback"
-        local = enrich(ev.text, ev.speaker, self.deps.registry.rules_for(pb.name))
-        merged = _merge(row, local)
+        if direct:
+            # direct backbone: enrich in process (~1 ms). Nothing waits on a broker or on Lakebase.
+            fields = self._enricher.enrich(call_id=call_id, seq=ev.seq, speaker=ev.speaker, text=ev.text,
+                                           playbook=pb.name, emitted_at_ms=emitted)
+            rtm_ms = (time.monotonic() - t0) * 1000.0
+            source = "direct"
+            merged = _merge(None, fields)
+            self._spawn(self._persist_enrichment(fields))
+        else:
+            # kafka backbone: RTM (or local stand-in) first, same pure transform as fallback
+            row = None
+            try:
+                row = await deps.store.wait_enrichment(call_id, ev.seq, self.settings.rtm_wait_ms / 1000.0)
+            except Exception:  # noqa: BLE001
+                log.exception("wait_enrichment failed")
+            rtm_ms = (time.monotonic() - t0) * 1000.0
+            source = "rtm" if row is not None else "local_fallback"
+            local = enrich(ev.text, ev.speaker, self.deps.registry.rules_for(pb.name))
+            merged = _merge(row, local)
         deps.hub.emit(call_id, {
             "type": "enrichment", "seq": ev.seq, "speaker": ev.speaker,
             "intent": merged["intent"], "sentiment": merged["sentiment"],
@@ -404,6 +423,23 @@ class CallSession:
             ))
         elif not comp:
             self._emit_metrics(ev.seq, timing, None, None)
+
+    async def _persist_utterance(self, utt: Utterance) -> None:
+        try:
+            await self.deps.store.put_utterance(utt)
+        except Exception:  # noqa: BLE001 - store outage must not stop the sidekick
+            log.exception("put_utterance failed")
+
+    async def _persist_enrichment(self, fields: dict[str, Any]) -> None:
+        """direct backbone: the in-process enrichment row goes to Lakebase (live state) and to history."""
+        call_id, seq = self.call_id, fields["seq"]
+        try:
+            await self.deps.store.put_enrichment(call_id, seq, fields)
+        except Exception:  # noqa: BLE001
+            log.exception("put_enrichment failed")
+        self._history.emit("enrichments", hs.enrichment_row(
+            call_id, seq, fields["speaker"], fields["text"], fields, fields["emitted_at_ms"],
+            fields["enriched_at_ms"], fields.get("source", "direct")))
 
     # ----------------------------------------------------------- turn worker
     async def _turn_worker(self) -> None:
@@ -562,6 +598,7 @@ class CallSession:
         hub.emit(self.call_id, {"type": "card.done", "card": card.to_wire()})
         try:
             await self.deps.store.put_card(card, trace)
+            self._history.emit("cards", hs.card_row(card, trace))
             await self.deps.bus.publish(self.settings.kafka_cards_topic, self.call_id, card.to_wire())
         except Exception:  # noqa: BLE001 - persistence is best-effort during the call
             log.exception("persisting card failed")
@@ -580,7 +617,9 @@ class CallSession:
     async def feedback(self, card_id: str, action: str, text: Optional[str]) -> None:
         if action not in ("accept", "reject", "edit"):
             raise ValueError("action must be accept|reject|edit")
-        await self.deps.store.add_feedback(card_id, self.call_id, action, text, now_ms())
+        at_ms = now_ms()
+        await self.deps.store.add_feedback(card_id, self.call_id, action, text, at_ms)
+        self._history.emit("feedback", hs.feedback_row(card_id, self.call_id, action, text, at_ms))
 
     # ----------------------------------------------------------- metrics
     def _emit_metrics(self, seq: int, timing: _Timing, card_ms: Optional[float], card_done_ms: Optional[float],

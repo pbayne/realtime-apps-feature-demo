@@ -9,7 +9,7 @@
 # MAGIC 2. Creates the SPEC section 3 tables in Lakebase (`calls`, `utterances`,
 # MAGIC    `enrichments`, `cards`, `feedback`) plus the `pg_notify('enrichment_ready')`
 # MAGIC    trigger on `enrichments`.
-# MAGIC 3. Creates the Kafka topics (`utterances`, `cards`) if they are missing,
+# MAGIC 3. Creates the Kafka topics (`utterances`, `cards`) if they are missing (**backbone=kafka only**),
 # MAGIC    using an AdminClient. Auth is SASL_SSL PLAIN (Confluent Cloud) or AWS MSK IAM.
 # MAGIC 4. Writes the Lakebase connection secrets to the secret scope so the app and
 # MAGIC    the RTM job can read them.
@@ -45,6 +45,7 @@ DEFAULTS = {
     "pg_role": "sidekick_writer",
     "pg_password": "",
     "secret_scope": "call-sidekick",
+    "backbone": "direct",                   # direct (no Kafka; default, serverless OK) | kafka (classic cluster + topics)
     "kafka_security": "SASL_SSL_PLAIN",     # SASL_SSL_PLAIN | SASL_SSL_SCRAM_SHA_256 | SASL_SSL_SCRAM_SHA_512 | SASL_SSL_MSK_IAM
     "kafka_topics": "utterances,cards",
     "kafka_partitions": "4",
@@ -59,6 +60,9 @@ import re
 
 if len(p["pg_password"]) < 24:
     raise ValueError("pg_password must be supplied and contain at least 24 characters")
+
+if p["backbone"] not in ("direct", "kafka"):
+    raise ValueError(f"backbone must be direct or kafka, got {p['backbone']!r}")
 
 for field in ("project_id", "branch_name", "database_name", "pg_role", "secret_scope"):
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,62}", p[field]):
@@ -266,7 +270,7 @@ print(f"Role {role} ready; SPEC section 3 tables, indexes, and enrichment_ready 
 
 # COMMAND ----------
 
-# MAGIC %md ## 6. Kafka topics (create if missing)
+# MAGIC %md ## 6. Kafka topics (create if missing; backbone=kafka only)
 # MAGIC
 # MAGIC Topic names and partition counts are variables. `utterances` should keep 4
 # MAGIC partitions to match the RTM sizing in `resources/cluster.yml`. Existing topics
@@ -274,54 +278,57 @@ print(f"Role {role} ready; SPEC section 3 tables, indexes, and enrichment_ready 
 
 # COMMAND ----------
 
-from confluent_kafka import KafkaException
-from confluent_kafka.admin import AdminClient, NewTopic
-
-SCOPE = p["secret_scope"]
-bootstrap = dbutils.secrets.get(SCOPE, "kafka_bootstrap")
-
-
-def msk_oauth_cb(_config):
-    # Driver instance profile supplies the credentials (no key material in the scope).
-    from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
-    token, expiry_ms = MSKAuthTokenProvider.generate_auth_token(p["aws_region"])
-    return token, expiry_ms / 1000.0
-
-
-if kafka_needs_credentials(p["kafka_security"]):
-    admin_conf = {
-        "bootstrap.servers": bootstrap,
-        "security.protocol": "SASL_SSL",
-        "sasl.mechanisms": kafka_sasl_mechanism(p["kafka_security"]),
-        "sasl.username": dbutils.secrets.get(SCOPE, "kafka_api_key"),
-        "sasl.password": dbutils.secrets.get(SCOPE, "kafka_api_secret"),
-    }
+if p["backbone"] != "kafka":
+    print("backbone=direct: no Kafka topics to create (history goes to Zerobus)")
 else:
-    admin_conf = {
-        "bootstrap.servers": bootstrap,
-        "security.protocol": "SASL_SSL",
-        "sasl.mechanisms": "OAUTHBEARER",
-        "oauth_cb": msk_oauth_cb,
-    }
+    from confluent_kafka import KafkaException
+    from confluent_kafka.admin import AdminClient, NewTopic
 
-admin = AdminClient(admin_conf)
-existing = set(admin.list_topics(timeout=30).topics.keys())
-to_create = [t for t in topic_names(p["kafka_topics"]) if t not in existing]
-if to_create:
-    futures = admin.create_topics([
-        NewTopic(t, num_partitions=int(p["kafka_partitions"]),
-                 replication_factor=int(p["kafka_replication_factor"]))
-        for t in to_create
-    ])
-    for topic, fut in futures.items():
-        try:
-            fut.result()
-            print(f"created topic {topic}")
-        except KafkaException as exc:
-            # Racing creators are fine; anything else is a real failure.
-            if "TOPIC_ALREADY_EXISTS" not in str(exc):
-                raise
-print("topics present: " + ", ".join(sorted(t for t in topic_names(p["kafka_topics"]))))
+    SCOPE = p["secret_scope"]
+    bootstrap = dbutils.secrets.get(SCOPE, "kafka_bootstrap")
+
+
+    def msk_oauth_cb(_config):
+        # Driver instance profile supplies the credentials (no key material in the scope).
+        from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
+        token, expiry_ms = MSKAuthTokenProvider.generate_auth_token(p["aws_region"])
+        return token, expiry_ms / 1000.0
+
+
+    if kafka_needs_credentials(p["kafka_security"]):
+        admin_conf = {
+            "bootstrap.servers": bootstrap,
+            "security.protocol": "SASL_SSL",
+            "sasl.mechanisms": kafka_sasl_mechanism(p["kafka_security"]),
+            "sasl.username": dbutils.secrets.get(SCOPE, "kafka_api_key"),
+            "sasl.password": dbutils.secrets.get(SCOPE, "kafka_api_secret"),
+        }
+    else:
+        admin_conf = {
+            "bootstrap.servers": bootstrap,
+            "security.protocol": "SASL_SSL",
+            "sasl.mechanisms": "OAUTHBEARER",
+            "oauth_cb": msk_oauth_cb,
+        }
+
+    admin = AdminClient(admin_conf)
+    existing = set(admin.list_topics(timeout=30).topics.keys())
+    to_create = [t for t in topic_names(p["kafka_topics"]) if t not in existing]
+    if to_create:
+        futures = admin.create_topics([
+            NewTopic(t, num_partitions=int(p["kafka_partitions"]),
+                     replication_factor=int(p["kafka_replication_factor"]))
+            for t in to_create
+        ])
+        for topic, fut in futures.items():
+            try:
+                fut.result()
+                print(f"created topic {topic}")
+            except KafkaException as exc:
+                # Racing creators are fine; anything else is a real failure.
+                if "TOPIC_ALREADY_EXISTS" not in str(exc):
+                    raise
+    print("topics present: " + ", ".join(sorted(t for t in topic_names(p["kafka_topics"]))))
 
 # COMMAND ----------
 

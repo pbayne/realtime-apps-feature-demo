@@ -1,8 +1,9 @@
-"""Service container: builds the bus, store, LLM, retrieval, playbooks and live call sessions.
+"""Service container: builds the bus, store, history sink, LLM, retrieval, playbooks and live call sessions.
 
-Local (MODE=local): memory bus + memory store, and the LocalEnricher subscribes to
-`utterances` as the stand-in for the RTM job. Databricks: Kafka bus + Lakebase store,
-and enrichments come from RTM (with a local fallback after RTM_WAIT_MS).
+BACKBONE=direct (default): no bus. Each final is enriched in process (enrich/direct.py), Lakebase holds live
+state, and the HistorySink (Zerobus in databricks mode, memory in local mode) receives history.
+BACKBONE=kafka: Kafka bus + Lakebase store; enrichments come from RTM (local fallback after RTM_WAIT_MS).
+In local kafka mode the in-memory bus stands in for Kafka and BusEnricher stands in for RTM.
 """
 
 from __future__ import annotations
@@ -16,8 +17,10 @@ from typing import Optional
 
 from bus import build_bus
 from config import Settings
-from enrich.local_enricher import LocalEnricher
+from enrich.direct import BusEnricher, DirectEnricher
 from enrich.rules import load_rules
+from history import build_history
+from history import schema as hs
 from hub import Hub
 from llm import LlmClient
 from models import CallRecord, now_ms
@@ -58,10 +61,13 @@ class Services:
         self.retriever = Retriever(self.llm, settings,
                                    VectorSearchStub(settings) if backend == "vector_search" else None,
                                    backend=backend)
+        self.history = build_history(settings)
+        self.enricher = DirectEnricher(self.registry.rules_for)
         self.hub = Hub()
         self.deps = Deps(settings=settings, bus=self.bus, store=self.store, llm=self.llm,
-                         retriever=self.retriever, registry=self.registry, hub=self.hub, vad=self.vad)
-        self.local_enricher: Optional[LocalEnricher] = None
+                         retriever=self.retriever, registry=self.registry, hub=self.hub, vad=self.vad,
+                         history=self.history, enricher=self.enricher)
+        self.bus_enricher: Optional[BusEnricher] = None
         self.sessions: dict[str, CallSession] = {}
         # Voice mode (SPEC 9): Kokoro TTS and Parakeet over the same workspace auth as the LLM.
         self.tts = KokoroTts(self.llm.workspace_auth, settings.tts_endpoint, timeout_s=settings.tts_timeout_s)
@@ -72,21 +78,23 @@ class Services:
         self.voice_deps = VoiceDeps(
             settings=settings, llm=self.llm, tts=self.tts, stt=self.transcriber, store=self.store,
             retriever=self.retriever, calls=self.sessions, finish_call=self.finish_call,
-            new_practice_call=self.new_practice_call,
+            new_practice_call=self.new_practice_call, history=self.history,
         )
 
     # ------------------------------------------------------------ lifecycle
     async def start(self) -> None:
         await self.store.start()
         await self.bus.start()
+        await self.history.start()
         if self.settings.effective_bus == "memory":
-            self.local_enricher = LocalEnricher(self.store, self.registry.rules_for)
-            self.local_enricher.attach(self.bus, self.settings.kafka_utterances_topic)
+            self.bus_enricher = BusEnricher(self.store, self.registry.rules_for)
+            self.bus_enricher.attach(self.bus, self.settings.kafka_utterances_topic)
         # Build and embed KB indexes in the background so the first customer turn does not pay for it.
         self._warmup = asyncio.ensure_future(self.retriever.warm(self.registry.all()))
-        log.info("services ready: mode=%s bus=%s store=%s vad=%s retrieval=%s llm=%s",
-                 self.settings.mode, self.settings.effective_bus, self.settings.effective_store,
-                 self.vad.name, self.retrieval_backend, self.llm.enabled)
+        log.info("services ready: mode=%s backbone=%s bus=%s store=%s history=%s vad=%s retrieval=%s llm=%s",
+                 self.settings.mode, self.settings.backbone, self.settings.effective_bus,
+                 self.settings.effective_store, self.settings.effective_history, self.vad.name,
+                 self.retrieval_backend, self.llm.enabled)
 
     async def stop(self) -> None:
         if getattr(self, "_warmup", None) is not None:
@@ -103,8 +111,11 @@ class Services:
                     await session.finish()
                 except Exception:  # noqa: BLE001
                     log.exception("finish on shutdown failed")
-        await self.bus.stop()
-        await self.store.stop()
+        for name, closer in (("bus", self.bus.stop), ("history", self.history.stop), ("store", self.store.stop)):
+            try:
+                await closer()
+            except Exception:  # noqa: BLE001 - shutdown is best effort; a dead dependency must not block it
+                log.exception("%s stop failed on shutdown", name)
         await self.llm.aclose()
 
     # --------------------------------------------------------------- calls
@@ -156,6 +167,7 @@ class Services:
             await self.store.create_call(record)
         except Exception:  # noqa: BLE001 - store outage: the live call still works
             log.exception("create_call persistence failed")
+        self.history.emit("calls", hs.call_row(record))
         session = CallSession(record=record, deps=self.deps)
         session.start()
         self.sessions[record.call_id] = session
@@ -221,8 +233,10 @@ class Services:
         return {
             "status": "ok",
             "mode": self.settings.mode,
+            "backbone": self.settings.backbone,
             "bus": self.settings.effective_bus,
             "store": self.settings.effective_store,
+            "history": self.history.stats(),
             "vad": self.vad.name,
             "retrieval": self.retrieval_backend,
             "llm": self.llm.status(),

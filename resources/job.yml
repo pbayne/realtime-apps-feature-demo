@@ -1,27 +1,22 @@
-# Jobs. Two kinds of compute:
-#   - rtm_cluster (resources/cluster.yml): the continuous RTM job only.
-#   - batch job clusters below: setup, Delta history, KB index, scoring, Parakeet
-#     registration. Kept separate so batch work never takes RTM task slots.
+# Jobs deployed by the direct backbone (default target `dev`). All run on SERVERLESS compute: no classic
+# cluster, no RTM. The Kafka-only jobs (rtm_enrich, delta_history) and the RTM cluster are declared under
+# targets.kafka in databricks.yml and need a classic workspace.
+#
+# Serverless spec: environment_version "6" (Standard v6, as in the reference audio notebooks). GPU jobs set
+# compute.hardware_accelerator (task level, not in the environment spec).
 resources:
   jobs:
     call_sidekick_setup:
       name: call-sidekick-setup
-      description: Lakebase role, SPEC section 3 tables, NOTIFY trigger, Kafka topics, secrets. Idempotent. Run before the RTM job.
+      description: Lakebase role, SPEC section 3 tables and NOTIFY trigger; Kafka topics only when backbone=kafka. Idempotent. Run before the app.
       max_concurrent_runs: 1
-      job_clusters:
-        - job_cluster_key: batch
-          new_cluster: &batch_cluster
-            spark_version: ${var.dbr_version}
-            node_type_id: ${var.batch_node_type}
-            num_workers: 1
-            data_security_mode: SINGLE_USER
-            single_user_name: ${workspace.current_user.userName}
-            runtime_engine: STANDARD
-            aws_attributes:
-              availability: ON_DEMAND
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "6"
       tasks:
         - task_key: init
-          job_cluster_key: batch
+          environment_key: default
           notebook_task:
             notebook_path: ../src/notebooks/init.py
             base_parameters:
@@ -31,70 +26,47 @@ resources:
               pg_role: ${var.pg_role}
               pg_password: ${var.pg_password}
               secret_scope: ${var.secret_scope}
+              backbone: ${var.backbone}
               kafka_security: ${var.kafka_security}
               kafka_topics: ${var.kafka_topics}
               kafka_partitions: ${var.kafka_partitions}
               kafka_replication_factor: ${var.kafka_replication_factor}
               aws_region: ${var.aws_region}
 
-    call_sidekick_rtm_enrich:
-      name: call-sidekick-rtm-enrich
-      description: Kafka utterances -> RTM -> built-in enrichment -> Lakebase enrichments (native postgresql sink). Continuous; cancel to stop.
+    call_sidekick_init_history:
+      name: call-sidekick-init-history
+      description: Creates the seven Zerobus history tables in UC and grants the ingest service principal MODIFY+SELECT. Idempotent. Run before the first app start (direct backbone).
       max_concurrent_runs: 1
-      # Continuous: no timeout. Stop with `databricks jobs cancel-run`.
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "6"
       tasks:
-        - task_key: rtm_enrich
-          existing_cluster_id: ${resources.clusters.rtm_cluster.id}
+        - task_key: init_history
+          environment_key: default
           notebook_task:
-            notebook_path: ../src/notebooks/rtm_enrich.py
+            notebook_path: ../src/notebooks/init_history.py
             base_parameters:
-              secret_scope: ${var.secret_scope}
-              kafka_security: ${var.kafka_security}
-              utterances_topic: utterances
-              starting_offsets: latest
-              checkpoint_path: /Volumes/${var.catalog}/${resources.schemas.sidekick_schema.name}/${resources.volumes.sidekick_checkpoints.name}/rtm_enrich
-              rules_path: ${workspace.file_path}/src/notebooks/enrich_rules.json
-              lakebase_database: ${var.database_name}
-              sink_batchinterval: 50 milliseconds
-              sink_batchsize: "500"
-
-    call_sidekick_delta_history:
-      name: call-sidekick-delta-history
-      description: Kafka utterances and cards -> UC bronze Delta (micro-batch, not RTM). Continuous at a 5 s trigger.
-      max_concurrent_runs: 1
-      job_clusters:
-        - job_cluster_key: batch
-          new_cluster: *batch_cluster
-      tasks:
-        - task_key: delta_history
-          job_cluster_key: batch
-          notebook_task:
-            notebook_path: ../src/notebooks/delta_history.py
-            base_parameters:
-              secret_scope: ${var.secret_scope}
-              kafka_security: ${var.kafka_security}
-              utterances_topic: utterances
-              cards_topic: cards
-              bronze_utterances_table: ${var.catalog}.${resources.schemas.sidekick_schema.name}.bronze_utterances
-              bronze_cards_table: ${var.catalog}.${resources.schemas.sidekick_schema.name}.bronze_cards
-              checkpoint_root: /Volumes/${var.catalog}/${resources.schemas.sidekick_schema.name}/${resources.volumes.sidekick_checkpoints.name}/delta_history
-              trigger_mode: processing_time
+              uc_catalog: ${var.catalog}
+              uc_schema: ${var.uc_schema}
+              zerobus_principal: ${var.zerobus_principal}
 
     call_sidekick_kb_index:
       name: call-sidekick-kb-index
       description: src/app/playbooks/kb markdown -> Delta chunks -> Vector Search delta-sync index. Re-run when KB content changes.
       max_concurrent_runs: 1
-      job_clusters:
-        - job_cluster_key: batch
-          new_cluster: *batch_cluster
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "6"
       tasks:
         - task_key: build_kb_index
-          job_cluster_key: batch
+          environment_key: default
           notebook_task:
             notebook_path: ../src/notebooks/build_kb_index.py
             base_parameters:
               uc_catalog: ${var.catalog}
-              uc_schema: ${resources.schemas.sidekick_schema.name}
+              uc_schema: ${var.uc_schema}
               kb_dir: ${workspace.file_path}/src/app/playbooks/kb
               vs_endpoint: ${var.vs_endpoint}
               embedding_endpoint: ${var.embed_model}
@@ -102,84 +74,74 @@ resources:
 
     call_sidekick_post_call_scoring:
       name: call-sidekick-post-call-scoring
-      description: Scores quiescent calls with ai_query() into gold_call_scores. Scheduled every 30 minutes.
+      description: Scores quiescent calls with ai_query() into gold_call_scores. Scheduled every 30 minutes. Reads the Zerobus history tables (direct backbone).
       max_concurrent_runs: 1
       schedule:
         quartz_cron_expression: "0 0/30 * * * ?"
         timezone_id: UTC
         pause_status: UNPAUSED
-      job_clusters:
-        - job_cluster_key: batch
-          new_cluster: *batch_cluster
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "6"
       tasks:
         - task_key: post_call_scoring
-          job_cluster_key: batch
+          environment_key: default
           notebook_task:
             notebook_path: ../src/notebooks/post_call_scoring.py
             base_parameters:
               uc_catalog: ${var.catalog}
-              uc_schema: ${resources.schemas.sidekick_schema.name}
+              uc_schema: ${var.uc_schema}
+              utterances_table: ${var.scoring_utterances_table}
+              cards_table: ${var.scoring_cards_table}
               scoring_endpoint: ${var.smart_model}
               idle_minutes: "15"
               max_calls_per_run: "200"
 
     call_sidekick_parakeet_register:
       name: call-sidekick-parakeet-register
-      description: One-off (re-run on model upgrades). Registers Parakeet to UC and creates the GPU audio serving endpoint (not route-optimized).
+      description: One-off (re-run on model upgrades). Registers Parakeet to UC and creates the GPU audio serving endpoint (not route-optimized; scale-to-zero per gpu_scale_to_zero). Serverless GPU.
       max_concurrent_runs: 1
-      job_clusters:
-        - job_cluster_key: gpu
-          new_cluster:
-            spark_version: ${var.gpu_spark_version}
-            node_type_id: ${var.gpu_node_type}
-            num_workers: 0
-            data_security_mode: SINGLE_USER
-            single_user_name: ${workspace.current_user.userName}
-            spark_conf:
-              spark.master: local[*, 4]
-              spark.databricks.cluster.profile: singleNode
-            custom_tags:
-              ResourceClass: SingleNode
+      environments:
+        - environment_key: gpu
+          spec:
+            environment_version: "6"
       tasks:
         - task_key: register_parakeet
-          job_cluster_key: gpu
+          environment_key: gpu
+          compute:
+            hardware_accelerator: ${var.gpu_accelerator}
           notebook_task:
             notebook_path: ../src/notebooks/register_parakeet.py
             base_parameters:
               uc_catalog: ${var.catalog}
-              uc_schema: ${resources.schemas.sidekick_schema.name}
+              uc_schema: ${var.uc_schema}
               model_name: ${var.parakeet_model}
               endpoint_name: ${var.parakeet_endpoint}
               workload_type: GPU_MEDIUM
               workload_size: Small
+              gpu_scale_to_zero: ${var.gpu_scale_to_zero}
 
     call_sidekick_kokoro_register:
       name: call-sidekick-kokoro-register
-      description: One-off (re-run on model upgrades). Registers Kokoro-82M TTS to UC and creates the GPU endpoint for voice mode (scale-to-zero off).
+      description: One-off (re-run on model upgrades). Registers Kokoro-82M TTS to UC and creates the GPU endpoint for voice mode (scale-to-zero per gpu_scale_to_zero, default on for dev cost). Serverless GPU.
       max_concurrent_runs: 1
-      job_clusters:
-        - job_cluster_key: gpu
-          new_cluster:
-            spark_version: ${var.gpu_spark_version}
-            node_type_id: ${var.gpu_node_type}
-            num_workers: 0
-            data_security_mode: SINGLE_USER
-            single_user_name: ${workspace.current_user.userName}
-            spark_conf:
-              spark.master: local[*, 4]
-              spark.databricks.cluster.profile: singleNode
-            custom_tags:
-              ResourceClass: SingleNode
+      environments:
+        - environment_key: gpu
+          spec:
+            environment_version: "6"
       tasks:
         - task_key: register_kokoro
-          job_cluster_key: gpu
+          environment_key: gpu
+          compute:
+            hardware_accelerator: ${var.gpu_accelerator}
           notebook_task:
             notebook_path: ../src/notebooks/register_kokoro.py
             base_parameters:
               uc_catalog: ${var.catalog}
-              uc_schema: ${resources.schemas.sidekick_schema.name}
+              uc_schema: ${var.uc_schema}
               uc_model: ${var.kokoro_model}
               endpoint_name: ${var.kokoro_endpoint}
               workload_type: GPU_MEDIUM
               workload_size: Small
-              scale_to_zero: "false"
+              gpu_scale_to_zero: ${var.gpu_scale_to_zero}

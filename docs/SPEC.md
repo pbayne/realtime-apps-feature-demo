@@ -1,18 +1,31 @@
-# Realtime Call Sidekick — Build Spec (v0.2)
+# Realtime Call Sidekick — Build Spec (v0.4)
 
-Live call → sub-second transcription → Kafka → Spark Structured Streaming
-**Real-Time Mode** enrichment → Lakebase → sidekick agent → suggestion cards
-pushed to the rep/agent UI over WebSocket. Built on the
-`realtime-apps-feature-demo` skeleton (DAB + RTM + native `postgresql` sink).
+Live call → sub-second transcription → enrichment → Lakebase → sidekick agent → suggestion cards
+pushed to the rep/agent UI over WebSocket. Two backbones (docs/ARCHITECTURE.md):
 
-v0.2 records what the code does (2026-10-28). Changes from v0.1 are marked **[v0.2]**.
+- **direct** (default): enrichment in process; live state in Lakebase; history to Delta through
+  Zerobus Ingest (section 3.7). No Kafka.
+- **kafka** (scale mode): utterances to Kafka, Spark Real-Time Mode enrichment into Lakebase, history to Delta
+  through Kafka jobs.
+
+v0.4 records what the code does (2026-10-30). Changes from v0.3 are marked **[v0.4]**. Earlier changes are
+**[v0.2]** and **[v0.3]**.
 
 ## 1. Hard constraints (verified)
-- RTM sources: Kafka / Event Hubs (Kafka API) / Kinesis. **Not Delta.** RTM
+- **Backbone [v0.4].** `BACKBONE=direct` (default) or `kafka`. Direct: no bus (`bus/null.py`), enrichment in
+  process (`enrich/direct.py`), history through `HistorySink` (`history/zerobus.py` in databricks mode,
+  `history/memory.py` in local mode). Kafka: `bus/kafka.py` (databricks) or `bus/memory.py` (local stand-in),
+  RTM job for enrichment, history none (history flows through `delta_history.py`). Settings reject
+  `BACKBONE=direct` with `BUS_BACKEND=kafka`, and `HISTORY_BACKEND=zerobus` with `BACKBONE=kafka`.
+- RTM sources: Kafka / Event Hubs (Kafka API) / Kinesis. **Not Delta.** RTM [kafka backbone only] 
   supports `update` output mode only; **no `foreachBatch`** (use `foreach` or the
   native `format("postgresql")` sink, DBR 18.3+, classic cluster, Photon off,
   `spark.databricks.streaming.realTimeMode.enabled=true`).
-- No Zerobus in this build.
+- **Zerobus Ingest [v0.4]** is the history path in direct mode (section 3.7). It needs pre-created UC managed
+  Delta tables, a service principal with MODIFY and SELECT on them, and the SDK package
+  `databricks-zerobus-ingest-sdk`. Sources: https://docs.databricks.com/aws/en/ingestion/zerobus-ingest
+- **Compute [v0.4].** The direct backbone deploys serverless jobs only (environment version 6). GPU jobs use
+  `compute.hardware_accelerator: GPU_1xA10`. RTM and the Delta history job need classic compute (kafka only).
 - STT: Parakeet-tdt-0.6b-v3 on a GPU Model Serving endpoint (route-optimized,
   no scale-to-zero), driven Hera-style: rolling 12 s window re-decoded every
   `frame_s`=0.4 s, LocalAgreement-2 commit, `hold_words`=1, Silero VAD gate,
@@ -29,13 +42,18 @@ v0.2 records what the code does (2026-10-28). Changes from v0.1 are marked **[v0
 ```
 src/app/                      FastAPI Databricks App (bundled as the DAB app source_code_path)
   main.py                     app factory, lifespan, REST + WS routes
-  config.py                   pydantic-settings; MODE=local|databricks; every SPEC default
-  services.py                 wires bus, store, LLM, retrieval, playbooks, sessions
+  config.py                   pydantic-settings; MODE, BACKBONE, HISTORY_BACKEND; every SPEC default
+  services.py                 wires bus, store, history sink, enricher, LLM, retrieval, playbooks, sessions
   session.py                  CallSession: per-call pipeline and turn worker (section 4)
   hub.py                      per-call WebSocket fan-out; stamps emitted_at_ms
   bus/        base.py         EventBus protocol: publish(topic, key, value), subscribe
-              memory.py       asyncio in-memory bus (local)
-              kafka.py        aiokafka producer/consumer (databricks; SASL/SSL via env)
+              null.py         no bus: direct backbone [v0.4]
+              memory.py       asyncio in-memory bus (local; kafka backbone stand-in)
+              kafka.py        aiokafka producer (kafka backbone; SASL/SSL via env)
+  history/    base.py         HistorySink protocol: emit(table, row) sync, never blocks [v0.4]
+              zerobus.py      Zerobus Ingest sink: bounded queue, background flusher, one stream per table [v0.4]
+              memory.py       in-memory sink (local, tests) and NullHistorySink (kafka) [v0.4]
+              schema.py       the section 3.7 table contract and row builders [v0.4]
   store/      base.py         Store protocol (calls, utterances, enrichments, cards, feedback)
               memory.py       in-memory + asyncio change notifications
               lakebase.py     asyncpg pool; LISTEN/NOTIFY on `enrichment_ready`; DDL matches section 3
@@ -47,7 +65,8 @@ src/app/                      FastAPI Databricks App (bundled as the DAB app sou
               agreement.py    LocalAgreement-2
   enrich/     rules.py        pure transform (Python mirror of rtm_lib); extend_rules for playbooks
               enrich_rules.json  shared rules, byte-identical to src/notebooks/enrich_rules.json
-              local_enricher.py  LOCAL stand-in for the RTM job (writes the enrichments row)
+              direct.py       DirectEnricher (direct backbone, in process) [v0.4]; BusEnricher = local RTM
+                              stand-in for kafka mode (was local_enricher.py)
   sidekick/    perception.py   ONE fast-model call per customer final: intent, sentiment, objection, question
               retrieval.py    KB retrieval: in-memory embed/keyword (local), Vector Search (databricks)
               decide.py       candidate cards → rank → guardrails → trace (pure)
@@ -59,14 +78,16 @@ src/app/                      FastAPI Databricks App (bundled as the DAB app sou
   static/                     built frontend (committed; CI fails if stale)
 frontend/                     React 19 + Vite + Tailwind; `bun run build` writes into src/app/static
 src/notebooks/                Databricks side
-  init.py                     Lakebase tables (section 3) + NOTIFY trigger + secrets + Kafka topics
+  init.py                     Lakebase tables (section 3) + NOTIFY trigger + secrets; Kafka topics only when backbone=kafka
+  init_history.py             Zerobus history tables (section 3.7) + grants to the ingest principal [v0.4]
   rtm_lib.py                  pure Spark expressions for enrichment (no UDFs)
-  rtm_enrich.py               Kafka `utterances` → RTM → enrichment → postgresql sink (`enrichments`)
-  delta_history.py            Kafka `utterances` + `cards` → micro-batch → Delta bronze/silver
+  rtm_enrich.py               [kafka] Kafka `utterances` → RTM → enrichment → postgresql sink (`enrichments`)
+  delta_history.py            [kafka] Kafka `utterances` + `cards` → micro-batch → Delta bronze
   register_parakeet.py        MLflow pyfunc for nvidia/parakeet-tdt-0.6b-v3; GPU endpoint (section 3.3)
   build_kb_index.py           src/app/playbooks/kb → Delta → Vector Search index
   post_call_scoring.py        Lakeflow job: ai_query() call scoring, methodology fill, summary
-resources/                    DAB yml: cluster (RTM), jobs, app, lakebase, serving endpoint
+resources/                    DAB yml: serverless jobs, app, lakebase; targets.kafka in databricks.yml holds the RTM cluster and Kafka jobs [v0.4]
+scripts/deploy.sh             BACKBONE, Zerobus and Kafka secrets, ordered deploy; warmup_voice.py for GPU endpoints [v0.4]
 tests/app/                    pytest, local mode, no network (LLM replaced by fakes)
 tests/notebooks/              pytest: rules and Spark expressions (skip without pyspark), bundle YAML
 tests/golden/enrich_cases.json  golden enrichment cases shared by both sides
@@ -74,7 +95,7 @@ tests/golden/enrich_cases.json  golden enrichment cases shared by both sides
 
 ## 3. Data contracts (shared — do not change without updating this file)
 
-### 3.1 Kafka topics (JSON values, key = call_id)
+### 3.1 Kafka topics (JSON values, key = call_id) [kafka backbone only, v0.4]
 `utterances`:
 ```json
 {"call_id":"c-123","seq":17,"speaker":"customer|agent","text":"...",
@@ -94,15 +115,23 @@ JSON-valued columns are **TEXT holding JSON** (the sink binds Spark strings).
 - `enrichments(call_id, seq, speaker, text, intent, sentiment DOUBLE (-1..1), risk_flags TEXT (JSON array),
    objection TEXT NULL, entities TEXT (JSON object of arrays), methodology_hits TEXT (JSON array),
    emitted_at_ms BIGINT, enriched_at_ms BIGINT, latency_ms BIGINT (= enriched − emitted), PK(call_id,seq))`
-  — written by the RTM job (upsert on PK). Trigger `AFTER INSERT OR UPDATE` → `pg_notify('enrichment_ready', call_id||':'||seq)`.
+  — written by the RTM job (kafka backbone) or by the app in process (direct backbone), upsert on PK. The trigger
+  `AFTER INSERT OR UPDATE` → `pg_notify('enrichment_ready', call_id||':'||seq)` is used by the kafka backbone only [v0.4].
   `latency_ms` and `emitted_at_ms` are **[v0.2]** additions.
 - `cards(card_id PK, call_id, seq, kind, title, body, confidence, source_doc, source_clause,
    trigger, status (shown|accepted|edited|rejected|expired), created_at_ms, trace TEXT (JSON))`
 - `feedback(card_id, call_id, action, edited_text, at_ms)`
 
-RTM enrichment is **deterministic + cheap** (lexicon/regex for objections,
+Enrichment is **deterministic + cheap** [v0.4: in process in direct mode; RTM in kafka mode] (lexicon/regex for objections,
 methodology keyword hits, entity regex, sentiment lexicon, question intent) so it stays
 sub-second inside Spark. LLM perception runs app-side (section 4) and is merged with the RTM row.
+
+### 3.1a Backbone and history, summary [v0.4]
+| | direct (default) | kafka |
+|---|---|---|
+| Enrichment | `enrich/direct.py`, in process, ~1 ms | RTM job, wait ≤ `rtm_wait_ms`, local fallback |
+| Live state | Lakebase (`utterances`, `enrichments`, `cards`, `feedback`, `calls`) | same |
+| History | Zerobus Ingest, section 3.7 | Kafka `utterances` and `cards` → `delta_history.py` |
 
 ### 3.3 Parakeet STT endpoint **[v0.3: adopt the field-eng audio-serving server]**
 Deployed by `src/notebooks/register_parakeet.py`, ported from
@@ -135,6 +164,9 @@ Response: SSE `chat.completion.chunk`. First `delta.content` is a header
 24 kHz PCM; ends with `finish_reason:"stop"` then `[DONE]`.
 - One request per sentence. Keep sentences short (the worker holds the GPU per sentence).
 - Always close the HTTP stream on cancel (an unread stream can stall a Kokoro worker).
+- Scale-to-zero is configured per deployment: `gpu_scale_to_zero` (default true for dev cost). A cold endpoint
+  makes the first turn after idle wait minutes. Warm both endpoints before a demo (`scripts/warmup_voice.py`)
+  or deploy with scale-to-zero off. [v0.4]
 - Voices: 54 presets, `af_heart` default; the practice-customer persona picks its own voice per playbook.
 
 ### 3.4 Card
@@ -151,7 +183,7 @@ Response: SSE `chat.completion.chunk`. First `delta.content` is a header
 
 | Method and path | Response |
 |---|---|
-| `GET /healthz` | `{status, mode, bus, store, vad, retrieval, llm, active_calls, playbooks, enrich_rules}` |
+| `GET /healthz` | `{status, mode, backbone, bus, store, history, vad, retrieval, llm, active_calls, playbooks, enrich_rules, voice}`. `history` = sink stats (`backend, enabled, queue_depth, queued, written, dropped, failed, skipped`) [v0.4] |
 | `GET /api/playbooks` | `{"playbooks": [{name, title, persona, card_weights, methodology:[{key,label}], objections:[key], compliance:[key], kb_docs:[doc_id], replay_scripts:[name]}]}`. The UI maps `title` → label. |
 | `GET /api/scripts?playbook=<name>` | JSON array of replay script names for that playbook. 404 for an unknown playbook. Without `playbook`: `{<playbook>: [names]}`. |
 | `POST /api/calls` | body `{playbook, mode: replay\|mic, script?, speed?, customer_id?}` → 201 `{call_id, playbook, mode, script, started_at_ms}` |
@@ -163,7 +195,7 @@ Every event carries `emitted_at_ms`. On connect the server sends a `coverage` ev
 ```
 {"type":"transcript.partial","speaker":..,"text":..,"seq":..,"first_word_ms":..}
 {"type":"transcript.final", "speaker":..,"text":..,"seq":..,"latency_ms":..}
-{"type":"enrichment","seq":..,"speaker":..,"source":"rtm|local_fallback|perception","intent":..,"sentiment":..,
+{"type":"enrichment","seq":..,"speaker":..,"source":"direct|rtm|local_fallback|perception","intent":..,"sentiment":..,
   "risk_flags":[..],"objection":..}
 {"type":"card.start","card":{...without body}}
 {"type":"card.delta","card_id":..,"delta":"tokens"}
@@ -264,9 +296,13 @@ Ship `contact_center` (claims/billing service: NBA, compliance, empathy) and `ad
 goals, time horizon, risk tolerance, assets, budget, decision makers; fees, think-about-it, market-timing and existing-advisor
 objections; coverage checklist). Files live in `src/app/playbooks/`; replay scripts in `src/app/data/replay/` (section 2).
 
-## 6. Models (configurable via env)
+## 6. Models and runtime settings (configurable via env)
 FAST_MODEL=databricks-claude-haiku-5-5 (perception), SMART_MODEL=databricks-claude-sonnet-5-5 (compose),
-EMBED_MODEL=databricks-gte-large-en (retrieval), STT_ENDPOINT=parakeet-live (+ optional STT_ENDPOINT_URL).
+EMBED_MODEL=databricks-gte-large-en (retrieval), STT_ENDPOINT=sidekick-parakeet (+ optional STT_ENDPOINT_URL).
+[v0.4] `BACKBONE=direct|kafka` (default direct). `HISTORY_BACKEND=auto|memory|zerobus|none` (auto: direct+databricks → zerobus,
+direct+local → memory, kafka → none). `HISTORY_CATALOG`, `HISTORY_SCHEMA`, `ZEROBUS_ENDPOINT`, `ZEROBUS_CLIENT_ID`,
+`ZEROBUS_CLIENT_SECRET`, `DATABRICKS_HOST` (Zerobus unity_catalog_url), `HISTORY_QUEUE_MAX` (10000),
+`HISTORY_BATCH_MAX` (500), `HISTORY_FLUSH_INTERVAL_S` (0.5).
 Local dev uses the Databricks CLI profile `DATABRICKS_CONFIG_PROFILE=e2-demo`.
 Everything degrades gracefully: if the LLM is unavailable, rules-only cards still flow (template bodies).
 A circuit breaker opens after 3 consecutive failures for 30 s.
@@ -274,7 +310,7 @@ A circuit breaker opens after 3 consecutive failures for 30 s.
 ## 7. Latency instrumentation and targets
 Every event carries `emitted_at_ms`. The app pushes `metrics` per final. Targets:
 - STT first word ≤ 0.8 s; STT commit ≈ 1.5 s.
-- final → enrichment (RTM) ≤ 300 ms.
+- final → enrichment: direct ≈ 1 ms in process [v0.4]; kafka (RTM) ≤ 300 ms.
 - **customer-final → card.start ≤ 1.5 s (aim ≤ 1.0 s).** Measured, see the table below.
 - **customer-final → card.done ≤ 3 s.**
 
@@ -295,7 +331,7 @@ contact_center is over budget. That is the sonnet compose stream and is an open 
 The DAB app's `source_code_path` is `src/app`, so everything the app reads at runtime lives under `src/app`:
 `playbooks/`, `data/replay/`, and `enrich/enrich_rules.json`. The KB index job reads `${workspace.file_path}/src/app/playbooks/kb`.
 
-## 9. Voice mode **[v0.3]**
+## 9. Voice mode **[v0.3]** (v0.4: VOICE_MODEL default changed, see 9.4)
 Two-way voice inside the same Databricks App. **Only Databricks-hosted models** (Parakeet STT, Claude on
 Databricks serving, Kokoro TTS). Two roles, switchable per session:
 - `assistant`: the rep talks to Sidekick before / during / after a call ("what should I ask next?",
@@ -342,10 +378,67 @@ items. The app sends text before the delimiter to TTS sentence-by-sentence (spli
 chunk may end at `,;:—` once ≥ 25 chars; strip markdown/emoji; `VOICE_RULES` appended to the prompt, from
 the reference app) and parses the JSON after it (tolerant; parse failure = no items, never breaks audio).
 Each sentence's TTS stream starts as soon as the sentence is complete; playback order is preserved.
-`VOICE_MODEL` env (default `databricks-claude-haiku-5-5` with thinking disabled); measure first-token.
+`VOICE_MODEL` env (default `databricks-claude-haiku-4-5` [v0.4], measured fastest first token on e2-demo; thinking
+disabled where the model accepts it). Re-measure in region.
 
 ### 9.5 Targets
 first audio (user stops speaking → first audible reply) ≤ 1.2 s p50 in-region; STT ≤ 250 ms; TTS first
 audio ≤ 200 ms; barge-in stops playback ≤ 150 ms client-side and cancels server work ≤ 300 ms.
 Browser: AudioWorklet capture, echoCancellation + noiseSuppression, energy VAD (start 200 ms, end 800 ms,
 preroll 300 ms, barge-in 300 ms at 2× threshold) — ported from the reference `index.html`.
+
+## 3.7 History contract: Zerobus Ingest (direct backbone) **[v0.4]**
+
+Module `src/app/history/`. The sink is the only writer of history in direct mode. Kafka mode writes history
+through `delta_history.py` instead (utterances and cards only).
+
+### Tables
+Managed Delta tables in `${HISTORY_CATALOG}.${HISTORY_SCHEMA}`, created by `src/notebooks/init_history.py`.
+Zerobus does not create tables. Columns follow SPEC 3.2 names. Epoch times are BIGINT milliseconds. JSON-valued
+columns are STRING. Types are limited to STRING, INT, BIGINT, DOUBLE, BOOLEAN.
+
+| Table | Written when | Columns |
+|---|---|---|
+| `calls` | call start, call end (latest `ended_at` wins) | call_id, playbook, started_at, ended_at, customer_id, status, mode, script |
+| `utterances` | each final (both speakers) | call_id, seq, speaker, text, t_start_ms, t_end_ms, emitted_at_ms, playbook |
+| `enrichments` | each final, after in-process enrichment | call_id, seq, speaker, text, intent, sentiment, risk_flags (JSON), objection, entities (JSON), methodology_hits (JSON), emitted_at_ms, enriched_at_ms, latency_ms, enrichment_source |
+| `cards` | each card when persisted | card_id, call_id, seq, kind, title, body, confidence, source_doc, source_clause, trigger, status, created_at_ms, trace (JSON) |
+| `feedback` | accept, reject, or edit | card_id, call_id, action, edited_text, at_ms |
+| `voice_turns` | each voice turn | session_id, turn, role, user_text, agent_text, interrupted, timing (JSON), created_at_ms |
+| `voice_items` | each structured item | item_id, session_id, turn, kind, text, owner, due, source_doc, created_at_ms |
+
+`src/app/history/schema.py` (`TABLES`) is the source of truth. `tests/app/test_history.py` checks that the
+notebook's DDL has the same columns and types.
+
+### Ingest
+- Zerobus Ingest, Python SDK `databricks-zerobus-ingest-sdk` (`zerobus.sdk.sync`). Endpoint
+  `https://<workspace-id>.zerobus.<region>.cloud.databricks.com`, `unity_catalog_url` = workspace URL.
+  Auth: service principal client id and secret (OAuth). JSON record type, one JSON string per record.
+- Grants (init_history.py): `USE CATALOG`, `USE SCHEMA`, and `MODIFY, SELECT` on each table, for the principal.
+- One stream per table, created lazily, closed and recreated on error.
+- Non-blocking hot path: `emit()` is synchronous, appends to a bounded deque (`HISTORY_QUEUE_MAX`, drop-oldest,
+  counted in `dropped`, warning logged). A background task flushes batches of up to `HISTORY_BATCH_MAX` records
+  every `HISTORY_FLUSH_INTERVAL_S`, in worker threads.
+- Acks: the sink waits on the last offset of each batch, then flushes. Acks mean durable, not yet queryable.
+- Failures: a failed batch increments `failed`, closes the stream, and is not retried (a partial ack could duplicate
+  records). The SDK's own transient-error recovery still applies.
+- Fail-soft: missing endpoint, client id or secret, or host disables the sink (one warning; `skipped` counts).
+  The call keeps running.
+- Shutdown drains the queue up to `HISTORY_FLUSH_TIMEOUT_S`.
+
+### Delivery guarantee
+At most once per record from the app's side. History is for analytics and post-call scoring, not a system of record.
+Live state is in Lakebase.
+
+Sources: https://docs.databricks.com/aws/en/ingestion/zerobus-ingest ,
+https://docs.databricks.com/aws/en/ingestion/zerobus-message-blocking ,
+https://github.com/databricks/zerobus-sdk/blob/main/python/README.md
+
+## 10. Changes from v0.3 **[v0.4]** (summary)
+- Two backbones, selected by `BACKBONE`. Direct is the default, with no Kafka and no RTM.
+- In-process enrichment in direct mode. The `enrichments` row is still written to Lakebase, with `source` = `direct`.
+- History is the `HistorySink`: Zerobus in direct mode, none in kafka mode.
+- Serverless compute for direct-mode jobs. Classic compute only for kafka-mode RTM and the history job.
+- GPU endpoints: serverless GPU (`GPU_1xA10`). Scale-to-zero configurable (`gpu_scale_to_zero`, default true).
+- `VOICE_MODEL` default `databricks-claude-haiku-4-5`.
+- Packaging: `resources/cluster.yml` is removed. The RTM cluster and Kafka jobs are in `targets.kafka`.

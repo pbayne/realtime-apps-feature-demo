@@ -4,7 +4,7 @@ Tables follow SPEC section 3. The RTM job owns `enrichments` writes and the NOTI
 trigger (created by src/notebooks/init.py). This store still creates the tables
 IF NOT EXISTS so a fresh local Postgres works, and it does not create triggers.
 
-Enrichment waits: a NOTIFY (payload `call_id:seq`) resolves waiters immediately.
+Enrichment waits (kafka backbone only): a NOTIFY (payload `call_id:seq`) resolves waiters immediately.
 Because the trigger may be missing or a notification may be lost, waiters also poll
 the table every 100 ms until their deadline. Either path is fail-soft: a None
 return makes the caller fall back to the local rules transform.
@@ -93,8 +93,10 @@ class LakebaseStore:
         self._pool = await asyncpg.create_pool(min_size=self._s.lakebase_pool_min, max_size=self._s.lakebase_pool_max, **creds)
         async with self._pool.acquire() as conn:
             await conn.execute(DDL)
-        self._listen_conn = await asyncpg.connect(**creds)
-        await self._listen_conn.add_listener("enrichment_ready", self._on_notify)
+        # LISTEN is only needed when RTM writes enrichments (BACKBONE=kafka). Direct mode enriches in process.
+        if self._s.backbone == "kafka":
+            self._listen_conn = await asyncpg.connect(**creds)
+            await self._listen_conn.add_listener("enrichment_ready", self._on_notify)
         log.info("Lakebase store ready at %s/%s", creds["host"], creds["database"])
 
     async def stop(self) -> None:

@@ -6,5 +6,7 @@ pydantic-settings==2.16.1
 httpx==0.28.1
 databricks-sdk==0.157.0
 aiokafka==0.14.0
+# Zerobus Ingest history sink (SPEC 3.7; pip package databricks-zerobus-ingest-sdk, verified at 1.10.0).
+databricks-zerobus-ingest-sdk==1.10.0
 pyyaml==6.0.3
 # Optional, not pinned (pulls torch, about 200 MB): silero-vad. Without it the energy VAD is used.

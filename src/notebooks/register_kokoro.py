@@ -7,7 +7,9 @@
 # MAGIC starts `WORKERS` Kokoro servers (`kokoro_serving/kokoro_server.py`) and the adapter (`kokoro_serving/adapter.py`) on
 # MAGIC port 8080. The adapter turns a chat request into speech and streams base64 16-bit PCM at 24 kHz.
 # MAGIC
-# MAGIC Endpoint: `GPU_MEDIUM` (A10G on AWS), workload `Small`, scale-to-zero **off** (it bills while it runs).
+# MAGIC Endpoint: `GPU_MEDIUM` (A10G on AWS), workload `Small`. Scale-to-zero comes from the `gpu_scale_to_zero`
+# MAGIC widget (default `true` for dev cost). Warm the endpoint before a demo (`scripts/warmup_voice.py`) or set
+# MAGIC `gpu_scale_to_zero=false`: with it on, the first voice turn after idle waits minutes for a cold GPU.
 # MAGIC
 # MAGIC ## Contract (what the app sends and reads)
 # MAGIC Request: `POST {host}/serving-endpoints/{endpoint}/invocations` with
@@ -33,7 +35,7 @@ dbutils.widgets.text("uc_model", "kokoro_82m")
 dbutils.widgets.text("endpoint_name", "sidekick-kokoro")
 dbutils.widgets.dropdown("workload_type", "GPU_MEDIUM", ["GPU_SMALL", "GPU_MEDIUM", "GPU_LARGE"])
 dbutils.widgets.text("workload_size", "Small")
-dbutils.widgets.dropdown("scale_to_zero", "false", ["false"])
+dbutils.widgets.dropdown("gpu_scale_to_zero", "true", ["true", "false"])   # false = always on (demos, latency)
 dbutils.widgets.dropdown("stage", "deploy", ["deploy", "verify"])
 
 catalog = dbutils.widgets.get("uc_catalog").strip()
@@ -44,6 +46,7 @@ workload_type = dbutils.widgets.get("workload_type").strip()
 workload_size = dbutils.widgets.get("workload_size").strip()
 STAGE = dbutils.widgets.get("stage")
 
+SCALE_TO_ZERO = dbutils.widgets.get("gpu_scale_to_zero").strip().lower() == "true"
 UC_MODEL_NAME = f"{catalog}.{schema}.{uc_model}"
 MODEL_REPO_ID = "hexgrad/Kokoro-82M"
 ARTIFACTS_PATH = "model_dir"        # weights and voices; the entrypoint loads it by this name
@@ -208,7 +211,7 @@ print(UC_MODEL_NAME, "version", version)
 
 # COMMAND ----------
 
-# MAGIC %md ## 6. Create or update the endpoint (GPU, no scale-to-zero)
+# MAGIC %md ## 6. Create or update the endpoint (GPU, scale-to-zero per the widget)
 
 # COMMAND ----------
 
@@ -221,7 +224,7 @@ served_entity = ServedEntityInput(
     entity_version=str(version),
     workload_type=ServingModelWorkloadType(workload_type),
     workload_size=workload_size,
-    scale_to_zero_enabled=False,
+    scale_to_zero_enabled=SCALE_TO_ZERO,
 )
 if endpoint_name in {e.name for e in w.serving_endpoints.list()}:
     w.serving_endpoints.update_config_and_wait(name=endpoint_name, served_entities=[served_entity],
