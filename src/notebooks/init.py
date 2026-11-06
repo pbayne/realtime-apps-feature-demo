@@ -246,6 +246,18 @@ TABLE_DDL = [
         theme         TEXT NOT NULL,
         updated_at_ms BIGINT NOT NULL
     )""",
+    # Freeform notes (Granola-style): one per call or voice session, owned by the caller. The scope id
+    # (call_id or session_id) is the note key; the model fuses the text into summaries and assistant context.
+    """CREATE TABLE IF NOT EXISTS notes (
+        scope_kind    TEXT NOT NULL,
+        scope_id      TEXT NOT NULL,
+        owner         TEXT NOT NULL,
+        call_id       TEXT,
+        session_id    TEXT,
+        text          TEXT NOT NULL DEFAULT '',
+        updated_at_ms BIGINT NOT NULL,
+        PRIMARY KEY (scope_kind, scope_id)
+    )""",
     # Actions (SPEC 12): proposed and executed actions. params, result are JSON held as TEXT.
     """CREATE TABLE IF NOT EXISTS actions (
         action_id     TEXT PRIMARY KEY,
@@ -323,7 +335,7 @@ with dbapi.connect(
         cur.execute(stmt)
     # Table-level grants for both the sink writer and the app (same role in this build).
     for t in ("calls", "utterances", "enrichments", "cards", "feedback", "voice_turns", "voice_items", "user_prefs",
-              "actions", "contacts", "enrollments"):
+              "notes", "actions", "contacts", "enrollments"):
         cur.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON {t} TO "{role}"')
     cur.execute(f'GRANT EXECUTE ON FUNCTION notify_enrichment_ready() TO "{role}"')
     # Demo directory for the actions (SPEC 12): idempotent, owner NULL, so every user can read and update a copy.

@@ -55,6 +55,10 @@ CREATE TABLE IF NOT EXISTS voice_items (
   owner TEXT, due TEXT, source_doc TEXT, created_at_ms BIGINT);
 CREATE TABLE IF NOT EXISTS user_prefs (
   owner TEXT PRIMARY KEY, theme TEXT NOT NULL, updated_at_ms BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS notes (
+  scope_kind TEXT NOT NULL, scope_id TEXT NOT NULL, owner TEXT NOT NULL, call_id TEXT, session_id TEXT,
+  text TEXT NOT NULL DEFAULT '', updated_at_ms BIGINT NOT NULL,
+  PRIMARY KEY (scope_kind, scope_id));
 CREATE TABLE IF NOT EXISTS actions (
   action_id TEXT PRIMARY KEY, session_id TEXT, call_id TEXT, playbook TEXT, owner TEXT NOT NULL,
   kind TEXT NOT NULL, summary TEXT, params TEXT, status TEXT NOT NULL, proposed_by TEXT,
@@ -301,6 +305,32 @@ class LakebaseStore:
             "ON CONFLICT (owner) DO UPDATE SET theme=EXCLUDED.theme, updated_at_ms=EXCLUDED.updated_at_ms",
             owner, theme, updated_at_ms,
         )
+
+    # ------------------------------------------------------------ notes
+    @staticmethod
+    def _note_scope(call_id: Optional[str], session_id: Optional[str]) -> tuple[str, str]:
+        if bool(call_id) == bool(session_id):
+            raise ValueError("give exactly one of call_id or session_id")
+        return ("call", call_id) if call_id else ("session", session_id)  # type: ignore[return-value]
+
+    async def get_note(self, *, call_id: Optional[str] = None,
+                       session_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+        kind, scope_id = self._note_scope(call_id, session_id)
+        rec = await self._pool.fetchrow(
+            "SELECT owner, call_id, session_id, text, updated_at_ms FROM notes WHERE scope_kind=$1 AND scope_id=$2",
+            kind, scope_id)
+        return dict(rec) if rec else None
+
+    async def put_note(self, *, owner: str, text: str, updated_at_ms: int,
+                       call_id: Optional[str] = None, session_id: Optional[str] = None) -> dict[str, Any]:
+        kind, scope_id = self._note_scope(call_id, session_id)
+        await self._pool.execute(
+            "INSERT INTO notes (scope_kind, scope_id, owner, call_id, session_id, text, updated_at_ms) "
+            "VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (scope_kind, scope_id) DO UPDATE SET "
+            "text=EXCLUDED.text, updated_at_ms=EXCLUDED.updated_at_ms",
+            kind, scope_id, owner, call_id, session_id, text, updated_at_ms)
+        return {"owner": owner, "call_id": call_id, "session_id": session_id, "text": text,
+                "updated_at_ms": updated_at_ms}
 
     # ------------------------------------------------------------ voice mode
     async def put_voice_turn(self, session_id: str, row: dict[str, Any]) -> None:

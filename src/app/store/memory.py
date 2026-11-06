@@ -21,6 +21,7 @@ class MemoryStore:
         self.voice_items: dict[str, list[dict[str, Any]]] = {}
         self._waiters: dict[tuple[str, int], asyncio.Event] = {}
         self.prefs: dict[str, dict[str, Any]] = {}
+        self.notes: dict[tuple[str, str], dict[str, Any]] = {}  # (scope_kind, scope_id) -> note row
         self.actions: dict[str, dict[str, Any]] = {}
         self.contacts: dict[str, dict[str, Any]] = {}
         self.enrollments: dict[str, dict[str, Any]] = {}
@@ -31,6 +32,25 @@ class MemoryStore:
 
     async def put_prefs(self, owner: str, theme: str, updated_at_ms: int) -> None:
         self.prefs[owner] = {"owner": owner, "theme": theme, "updated_at_ms": updated_at_ms}
+
+    @staticmethod
+    def _note_scope(call_id: Optional[str], session_id: Optional[str]) -> tuple[str, str]:
+        if bool(call_id) == bool(session_id):
+            raise ValueError("give exactly one of call_id or session_id")
+        return ("call", call_id) if call_id else ("session", session_id)  # type: ignore[return-value]
+
+    async def get_note(self, *, call_id: Optional[str] = None,
+                       session_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+        row = self.notes.get(self._note_scope(call_id, session_id))
+        return dict(row) if row else None
+
+    async def put_note(self, *, owner: str, text: str, updated_at_ms: int,
+                       call_id: Optional[str] = None, session_id: Optional[str] = None) -> dict[str, Any]:
+        kind, scope_id = self._note_scope(call_id, session_id)
+        row = {"owner": owner, "call_id": call_id, "session_id": session_id, "text": text,
+               "updated_at_ms": updated_at_ms}
+        self.notes[(kind, scope_id)] = row
+        return dict(row)
 
     async def start(self) -> None:
         return None

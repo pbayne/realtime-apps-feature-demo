@@ -367,6 +367,60 @@ async def put_prefs(body: PutPrefs, request: Request):
         raise ServiceError(503, "preferences could not be saved right now") from exc
 
 
+# ----------------------------------------------------------------- notes (Granola-style, per call or session)
+
+MAX_NOTE_BYTES = 100_000
+
+
+class PutNote(BaseModel):
+    text: str = Field(default="", max_length=100_000)
+
+
+def _note_scope_from_query(session_id: Optional[str], call_id: Optional[str]) -> None:
+    if bool(session_id) == bool(call_id):
+        raise ServiceError(400, "give exactly one of session_id or call_id")
+
+
+def _owned_note_scope(svc: Services, caller: Optional[str], session_id: Optional[str],
+                      call_id: Optional[str]) -> dict[str, Optional[str]]:
+    """Check the caller owns the live call or voice session the note belongs to, and return the store kwargs."""
+    _note_scope_from_query(session_id, call_id)
+    if session_id:
+        _owned_voice(svc, session_id, caller)
+        return {"session_id": session_id}
+    _owned_call(svc, call_id, caller)
+    return {"call_id": call_id}
+
+
+@app.get("/api/notes")
+async def get_note(request: Request, session_id: Optional[str] = Query(default=None),
+                   call_id: Optional[str] = Query(default=None)):
+    """The caller's freeform note for one live call or voice session. Empty text when none exists yet."""
+    svc = _svc(request)
+    scope = _owned_note_scope(svc, _caller(request), session_id, call_id)
+    try:
+        row = await svc.store.get_note(**scope)
+    except Exception as exc:  # noqa: BLE001 - store outage: the pad still opens, empty
+        log.warning("note read unavailable: %r", exc)
+        return {"text": "", "updated_at_ms": None, "degraded": True, **scope}
+    return row or {"text": "", "updated_at_ms": None, **scope}
+
+
+@app.put("/api/notes")
+async def put_note(body: PutNote, request: Request, session_id: Optional[str] = Query(default=None),
+                   call_id: Optional[str] = Query(default=None)):
+    svc = _svc(request)
+    caller = _caller(request)
+    scope = _owned_note_scope(svc, caller, session_id, call_id)
+    if len(body.text.encode("utf-8")) > MAX_NOTE_BYTES:
+        raise ServiceError(400, "note is too long")
+    try:
+        return await svc.store.put_note(owner=caller, text=body.text, updated_at_ms=now_ms(), **scope)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("note write failed: %r", exc)
+        raise ServiceError(503, "the note could not be saved right now") from exc
+
+
 def _insights_for(svc: Services) -> admin_insights.Insights:
     """Built on first use: the SQL warehouse comes from DATABRICKS_WAREHOUSE_ID; without it the page is empty."""
     existing = getattr(svc, "insights", None)

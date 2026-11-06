@@ -42,6 +42,14 @@ class Store(Protocol):
 
     async def put_prefs(self, owner: str, theme: str, updated_at_ms: int) -> None: ...
 
+    # Freeform notes (one per call or voice session, owned by the caller). The scope id (call_id or
+    # session_id) is the note id; exactly one of the two is set. Live working state, like user_prefs.
+    async def get_note(self, *, call_id: Optional[str] = None,
+                       session_id: Optional[str] = None) -> Optional[dict[str, Any]]: ...
+
+    async def put_note(self, *, owner: str, text: str, updated_at_ms: int,
+                       call_id: Optional[str] = None, session_id: Optional[str] = None) -> dict[str, Any]: ...
+
     # Actions, contacts and enrollments (SPEC 12). Rows are plain dicts with the table's columns.
     async def put_action(self, row: dict[str, Any]) -> None: ...
 

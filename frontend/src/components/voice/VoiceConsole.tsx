@@ -12,6 +12,7 @@ import { AdminGear } from "../admin/AdminGear";
 import { ContextPanel } from "../ContextPanel";
 import { SidekickFeed } from "../SidekickFeed";
 import { ActionsPanel } from "../actions/ActionsPanel";
+import { NotePane } from "../NotePane";
 import { Composer, Conversation } from "./Conversation";
 import { LatencyHud } from "./LatencyHud";
 import { LiveCaption } from "./LiveCaption";
@@ -316,7 +317,7 @@ export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void 
           <div className="flex min-h-[360px] flex-col gap-3 md:min-h-0">
             {live}
             {lane}
-            <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1.15fr)_minmax(0,0.85fr)] gap-3">
+            <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1.15fr)_minmax(0,0.75fr)_minmax(0,0.85fr)] gap-3">
               <ActionsPanel
                 actions={state.actions}
                 scope={{ session_id: state.sessionId ?? undefined }}
@@ -325,6 +326,7 @@ export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void 
                 onUpdate={api.actionUpdate}
               />
               <Outcomes items={state.items} />
+              <NotePane scope={state.sessionId ? { session_id: state.sessionId } : null} mock={MOCK} />
             </div>
           </div>
         )}

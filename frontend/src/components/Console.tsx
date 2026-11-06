@@ -8,6 +8,7 @@ import { AdminGear } from "./admin/AdminGear";
 import { ContextPanel } from "./ContextPanel";
 import { SidekickFeed } from "./SidekickFeed";
 import { ActionsPanel } from "./actions/ActionsPanel";
+import { NotePane } from "./NotePane";
 import { MOCK } from "../lib/useCallSession";
 import type { ActionView } from "../lib/actions";
 import { TranscriptPanel } from "./TranscriptPanel";
@@ -138,7 +139,16 @@ export function Console({ state, channel, sttBrowser, notice, onEnd, onChannel, 
           </div>
         </div>
         <div className="h-[460px] min-h-0 md:col-span-2 md:h-auto xl:col-span-1 xl:h-auto">
-          <ContextPanel state={state} />
+          <div className="flex h-full min-h-0 flex-col gap-3">
+            <div className="min-h-0 flex-[1.4]">
+              <ContextPanel state={state} />
+            </div>
+            <NotePane
+              className="min-h-[200px] flex-1"
+              scope={state.callId ? { call_id: state.callId } : null}
+              mock={MOCK}
+            />
+          </div>
         </div>
       </main>
 
