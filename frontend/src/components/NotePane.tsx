@@ -23,6 +23,11 @@ function scopeKey(scope: NoteScope | null): string {
   return "call_id" in scope ? `call:${scope.call_id}` : `session:${scope.session_id}`;
 }
 
+function wordCount(text: string): number {
+  const t = text.trim();
+  return t ? t.split(/\s+/).length : 0;
+}
+
 export function NotePane({ scope, mock, className = "" }: Props) {
   const [text, setText] = useState("");
   const [save, setSave] = useState<SaveState>("idle");
@@ -36,6 +41,7 @@ export function NotePane({ scope, mock, className = "" }: Props) {
   useEffect(() => {
     setLoaded(false);
     setText("");
+    setSave("idle");
     persisted.current = "";
     if (!scope) return;
     if (mock) {
@@ -95,22 +101,28 @@ export function NotePane({ scope, mock, className = "" }: Props) {
     flush(text);
   };
 
+  const words = wordCount(text);
+  const active = !!scope && loaded;
+
   return (
-    <section aria-labelledby="notes-heading" className={`panel flex min-h-0 flex-col overflow-hidden ${className}`}>
+    <section
+      aria-labelledby="notes-heading"
+      className={`panel group flex min-h-0 flex-col overflow-hidden transition-[box-shadow,border-color] duration-200 focus-within:border-teal-400/40 focus-within:shadow-[0_0_0_1px_var(--color-line),0_10px_30px_-18px_rgba(45,212,191,0.5)] ${className}`}
+    >
       <header className="flex items-center justify-between gap-3 border-b border-[var(--color-line)] px-4 py-3">
         <div className="min-w-0">
           <h2 id="notes-heading" className="flex items-center gap-2 text-[14px] font-semibold">
-            <NotebookPen className="size-4 text-teal-300" aria-hidden /> Notes
+            <NotebookPen className="size-4 text-teal-300 transition-colors group-focus-within:text-teal-200" aria-hidden /> Notes
           </h2>
           <p className="text-[11.5px] text-[var(--color-muted)]">Your notes join the transcript in the summary.</p>
         </div>
-        <SaveBadge state={mock ? "idle" : save} />
+        <SaveBadge state={mock ? (words > 0 ? "saved" : "idle") : save} />
       </header>
       <textarea
         value={text}
         onChange={(e) => onChange(e.target.value)}
         onBlur={onBlur}
-        disabled={!scope || !loaded}
+        disabled={!active}
         spellCheck
         placeholder={
           scope
@@ -118,8 +130,14 @@ export function NotePane({ scope, mock, className = "" }: Props) {
             : "Notes open once the session is live."
         }
         className="scroll-thin min-h-0 flex-1 resize-none bg-transparent px-4 py-3.5 text-[13.5px] leading-relaxed text-slate-100 placeholder:text-[var(--color-muted)] focus:outline-none disabled:opacity-50"
-        aria-label="Call notes"
+        aria-label="Session notes"
       />
+      {active && (
+        <footer className="flex items-center justify-between border-t border-[var(--color-line)] px-4 py-1.5 text-[11px] text-[var(--color-muted)]">
+          <span className="tabular-nums">{words === 0 ? "No notes yet" : `${words} ${words === 1 ? "word" : "words"}`}</span>
+          <span className="opacity-80">Fused into the summary</span>
+        </footer>
+      )}
     </section>
   );
 }
@@ -128,7 +146,7 @@ function SaveBadge({ state }: { state: SaveState }) {
   if (state === "saving")
     return (
       <span className="flex items-center gap-1.5 text-[11.5px] text-[var(--color-muted)]">
-        <Loader2 className="size-3.5 animate-spin" aria-hidden /> Saving…
+        <Loader2 className="size-3.5 motion-safe:animate-spin" aria-hidden /> Saving…
       </span>
     );
   if (state === "saved")

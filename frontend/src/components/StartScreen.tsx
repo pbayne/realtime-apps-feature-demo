@@ -125,8 +125,11 @@ export function StartScreen({ error, onStart, onStartVoice }: Props) {
 
       <main className="mx-auto grid w-full max-w-5xl flex-1 items-center gap-8 px-6 pb-10 pt-2 md:grid-cols-[1.1fr_1fr]">
         <section>
-          <p className="kbd-label">{source === "talk" ? "Voice" : "New call"}</p>
-          <h1 className="mt-2 text-[34px] font-semibold leading-[1.1] tracking-tight">
+          <p className="kbd-label flex items-center gap-2">
+            <span className="inline-block size-1.5 rounded-full bg-[var(--color-lava)]" aria-hidden />
+            {source === "talk" ? "Voice" : "New call"}
+          </p>
+          <h1 className="mt-2 bg-gradient-to-br from-[var(--color-text)] to-[var(--color-muted)] bg-clip-text text-[34px] font-semibold leading-[1.1] tracking-tight text-transparent">
             {source === "talk" ? "Talk to Sidekick" : "Start a sidekick session"}
           </h1>
           <p className="mt-3 max-w-md text-[14px] leading-relaxed text-[var(--color-muted)]">
@@ -158,10 +161,10 @@ export function StartScreen({ error, onStart, onStartVoice }: Props) {
                     type="button"
                     aria-pressed={active}
                     onClick={() => setPlaybook(p.name)}
-                    className={`flex items-center justify-between rounded-xl border px-4 py-3 text-left transition-colors ${
+                    className={`flex items-center justify-between rounded-xl border px-4 py-3 text-left transition-all duration-150 ${
                       active
-                        ? "border-sky-400/60 bg-sky-400/[0.07]"
-                        : "border-[var(--color-line)] bg-[var(--color-panel)] hover:border-slate-400"
+                        ? "border-sky-400/60 bg-sky-400/[0.07] ring-1 ring-sky-400/20"
+                        : "border-[var(--color-line)] bg-[var(--color-panel)] hover:border-slate-400 hover:bg-[var(--color-raised)]"
                     }`}
                   >
                     <div>
