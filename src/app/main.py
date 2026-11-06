@@ -108,7 +108,7 @@ class CreateCall(BaseModel):
 class CreateAction(BaseModel):
     session_id: Optional[str] = None
     call_id: Optional[str] = None
-    kind: Literal["send_email", "create_meeting", "update_contact", "enroll"]
+    kind: Literal["send_email", "create_meeting", "update_contact", "enroll", "update_record"]
     params: dict[str, Any] = Field(default_factory=dict)
 
 

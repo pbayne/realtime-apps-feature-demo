@@ -117,11 +117,41 @@ class EnrollParams(_ContactRef):
     note: Optional[str] = Field(default=None, max_length=500)
 
 
+class RecordFields(_Strict):
+    """Updatable columns of the CRM account record (actions/records.py FIELD_COLUMNS). All optional; at least one
+    must be set. Kept small and typed so the model cannot invent arbitrary columns."""
+    name: Optional[OneLine] = Field(default=None, max_length=200)
+    stage: Optional[OneLine] = Field(default=None, max_length=100)
+    arr: Optional[float] = Field(default=None, ge=0, le=1e12)
+    owner: Optional[OneLine] = Field(default=None, max_length=200)
+    next_step: Optional[str] = Field(default=None, max_length=1000)
+    notes: Optional[str] = Field(default=None, max_length=5000)
+
+    @model_validator(mode="after")
+    def _something_to_change(self) -> "RecordFields":
+        if not self.model_dump(exclude_none=True):
+            raise ValueError("fields must set at least one of name, stage, arr, owner, next_step, notes")
+        return self
+
+
+class UpdateRecordParams(_Strict):
+    account_id: str = Field(min_length=1, max_length=128)
+    fields: RecordFields
+
+    @field_validator("account_id")
+    @classmethod
+    def _plain_id(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value):
+            raise ValueError("account_id must be letters, numbers or . _ : -")
+        return value
+
+
 PARAM_MODELS: dict[str, type[BaseModel]] = {
     "send_email": SendEmailParams,
     "create_meeting": CreateMeetingParams,
     "update_contact": UpdateContactParams,
     "enroll": EnrollParams,
+    "update_record": UpdateRecordParams,
 }
 
 assert set(PARAM_MODELS) == set(ACTION_KINDS)
@@ -170,6 +200,9 @@ def summarize(kind: str, params: dict[str, Any]) -> str:
     if kind == "enroll":
         who = params.get("email") or "contact"
         return f"Enroll {_first_name(who) if params.get('email') else who} in {params['program']}"
+    if kind == "update_record":
+        changed = ", ".join(k.replace("_", " ") for k in params["fields"])
+        return f"Update account {params['account_id']}: {changed}"
     return kind
 
 

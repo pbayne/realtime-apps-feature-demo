@@ -32,13 +32,13 @@ from history import schema as hs
 from models import Action, new_id, now_ms
 from sidekick.playbooks import PlaybookRegistry
 
-from actions import ics, mail
+from actions import ics, mail, records
 from actions.proposals import dedupe_key
 from actions.schemas import ActionValidationError, summarize, validate_params
 
 log = logging.getLogger("sidekick.actions")
 
-UNDOABLE = frozenset({"create_meeting", "update_contact", "enroll"})
+UNDOABLE = frozenset({"create_meeting", "update_contact", "enroll", "update_record"})
 EXECUTED = frozenset({"executing", "done", "outboxed"})
 DEFAULT_SENDER = "Sidekick <sidekick@sidekick.invalid>"
 INVITE_PREFIX = "Invitation: "
@@ -69,6 +69,7 @@ class ActionService:
     def __init__(self, *, settings: Settings, store: Any, registry: PlaybookRegistry, history: Any = None,
                  emit: Optional[Callable[[Action], None]] = None,
                  send: Optional[Callable[[mail.SmtpConfig, Any, list[str]], None]] = None,
+                 records_exec: Optional[records.Executor] = None,
                  clock: Callable[[], int] = now_ms) -> None:
         self.settings = settings
         self.store = store
@@ -76,10 +77,21 @@ class ActionService:
         self.history = history
         self._emit = emit
         self._send = send or mail.send_smtp
+        self._records_exec = records_exec
         self._clock = clock
         self._smtp = mail.SmtpConfig.from_settings(settings)
+        self._record_target = self._build_record_target(settings)
         self._cache: dict[str, Action] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+
+    @staticmethod
+    def _build_record_target(settings: Settings) -> Optional[records.RecordTarget]:
+        """The UC Delta table update_record writes to, or None when it is misconfigured (the action then refuses)."""
+        try:
+            return records.RecordTarget(settings.crm_catalog, settings.crm_schema, settings.crm_table)
+        except records.RecordError:
+            log.warning("CRM record target is misconfigured; update_record will be refused")
+            return None
 
     # ------------------------------------------------------------------ views
     @property
@@ -260,6 +272,8 @@ class ActionService:
             return "done", await self._exec_update_contact(rec)
         if rec.kind == "enroll":
             return "done", await self._exec_enroll(rec)
+        if rec.kind == "update_record":
+            return await self._exec_update_record(rec)
         raise ValueError(f"unknown kind {rec.kind!r}")
 
     async def _undo(self, rec: Action) -> dict[str, Any]:
@@ -293,6 +307,8 @@ class ActionService:
         if rec.kind == "enroll":
             await self.store.delete_enrollment(result["enrollment_id"])
             return {"enrollment_removed": True}
+        if rec.kind == "update_record":
+            return await self._undo_update_record(rec)
         raise ValueError(f"{rec.kind} cannot be undone")
 
     def _build_email(self, rec: Action, now: int) -> tuple[Any, list[str], dict[str, Any]]:
@@ -391,6 +407,52 @@ class ActionService:
         if params.get("contact_id"):
             return await self.store.find_contact(owner, contact_id=params["contact_id"])
         return await self.store.find_contact(owner, email=params["email"])
+
+    # ------------------------------------------------------ update_record (UC Delta via SQL warehouse)
+    async def _exec_update_record(self, rec: Action) -> tuple[str, dict[str, Any]]:
+        """MERGE the proposed fields into the CRM account on the SQL warehouse, or render the MERGE for the outbox
+        when no warehouse executor is configured. The rendered SQL is for display only; the real call binds every
+        value as a parameter."""
+        if self._record_target is None:
+            raise ValueError("the CRM record target is not configured (CRM_CATALOG/CRM_SCHEMA/CRM_TABLE)")
+        target = self._record_target
+        p = rec.params
+        account_id = p["account_id"]
+        fields = {k: v for k, v in p["fields"].items() if v is not None}
+        now = self._now()
+        sql, params, types = records.build_merge(target, account_id, fields, now)
+        rendered = records.render_sql(sql, params)
+        base = {"table": target.full_name, "account_id": account_id, "fields": fields, "merge_sql": rendered}
+        if self._records_exec is None:
+            # Outbox: no warehouse. Show exactly what would run.
+            return "outboxed", {"mode": "outbox", **base}
+        # Capture the previous row first, so undo can restore it (or delete a row this update creates).
+        previous = await self._record_row(target, account_id)
+        await self._records_exec(sql, params, types)
+        return "done", {"mode": "warehouse", "previous": previous, "existed": previous is not None, **base}
+
+    async def _undo_update_record(self, rec: Action) -> dict[str, Any]:
+        if self._record_target is None or self._records_exec is None:
+            raise LookupError("the CRM record target is not available to undo")
+        target = self._record_target
+        result = rec.result or {}
+        account_id = result.get("account_id") or rec.params["account_id"]
+        previous = result.get("previous")
+        if previous:
+            fields = {c: previous.get(c) for c in records.FIELD_COLUMNS}
+            sql, params, types = records.build_merge(target, account_id, fields, self._now())
+            await self._records_exec(sql, params, types)
+            return {"restored": fields}
+        sql, params, types = records.build_delete(target, account_id)
+        await self._records_exec(sql, params, types)
+        return {"record_deleted": True}
+
+    async def _record_row(self, target: records.RecordTarget, account_id: str) -> Optional[dict[str, Any]]:
+        if self._records_exec is None:
+            return None
+        sql, params, types = records.build_select(target, account_id)
+        rows = await self._records_exec(sql, params, types)
+        return rows[0] if rows else None
 
     async def _put_contact(self, row: dict[str, Any]) -> None:
         await self.store.put_contact(row)

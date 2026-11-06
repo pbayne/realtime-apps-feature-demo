@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { MOCK } from "./useCallSession";
 
-export type ActionKind = "send_email" | "create_meeting" | "update_contact" | "enroll";
+export type ActionKind = "send_email" | "create_meeting" | "update_contact" | "enroll" | "update_record";
 export type ActionStatus = "proposed" | "executing" | "done" | "outboxed" | "failed" | "rejected" | "undone";
 export type Decision = "approve" | "reject" | "undo";
 
@@ -52,6 +52,7 @@ export const KIND_LABEL: Record<ActionKind, string> = {
   create_meeting: "Meeting",
   update_contact: "Update contact",
   enroll: "Enroll",
+  update_record: "Update account",
 };
 
 export const DURATIONS = [15, 30, 45, 60, 90, 120] as const;
@@ -139,6 +140,7 @@ export const EMPTY_DRAFT: Record<ActionKind, Draft> = {
   create_meeting: { title: "", attendees: "", date: "", time: "14:00", duration: "45", location: "", description: "" },
   update_contact: { email: "", first_name: "", last_name: "", company: "", phone: "" },
   enroll: { email: "", program: "", note: "" },
+  update_record: { account_id: "", name: "", stage: "", arr: "", owner: "", next_step: "", notes: "" },
 };
 
 function list(value: string): string[] {
@@ -179,6 +181,17 @@ export function draftFromParams(kind: ActionKind, p: Record<string, unknown>): D
       last_name: str(fields.last_name),
       company: str(fields.company),
       phone: str(fields.phone),
+    };
+  }
+  if (kind === "update_record") {
+    return {
+      account_id: str(p.account_id),
+      name: str(fields.name),
+      stage: str(fields.stage),
+      arr: fields.arr == null ? "" : String(fields.arr),
+      owner: str(fields.owner),
+      next_step: str(fields.next_step),
+      notes: str(fields.notes),
     };
   }
   return { email: str(p.email), program: str(p.program), note: str(p.note) };
@@ -224,6 +237,20 @@ export function paramsFromDraft(kind: ActionKind, d: Draft, reminders: Reminder[
     if (Object.keys(fields).length === 0) return { ok: false, error: "Change at least one field." };
     return { ok: true, params: { email: d.email.trim(), fields } };
   }
+  if (kind === "update_record") {
+    if (!d.account_id.trim()) return { ok: false, error: "Give the account id to update." };
+    const fields: Record<string, unknown> = {};
+    for (const k of ["name", "stage", "owner", "next_step", "notes"] as const) {
+      if (d[k].trim()) fields[k] = d[k].trim();
+    }
+    if (d.arr.trim()) {
+      const arr = Number(d.arr.replace(/[,$\s]/g, ""));
+      if (Number.isNaN(arr) || arr < 0) return { ok: false, error: "ARR must be a number." };
+      fields.arr = arr;
+    }
+    if (Object.keys(fields).length === 0) return { ok: false, error: "Change at least one field." };
+    return { ok: true, params: { account_id: d.account_id.trim(), fields } };
+  }
   if (!d.email.trim()) return { ok: false, error: "Give the contact's email." };
   if (!d.program) return { ok: false, error: "Pick a program." };
   return { ok: true, params: { email: d.email.trim(), program: d.program, note: d.note.trim() || null } };
@@ -243,6 +270,10 @@ export function summaryOf(kind: ActionKind, p: Record<string, unknown>): string 
     const fields = Object.keys((p.fields as Record<string, unknown>) ?? {}).map((k) => k.replace(/_/g, " "));
     return `Update ${firstName(str(p.email))}: ${fields.join(", ")}`;
   }
+  if (kind === "update_record") {
+    const fields = Object.keys((p.fields as Record<string, unknown>) ?? {}).map((k) => k.replace(/_/g, " "));
+    return `Update account ${str(p.account_id)}: ${fields.join(", ")}`;
+  }
   return `Enroll ${firstName(str(p.email))} in ${str(p.program)}`;
 }
 
@@ -255,7 +286,7 @@ function firstName(address: string): string {
 // ---------------------------------------------------------------- programs and mock sequencing
 
 export const MOCK_PROGRAMS = ["Retirement income review", "Tax-loss harvesting pilot", "Quarterly portfolio check-in"];
-const MOCK_KINDS: ActionKind[] = ["send_email", "create_meeting", "enroll"];
+const MOCK_KINDS: ActionKind[] = ["send_email", "create_meeting", "update_record", "enroll"];
 let mockKindIndex = 0;
 
 /** Kinds the mock proposes in turn, so every card type shows up in a demo run. */
@@ -364,7 +395,9 @@ export function mockProposal(kind: ActionKind, scope: { session_id?: string; cal
           }
         : kind === "enroll"
           ? { email: "dana.lee@example.com", program: programs[0] ?? "Quarterly portfolio check-in", note: null }
-          : { email: "dana.lee@example.com", fields: { phone: "+1 555 010 0101" } };
+          : kind === "update_record"
+            ? { account_id: "acct-northwind", fields: { stage: "Proposal", next_step: "Send fee breakdown" } }
+            : { email: "dana.lee@example.com", fields: { phone: "+1 555 010 0101" } };
   const id = `mock-action-${++mockSeq}-${now.toString(36)}`;
   return {
     action_id: id,
@@ -410,7 +443,7 @@ export function mockDecide(a: ActionView, decision: Decision, onUpdate: (next: A
     onUpdate({ ...a, status: "undone", updated_at_ms: at });
     return;
   }
-  const finalStatus: ActionStatus = a.kind === "enroll" || a.kind === "update_contact" ? "done" : "outboxed";
+  const finalStatus: ActionStatus = a.kind === "enroll" || a.kind === "update_contact" || a.kind === "update_record" ? "done" : "outboxed";
   onUpdate({ ...a, status: "executing", updated_at_ms: at, decided_at_ms: at, error: null });
   window.setTimeout(() => {
     onUpdate({

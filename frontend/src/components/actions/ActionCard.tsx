@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from "react";
-import { Check, CalendarDays, Download, Eye, GraduationCap, Loader2, Mail, Pencil, Undo2, UserRound, X } from "lucide-react";
+import { Check, CalendarDays, Database, Download, Eye, GraduationCap, Loader2, Mail, Pencil, Undo2, UserRound, X } from "lucide-react";
 import {
   type ActionKind,
   type ActionView,
@@ -23,7 +23,7 @@ import {
   reminderLine,
 } from "../../lib/actions";
 
-const KIND_ICON = { send_email: Mail, create_meeting: CalendarDays, update_contact: UserRound, enroll: GraduationCap };
+const KIND_ICON = { send_email: Mail, create_meeting: CalendarDays, update_contact: UserRound, enroll: GraduationCap, update_record: Database };
 
 /** Chip colours are the ones the rest of the app uses for these states (see VoiceConsole STATUS_STYLE). */
 const STATUS: Record<ActionView["status"], { label: string; cls: string }> = {
@@ -185,6 +185,18 @@ function Details({ action: a }: { action: ActionView }) {
   }
   if (a.kind === "send_email") {
     return <p className="mt-1 line-clamp-2 text-[12px] text-[var(--color-muted)]">{String(p.body_text ?? "")}</p>;
+  }
+  if (a.kind === "update_record") {
+    const fields = (p.fields ?? {}) as Record<string, unknown>;
+    const table = (a.result as Record<string, unknown> | null)?.table;
+    return (
+      <p className="mt-1 text-[12px] text-[var(--color-muted)]">
+        {Object.entries(fields)
+          .map(([k, v]) => `${k.replace(/_/g, " ")} → ${String(v)}`)
+          .join(" · ")}
+        {typeof table === "string" ? <span className="mt-0.5 block font-mono text-[11px] text-sky-300/80">MERGE into {table}</span> : null}
+      </p>
+    );
   }
   return null;
 }
@@ -356,6 +368,20 @@ export function ActionForm({
             </select>
           </label>
           {field("note", "Note (optional)")}
+        </>
+      )}
+      {kind === "update_record" && (
+        <>
+          {field("account_id", "Account id", { placeholder: "acct-northwind" })}
+          {field("name", "Name (optional)")}
+          <div className="grid grid-cols-2 gap-2.5">
+            {field("stage", "Stage", { placeholder: "Proposal" })}
+            {field("arr", "ARR (optional)", { placeholder: "420000" })}
+          </div>
+          {field("owner", "Owner (optional)")}
+          {field("next_step", "Next step")}
+          {field("notes", "Notes", { textarea: true })}
+          <p className="text-[11.5px] text-[var(--color-muted)]">Writes a MERGE to the Unity Catalog account table via the SQL warehouse.</p>
         </>
       )}
       {err && (

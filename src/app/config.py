@@ -234,6 +234,12 @@ class Settings(BaseSettings):
     # Call mode: a fast-model proposal pass on customer finals, at most one per interval per call (fail-soft).
     action_propose_interval_s: float = 5.0
     action_propose_timeout_s: float = 4.0
+    # update_record target: a Unity Catalog Delta table Sidekick updates through the SQL warehouse
+    # (Statement Execution API, app service principal). Writes run on databricks_warehouse_id. With no warehouse
+    # the action is in outbox mode: the exact MERGE is rendered and stored, nothing runs.
+    crm_catalog: str = "main"
+    crm_schema: str = "call_sidekick"
+    crm_table: str = "crm_accounts"
 
     # --- Lakebase (databricks mode) ---
     lakebase_host: Optional[str] = None

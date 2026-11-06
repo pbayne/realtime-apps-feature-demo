@@ -82,7 +82,7 @@ class CallRecord:
         return asdict(self)
 
 
-ACTION_KINDS = ("send_email", "create_meeting", "update_contact", "enroll")
+ACTION_KINDS = ("send_email", "create_meeting", "update_contact", "enroll", "update_record")
 ACTION_STATUSES = ("proposed", "executing", "done", "outboxed", "failed", "rejected", "undone")
 # Result keys that hold rendered message text. They are served by the message/invite endpoints, not in the socket
 # events (SPEC 12).

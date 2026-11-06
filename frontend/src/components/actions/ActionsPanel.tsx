@@ -30,7 +30,7 @@ interface Props {
   className?: string;
 }
 
-const CREATE_KINDS: ActionKind[] = ["send_email", "create_meeting", "update_contact", "enroll"];
+const CREATE_KINDS: ActionKind[] = ["send_email", "create_meeting", "update_contact", "enroll", "update_record"];
 
 export function ActionsPanel({ actions, scope, playbook, mock, onUpdate, className = "" }: Props) {
   const programs = usePrograms(playbook);

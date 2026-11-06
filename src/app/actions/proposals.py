@@ -20,7 +20,7 @@ from actions.schemas import ActionValidationError, contact_key, validate_params
 log = logging.getLogger("sidekick.actions.proposals")
 
 MAX_PROPOSALS = 5
-ACTIONS_HINT = "send_email | create_meeting | update_contact | enroll"
+ACTIONS_HINT = "send_email | create_meeting | update_contact | enroll | update_record"
 
 Proposal = tuple[str, dict[str, Any]]    # (kind, validated params)
 
@@ -70,6 +70,8 @@ def dedupe_key(kind: str, params: dict[str, Any]) -> str:
         parts = [contact_key(params), sorted((k, str(v).lower()) for k, v in params["fields"].items())]
     elif kind == "enroll":
         parts = [contact_key(params), params["program"].strip().lower()]
+    elif kind == "update_record":
+        parts = [params["account_id"].lower(), sorted((k, str(v).lower()) for k, v in params["fields"].items())]
     else:
         parts = [json.dumps(params, sort_keys=True)]
     return kind + "|" + json.dumps(parts, sort_keys=True, default=str)

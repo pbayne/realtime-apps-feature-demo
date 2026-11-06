@@ -172,6 +172,37 @@ for ddl in TABLE_DDL:
     spark.sql(qualify_ddl(ddl))
     print("ready:", ddl.split()[5])
 
+# CRM account record for the update_record action (SPEC 12). This table is NOT a Zerobus sink target: the app
+# writes it with a parameterized MERGE through the SQL warehouse (Statement Execution API), so it is created and
+# seeded here rather than listed in TABLE_DDL / schema.py. Keep the columns in step with src/app/actions/records.py.
+spark.sql(f"""CREATE TABLE IF NOT EXISTS {qualified('crm_accounts')} (
+  account_id STRING,
+  name STRING,
+  stage STRING,
+  arr DOUBLE,
+  owner STRING,
+  next_step STRING,
+  notes STRING,
+  updated_at_ms BIGINT
+) USING DELTA""")
+print("ready: crm_accounts")
+
+# Seed a few demo accounts so update_record has something to MERGE in a demo (idempotent).
+DEMO_ACCOUNTS = [
+    ("acct-northwind", "Northwind Traders", "Discovery", 180000.0, "patrick.bayne@databricks.com",
+     "Send fee breakdown", "Prospect; evaluating managed portfolios."),
+    ("acct-contoso", "Contoso Capital", "Proposal", 420000.0, "patrick.bayne@databricks.com",
+     "Schedule portfolio review", "Weighing fees vs. a competing advisor."),
+    ("acct-fabrikam", "Fabrikam Financial", "Negotiation", 650000.0, "patrick.bayne@databricks.com",
+     "Confirm onboarding timeline", "Verbally agreed; wants quarterly check-ins."),
+]
+if spark.table(qualified("crm_accounts")).count() == 0:
+    from pyspark.sql import Row
+    rows = [Row(account_id=a, name=n, stage=s, arr=arr, owner=o, next_step=ns, notes=nt, updated_at_ms=1767225600000)
+            for a, n, s, arr, o, ns, nt in DEMO_ACCOUNTS]
+    spark.createDataFrame(rows).write.format("delta").mode("append").saveAsTable(qualified("crm_accounts"))
+    print(f"seeded {len(DEMO_ACCOUNTS)} demo accounts into crm_accounts")
+
 # Existing deployments: calls.owner was added later (SPEC 10). Delta has no ADD COLUMN IF NOT EXISTS, so check first.
 if "owner" not in [field.name for field in spark.table(qualified("calls")).schema.fields]:
     spark.sql(f"ALTER TABLE {qualified('calls')} ADD COLUMNS (owner STRING)")
@@ -188,7 +219,7 @@ quoted = f"`{principal}`"
 spark.sql(f"GRANT USE CATALOG ON CATALOG `{catalog}` TO {quoted}")
 spark.sql(f"GRANT USE SCHEMA ON SCHEMA `{catalog}`.`{schema}` TO {quoted}")
 for table in [name for name in ("calls", "utterances", "enrichments", "cards", "feedback", "voice_turns", "voice_items",
-                                "actions", "contacts", "enrollments")]:
+                                "actions", "contacts", "enrollments", "crm_accounts")]:
     spark.sql(f"GRANT MODIFY, SELECT ON TABLE `{catalog}`.`{schema}`.`{table}` TO {quoted}")
     print("granted MODIFY, SELECT on", table)
 

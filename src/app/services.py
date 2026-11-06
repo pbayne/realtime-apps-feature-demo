@@ -90,8 +90,10 @@ class Services:
         self.enricher = DirectEnricher(self.registry.rules_for)
         self.hub = Hub()
         # Human-in-the-loop actions (SPEC 12). Events go to the owning voice session or call socket (_emit_action).
+        # update_record writes a UC Delta table through the SQL warehouse (Statement Execution API) when one is
+        # configured; without it the action runs in outbox mode (renders the MERGE, writes nothing).
         self.actions = ActionService(settings=settings, store=self.store, registry=self.registry, history=self.history,
-                                     emit=self._emit_action)
+                                     emit=self._emit_action, records_exec=self._build_records_exec(settings))
         self.deps = Deps(settings=settings, bus=self.bus, store=self.store, llm=self.llm,
                          retriever=self.retriever, registry=self.registry, hub=self.hub, vad=self.vad,
                          history=self.history, enricher=self.enricher, actions=self.actions)
@@ -381,6 +383,17 @@ class Services:
             task = asyncio.create_task(ping(name, coro))
             self._background.add(task)
             task.add_done_callback(self._background.discard)
+
+    def _build_records_exec(self, settings: Settings):
+        """Executor for the update_record action's MERGE on the SQL warehouse, or None. Reuses the Insights page's
+        Statement Execution API executor (app service principal). None in local mode or without a warehouse, which
+        puts update_record in outbox mode (it renders the MERGE and writes nothing)."""
+        wh = settings.databricks_warehouse_id
+        if settings.mode != "databricks" or not wh:
+            return None
+        from admin.insights import make_sdk_executor
+
+        return make_sdk_executor(wh)
 
     def _emit_action(self, rec: Any) -> None:
         """Every action status change goes to the socket that owns its scope (SPEC 12: `action` events)."""

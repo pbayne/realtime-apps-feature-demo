@@ -370,8 +370,9 @@ session and turn, with no transcript text at INFO.
 
 ## Actions (human in the loop)
 
-Sidekick can propose four things during a conversation or a call: send an email, book a meeting (with a reminder
-the day before and a 10 minute alert), update a contact, or enroll someone in a program. Each proposal appears in
+Sidekick can propose five things during a conversation or a call: send an email, book a meeting (with a reminder
+the day before and a 10 minute alert), update a contact, enroll someone in a program, or update an account
+record in Unity Catalog. Each proposal appears in
 the Actions panel with a plain-language summary. **Nothing runs until you approve it.** You can edit the details
 first, reject it, retry a failure, preview the exact message or invite, and undo the reversible ones (not email).
 The design is in SPEC section 12.
@@ -413,6 +414,21 @@ result.
    anything looks wrong.
 
 Keep `ACTION_SAFE_RECIPIENT` set to a mailbox you control in any environment that still has the lock on.
+
+### Update account records in Unity Catalog (the Databricks-native action)
+
+`update_record` is the most Databricks-centric action: on approval Sidekick runs a **parameterized `MERGE`** against a
+Unity Catalog Delta table through the **SQL Statement Execution API** on the app's SQL warehouse
+(`DATABRICKS_WAREHOUSE_ID`, the same executor the Insights page uses, authenticated as the app's service principal).
+The account id and every field are **bound parameters** (`:name`); only the validated table and column identifiers are
+text, so a note can never inject SQL. The card preview shows the exact MERGE.
+
+- Target table: `${CRM_CATALOG}.${CRM_SCHEMA}.${CRM_TABLE}` (defaults `main.call_sidekick.crm_accounts`). Created and
+  seeded with demo accounts by `src/notebooks/init_history.py`; the app's principal is granted `MODIFY, SELECT`.
+- Updatable fields: `name`, `stage`, `arr`, `owner`, `next_step`, `notes` (merge key `account_id`). Insert if the
+  account does not exist. Undo restores the previous row, or deletes a row the update created.
+- **No warehouse configured → outbox mode**, exactly like email: the MERGE and its parameters are rendered and stored,
+  nothing runs. So a local or un-provisioned demo still shows precisely what *would* execute.
 
 ### Other settings
 
