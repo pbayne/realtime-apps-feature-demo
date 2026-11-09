@@ -531,6 +531,43 @@ async def action_invite(action_id: str, request: Request):
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+# ----------------------------------------------------------------- call history (user-scoped Past Calls)
+
+@app.get("/api/history/calls")
+async def history_calls(request: Request, limit: int = Query(default=50, ge=1, le=200)):
+    """The caller's own past calls (newest first) for the Past Calls view. Owner-scoped in the store query."""
+    svc = _svc(request)
+    caller = _caller(request)
+    if caller is None:
+        raise ServiceError(403, "the app could not identify the caller")
+    return {"calls": await svc.store.list_calls(caller, limit=limit)}
+
+
+@app.get("/api/history/calls/{call_id}")
+async def history_call_detail(call_id: str, request: Request):
+    """One past call for its owner: transcript + cards (live store), the caller's actions, and the post-call
+    summary from Delta when the insights warehouse is configured. 404 unless the call belongs to the caller."""
+    svc = _svc(request)
+    caller = _caller(request)
+    if caller is None:
+        raise ServiceError(403, "the app could not identify the caller")
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", call_id):
+        raise ServiceError(404, "unknown call")
+    call = await svc.store.get_call(call_id)
+    if call is None or call.get("owner") != caller:
+        raise ServiceError(404, "unknown call")
+    snap = await svc.store.snapshot(call_id)
+    actions = await svc.actions.list(caller, call_id=call_id) if svc.actions is not None else []
+    summary = None
+    try:
+        detail = await _insights_for(svc).call_detail(call_id)
+        summary = detail.get("summary")
+    except Exception:  # noqa: BLE001 - the gold summary is optional (needs the scoring job + warehouse)
+        summary = None
+    return {"call": call, "transcript": snap.get("utterances", []), "cards": snap.get("cards", []),
+            "actions": actions, "summary": summary}
+
+
 # ----------------------------------------------------------------- WebSockets
 
 def _limiter(svc: Services) -> TokenBucket:

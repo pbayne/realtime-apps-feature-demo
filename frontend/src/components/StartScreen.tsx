@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Headphones, Mic, MicOff, PlayCircle, Radio, RotateCcw, Sparkles } from "lucide-react";
+import { Headphones, History, Mic, MicOff, PlayCircle, Radio, RotateCcw, Sparkles } from "lucide-react";
 import { FALLBACK_PLAYBOOKS, FALLBACK_SCRIPTS, FALLBACK_VOICES, MOCK_VOICES, getPlaybooks, getScripts, getVoices } from "../lib/api";
 import { MOCK, MOCK_SPEED, URL_PARAMS } from "../lib/useCallSession";
 import type { Mode, PlaybookSummary, StartOptions, VoiceOption, VoiceRole, VoiceStartOptions } from "../lib/types";
@@ -119,6 +119,9 @@ export function StartScreen({ error, onStart, onStartVoice }: Props) {
               <Sparkles className="size-3" /> Mock mode · simulated stream{MOCK_SPEED !== 1 ? ` · ${MOCK_SPEED}x` : ""}
             </span>
           )}
+          <a href="#/history" className="btn btn-ghost py-1.5 text-[12.5px]">
+            <History className="size-3.5" aria-hidden /> Past calls
+          </a>
           <AdminGear />
         </div>
       </header>

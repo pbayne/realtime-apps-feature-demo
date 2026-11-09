@@ -64,6 +64,11 @@ class MemoryStore:
     async def get_call(self, call_id: str) -> Optional[dict[str, Any]]:
         return self.calls.get(call_id)
 
+    async def list_calls(self, owner: str, limit: int = 50) -> list[dict[str, Any]]:
+        mine = [c for c in self.calls.values() if c.get("owner") == owner]
+        mine.sort(key=lambda c: c.get("started_at_ms") or 0, reverse=True)
+        return [dict(c) for c in mine[:limit]]
+
     async def end_call(self, call_id: str, ended_at_ms: int) -> None:
         if call_id in self.calls:
             self.calls[call_id].update(ended_at_ms=ended_at_ms, status="ended")

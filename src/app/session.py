@@ -128,6 +128,7 @@ class CallSession:
         self._stt_tasks: set[asyncio.Task[Any]] = set()
         self._browser: dict[str, BrowserPassthrough] = {}
         self._customer_recent: list[str] = []
+        self._recent: list[str] = []   # both speakers, for the action-proposal pass (SPEC 12)
         self._cfg = GuardConfig(
             min_confidence=self.deps.settings.card_min_confidence,
             cooldown_turns=self.deps.settings.card_cooldown_turns,
@@ -388,8 +389,10 @@ class CallSession:
         utt = Utterance(call_id=call_id, seq=ev.seq, speaker=ev.speaker, text=ev.text,
                         t_start_ms=ev.t_start_ms, t_end_ms=ev.t_end_ms, emitted_at_ms=emitted, playbook=pb.name)
         self._spawn(self._persist_utterance(utt))   # live state; a store outage never reaches the card path
-        if ev.speaker == "customer":
-            self._maybe_propose_actions(ev.text)
+        # SPEC 12: propose actions on either speaker's finals — the customer may request something, and the agent
+        # may commit to a follow-up (send paperwork, book a meeting, update the record). Keep a combined recent log.
+        self._recent.append(f"{ev.speaker}: {ev.text}")
+        self._maybe_propose_actions(ev.speaker, ev.text)
         self._history.emit("utterances", hs.utterance_row(utt))
         if not direct:
             await deps.bus.publish(self.settings.kafka_utterances_topic, call_id, {
@@ -473,21 +476,21 @@ class CallSession:
         elif not comp:
             self._emit_metrics(ev.seq, timing, None, None)
 
-    def _maybe_propose_actions(self, text: str) -> None:
-        """Call mode (SPEC 12): at most one fast-model proposal pass per action_propose_interval_s per call, on customer
-        finals of a replay or mic call. The pass runs in the background and is fail-soft."""
+    def _maybe_propose_actions(self, speaker: str, text: str) -> None:
+        """Call mode (SPEC 12): at most one fast-model proposal pass per action_propose_interval_s per call, on any
+        speaker's finals of a replay or mic call. The pass runs in the background and is fail-soft."""
         if self.deps.actions is None or self.record.mode not in ("replay", "mic") or self.ended or not self.owner:
             return
         now = time.monotonic()
         if self._last_proposal_mono is not None and now - self._last_proposal_mono < self.settings.action_propose_interval_s:
             return
         self._last_proposal_mono = now
-        self._spawn(self._propose_actions(text))
+        self._spawn(self._propose_actions(speaker, text))
 
-    async def _propose_actions(self, text: str) -> None:
+    async def _propose_actions(self, speaker: str, text: str) -> None:
         proposals = await propose_for_call(
             self.deps.llm, self.settings.fast_model, playbook_title=self.playbook.title,
-            programs=self.playbook.programs, customer_text=text, recent=list(self._customer_recent[-4:]),
+            programs=self.playbook.programs, speaker=speaker, speaker_text=text, recent=list(self._recent[-4:]),
             timeout_s=self.settings.action_propose_timeout_s,
         )
         if proposals and not self.ended:

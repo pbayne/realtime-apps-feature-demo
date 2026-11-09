@@ -77,26 +77,36 @@ def dedupe_key(kind: str, params: dict[str, Any]) -> str:
     return kind + "|" + json.dumps(parts, sort_keys=True, default=str)
 
 
-def call_messages(playbook_title: str, programs: tuple[str, ...], customer_text: str,
+def call_messages(playbook_title: str, programs: tuple[str, ...], speaker: str, speaker_text: str,
                   recent: list[str]) -> list[dict[str, str]]:
-    """Prompt for the call-mode proposal pass: JSON only, empty unless the customer asked for something."""
+    """Prompt for the call-mode proposal pass: JSON only, empty unless something was asked for or committed to.
+    Speaker-aware: a customer can request something; the human agent can commit to doing something (send the
+    paperwork, book a meeting, update the record) — both should surface an action to approve."""
+    who = "the human agent (the rep running the call)" if speaker == "agent" else "the customer"
+    trigger = (
+        "Propose an action when the agent commits to doing something (send a document or paperwork, book a meeting, "
+        "update the account or a contact, enrol the customer), or clearly promises a follow-up."
+        if speaker == "agent" else
+        "Propose an action only when the customer explicitly asks for it, or a commitment is clearly agreed."
+    )
     system = "\n".join([
-        f"You watch a live {playbook_title.lower()} call for the human agent. The customer just said something.",
-        "Propose an action only when the customer explicitly asks for it, or a commitment is clearly agreed.",
+        f"You watch a live {playbook_title.lower()} call for the human agent. {who.capitalize()} just spoke.",
+        trigger,
         f"Allowed kinds: {ACTIONS_HINT}.",
         "Reply with ONLY a JSON array of {\"kind\": ..., \"params\": {...}} objects, or [] when nothing applies.",
         "Never invent an email address; leave the action out if no address was given.",
         ("Enrollment programs: " + ", ".join(programs)) if programs else "No enrollment programs are defined.",
     ])
-    user = "\n".join(["Earlier in the call:", *recent[-4:], "Customer just said:", customer_text])
+    label = "Agent just said:" if speaker == "agent" else "Customer just said:"
+    user = "\n".join(["Earlier in the call:", *recent[-4:], label, speaker_text])
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
 async def propose_for_call(llm: Any, model: str, *, playbook_title: str, programs: tuple[str, ...],
-                           customer_text: str, recent: list[str], timeout_s: float,
+                           speaker: str, speaker_text: str, recent: list[str], timeout_s: float,
                            max_tokens: int = 300) -> list[Proposal]:
     """One fast-model pass. Fail-soft: any error or timeout gives no proposals."""
-    messages = call_messages(playbook_title, programs, customer_text, recent)
+    messages = call_messages(playbook_title, programs, speaker, speaker_text, recent)
     try:
         raw = await asyncio.wait_for(llm.chat(model, messages, max_tokens=max_tokens, timeout=timeout_s),
                                      timeout=timeout_s)

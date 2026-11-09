@@ -4,14 +4,16 @@ import { PostCallSummary } from "./components/PostCallSummary";
 import { StartScreen } from "./components/StartScreen";
 import { VoiceConsole } from "./components/voice/VoiceConsole";
 import { AdminRoute } from "./components/admin/AdminRoute";
+import { PastCalls } from "./components/PastCalls";
 import { MOCK, useCallSession } from "./lib/useCallSession";
 import { useVoiceSession } from "./lib/voice/useVoiceSession";
-import { useAdminRoute } from "./lib/route";
+import { useAdminRoute, useHistoryRoute } from "./lib/route";
 import { useSavedTheme } from "./lib/prefs";
 import type { StartOptions, VoiceRole, VoiceStartOptions } from "./lib/types";
 
 export default function App() {
   const adminPage = useAdminRoute();
+  const historyPage = useHistoryRoute();
   useSavedTheme();
   const session = useCallSession();
   const voice = useVoiceSession();
@@ -63,6 +65,11 @@ export default function App() {
   // Admin area (#/admin/*) renders over whatever is underneath; it never starts or ends a call.
   if (adminPage) {
     return <AdminRoute page={adminPage} />;
+  }
+
+  // Past Calls (#/history): the caller's own call history. Only over the start screen (never mid-call).
+  if (historyPage && !voiceActive && (state.status === "idle" || state.status === "error")) {
+    return <PastCalls />;
   }
 
   if (voiceActive) {

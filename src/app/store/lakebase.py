@@ -192,6 +192,18 @@ class LakebaseStore:
         )
         return dict(rec) if rec else None
 
+    async def list_calls(self, owner: str, limit: int = 50) -> list[dict[str, Any]]:
+        """The caller's calls, newest first, with per-call counts for the Past Calls list."""
+        rows = await self._pool.fetch(
+            "SELECT c.call_id, c.playbook, c.started_at AS started_at_ms, c.ended_at AS ended_at_ms, "
+            "c.customer_id, c.status, c.mode, c.owner, "
+            "(SELECT COUNT(*) FROM utterances u WHERE u.call_id = c.call_id) AS utterance_count, "
+            "(SELECT COUNT(*) FROM cards cd WHERE cd.call_id = c.call_id) AS card_count "
+            "FROM calls c WHERE c.owner=$1 ORDER BY c.started_at DESC NULLS LAST LIMIT $2",
+            owner, int(limit),
+        )
+        return [dict(r) for r in rows]
+
     async def end_call(self, call_id: str, ended_at_ms: int) -> None:
         await self._pool.execute("UPDATE calls SET ended_at=$2, status='ended' WHERE call_id=$1", call_id, ended_at_ms)
 

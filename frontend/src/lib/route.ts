@@ -16,6 +16,19 @@ export function adminHref(page: AdminPage): string {
   return `#/admin/${page}`;
 }
 
+/** The Past Calls history route (#/history). */
+export function useHistoryRoute(): boolean {
+  const [on, setOn] = useState<boolean>(() => window.location.hash.startsWith("#/history"));
+  useEffect(() => {
+    const onChange = () => setOn(window.location.hash.startsWith("#/history"));
+    window.addEventListener("hashchange", onChange);
+    return () => window.removeEventListener("hashchange", onChange);
+  }, []);
+  return on;
+}
+
+export const HISTORY_HREF = "#/history";
+
 /** Current admin page from the URL hash, or null outside the admin area. Re-renders on hash changes. */
 export function useAdminRoute(): AdminPage | null {
   const [page, setPage] = useState<AdminPage | null>(() => parseAdminRoute(window.location.hash));
