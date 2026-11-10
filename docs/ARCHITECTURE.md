@@ -10,8 +10,8 @@ target (`dev` = direct, `kafka` = kafka). The wire contract is in [`SPEC.md`](SP
 | Live state | Lakebase (utterances, enrichments, cards, feedback) | Lakebase (written by RTM for enrichments) |
 | History to Delta | **Zerobus Ingest** from the app (`src/app/history/zerobus.py`) | Kafka `utterances` and `cards` → `delta_history.py` (micro-batch, 5 s) |
 | Broker | none | Kafka (Redpanda Serverless, Confluent, or MSK) |
-| Compute | serverless jobs, Lakebase, GPU endpoints | the above, plus a classic RTM cluster and a classic history job |
-| Workspace | any (serverless OK) | classic compute required for RTM and the history job |
+| Compute | serverless jobs, Lakebase, GPU endpoints | the above, plus the RTM job and the history job (the bundle ships both on classic clusters; RTM itself is GA on serverless pipelines, see section 4) |
+| Workspace | any (serverless OK) | as shipped, classic compute for the RTM and history jobs |
 | Bundle target | `dev` (default) | `kafka` |
 
 Everything the app does per turn (perception, retrieval, decision, compose, guardrails) is identical in both.
@@ -145,12 +145,31 @@ deployed endpoint).
 - Sub-second Spark-side features are needed.
 
 **Costs and prerequisites of kafka:**
-- An always-on RTM classic cluster (2 × m5d.xlarge workers plus a driver on-demand) while the RTM job runs.
-  Autotermination does not stop an active stream. Cancel the run when no calls are live.
-- A broker (Redpanda Serverless, Confluent, or MSK).
-- A **classic** workspace. RTM requires classic compute (DBR 16.4+ for Kafka, 18.3+ for the Lakebase sink).
-  Serverless cannot run RTM.
+- A broker (Redpanda Serverless, Confluent, or MSK). RTM sources today are Kafka, Event Hubs (Kafka API), MSK and
+  Kinesis only. **Delta is not supported as an RTM source or sink**, and Zerobus is not yet an RTM source, so RTM
+  cannot sit behind the direct path's Zerobus history (docs: "Use real-time mode in Lakeflow pipelines", Nov 2026).
+- Compute: RTM is **GA in Spark Declarative Pipelines on classic or serverless** compute (continuous pipeline,
+  `spark.databricks.streaming.realTimeMode.enabled`, a `RealTime` update flow). The bundle's `kafka` target still
+  ships the original Structured Streaming job on an always-on classic cluster (2 × m5d.xlarge plus a driver,
+  on-demand); autotermination does not stop an active stream, so cancel the run when no calls are live. Porting it
+  to a serverless RTM pipeline is the planned next step for this path.
+- Lakebase is written through a ForEach sink today (a native Lakebase sink is on the RTM roadmap).
 - The Kafka secrets (`kafka_bootstrap`, `kafka_api_key`/`_secret` for jobs, `kafka_app_api_key`/`_secret` for the app).
+
+**Roadmap target (not available yet).** Databricks' "unified real-time data platform" shape is Zerobus Ingest →
+Spark Declarative Pipelines in RTM → Delta / Lakebase → Lakehouse//RT. Two roadmap items make that work for Sidekick
+without a broker: **Zerobus as an RTM source** (beta, coming) and a **native Lakebase sink** in pipelines. When both
+ship, the kafka path becomes: the app writes to Zerobus (as it does today), a serverless RTM pipeline does enrichment,
+objection and compliance detection, and writes live state to Lakebase and history to Delta. Choose it over direct for
+the same reasons as kafka above (volume, fan-out, heavier per-utterance models), without running a broker.
+
+**Analytics on Lakehouse//RT (Beta).** Lakehouse//RT is a real-time SQL warehouse: sub-second, high-concurrency,
+read-only ANSI SQL over Unity Catalog managed Delta tables, reached only through the Statement Execution API. The
+admin Insights page already uses that API, so it runs on a Real-Time warehouse by pointing `warehouse_id` at one.
+Requirements: the Lakehouse RT preview enabled in the workspace (Previews page, or the account team), a supported
+region, managed tables not in Unity Catalog default storage (this workspace's history tables are managed Delta in
+its own S3 bucket), no compliance security profile. It does not run Genie, jobs, AI functions or writes, so the
+talk-track job (`ai_query`) stays on serverless compute.
 
 ## 5. Cost and ops
 
