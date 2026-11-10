@@ -92,7 +92,11 @@ function UserBubble({ ex }: { ex: Exchange }) {
 
 function AgentBubble({ ex, label }: { ex: Exchange; label: string }) {
   const waiting = !ex.agent && !ex.done;
-  const cut = ex.interrupted;
+  const hasText = !!ex.agent;
+  // A real barge-in has words the user cut off. A turn that ended with NO words and no error is a failed turn
+  // (typically the voice model was cold / unreachable), not an interruption — don't mislabel it "cut off".
+  const cut = ex.interrupted && hasText;
+  const emptyFailure = ex.done && !hasText && !ex.error;
   return (
     <div className="flex justify-start">
       <div
@@ -108,6 +112,10 @@ function AgentBubble({ ex, label }: { ex: Exchange; label: string }) {
           <div className="flex items-center gap-1.5 py-1 text-[13px] text-[var(--color-muted)]">
             <span className="anim-blink size-1.5 rounded-full bg-violet-300" /> Thinking…
           </div>
+        ) : emptyFailure ? (
+          <p className="py-0.5 text-[13px] italic leading-relaxed text-[var(--color-muted)]">
+            No response — the voice model didn’t reply (it may still be warming up). Try again.
+          </p>
         ) : (
           <p className={`text-[14px] leading-relaxed ${cut ? "text-slate-300" : "text-slate-200"}`}>
             {ex.agent}
