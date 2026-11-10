@@ -52,7 +52,7 @@ def time_context(now: datetime | None = None) -> str:
     days = ", ".join(f"{d:%A} {d:%Y-%m-%d}" for d in (now + timedelta(days=i) for i in range(1, 8)))
     return (f"Current time (UTC): {now:%A %Y-%m-%dT%H:%MZ}. The next seven days: {days}. "
             "Resolve relative dates (tomorrow, next Tuesday) from this list. US Eastern is UTC-4 until the first "
-            "Sunday of November and UTC-5 after; give start_iso in the speaker's stated time zone.")
+            "Sunday of November and UTC-5 after. Write start_iso as the local clock time the speaker said, with that zone's offset, and do not convert it: 2pm Eastern on 2026-11-17 is 2026-11-17T14:00:00-05:00.")
 
 
 def assistant_messages(pb: Playbook, user_text: str, history: list[dict[str, str]], call_text: str,

@@ -129,6 +129,7 @@ def main() -> None:
         if meets:   # "next Tuesday": the weekday must survive the model's date arithmetic
             start = datetime.fromisoformat(meets[0]["params"]["start_iso"])
             checks["'next Tuesday' lands on a Tuesday"] = start.strftime("%A") == "Tuesday"
+            checks["'2pm Eastern' is 19:00 UTC"] = start.astimezone(timezone.utc).hour == 19
         final = c.get("/api/actions", params={"session_id": sid}).json()["actions"]
         notes["actions in session"] = ", ".join(f"{a.get('kind')}={a.get('status')}" for a in final)
     finally:

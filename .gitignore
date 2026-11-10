@@ -31,3 +31,4 @@ frontend/.vite/
 
 # Claude Code local state and agent worktrees (also keeps them out of bundle sync)
 .claude/
+.zerobus_principal_id
