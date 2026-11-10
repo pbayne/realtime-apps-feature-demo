@@ -234,6 +234,10 @@ class Settings(BaseSettings):
     # Call mode: a fast-model proposal pass on customer finals, at most one per interval per call (fail-soft).
     action_propose_interval_s: float = 5.0
     action_propose_timeout_s: float = 4.0
+    # Request C: auto-accept a suggestion card when the agent's spoken line covers the card's talk track.
+    # Conservative by default; set auto_accept_talk_track=False to require a manual Accept for every card.
+    auto_accept_talk_track: bool = True
+    talk_track_threshold: float = 0.6
     # update_record target: a Unity Catalog Delta table Sidekick updates through the SQL warehouse
     # (Statement Execution API, app service principal). Writes run on databricks_warehouse_id. With no warehouse
     # the action is in outbox mode: the exact MERGE is rendered and stored, nothing runs.

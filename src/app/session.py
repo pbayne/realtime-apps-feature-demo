@@ -46,6 +46,7 @@ from sidekick.decide import (
 from sidekick.perception import Perception, perceive
 from sidekick.playbooks import Playbook, PlaybookRegistry
 from sidekick.retrieval import Hit, Retriever
+from sidekick.talktrack import matches_talk_track
 from store.base import Store
 from stt.base import TranscriptEvent
 from stt.browser import BrowserPassthrough
@@ -129,6 +130,9 @@ class CallSession:
         self._browser: dict[str, BrowserPassthrough] = {}
         self._customer_recent: list[str] = []
         self._recent: list[str] = []   # both speakers, for the action-proposal pass (SPEC 12)
+        # Request C: open suggestion cards keyed by id -> {title, body}, so an agent line that follows the advice
+        # can auto-accept the card. Populated at card.done, removed when resolved (manually or by a match).
+        self._open_cards: dict[str, dict[str, str]] = {}
         self._cfg = GuardConfig(
             min_confidence=self.deps.settings.card_min_confidence,
             cooldown_turns=self.deps.settings.card_cooldown_turns,
@@ -393,6 +397,9 @@ class CallSession:
         # may commit to a follow-up (send paperwork, book a meeting, update the record). Keep a combined recent log.
         self._recent.append(f"{ev.speaker}: {ev.text}")
         self._maybe_propose_actions(ev.speaker, ev.text)
+        # Request C: an agent line that follows a suggestion auto-accepts that card (no manual click needed).
+        if ev.speaker == "agent":
+            self._auto_accept_talk_track(ev.text)
         self._history.emit("utterances", hs.utterance_row(utt))
         if not direct:
             await deps.bus.publish(self.settings.kafka_utterances_topic, call_id, {
@@ -672,6 +679,8 @@ class CallSession:
         card_done_ms = (time.monotonic() - timing.t_final) * 1000.0
         trace = {**trace, "compose": {"mode": result.mode, "error": result.error}, "card_path": path}
         hub.emit(self.call_id, {"type": "card.done", "card": card.to_wire()})
+        # Request C: remember this open card so a later agent line that follows the advice can auto-accept it.
+        self._open_cards[card.card_id] = {"title": card.title, "body": card.body}
         try:
             await self.deps.store.put_card(card, trace)
             self._history.emit("cards", hs.card_row(card, trace))
@@ -690,9 +699,34 @@ class CallSession:
         })
 
     # ---------------------------------------------------------- feedback
+    def _auto_accept_talk_track(self, agent_text: str) -> None:
+        """Request C: when the agent's spoken line covers an open card's talk track, auto-accept that card so the
+        rep does not have to click Accept for advice they already followed. Conservative (see talktrack.py); a
+        miss just leaves the card for a manual decision. Fires a background accept per matched card."""
+        if not self.settings.auto_accept_talk_track or self.ended or not agent_text.strip():
+            return
+        threshold = self.settings.talk_track_threshold
+        for card_id, card in list(self._open_cards.items()):
+            if matches_talk_track(agent_text, title=card["title"], body=card["body"], threshold=threshold):
+                del self._open_cards[card_id]
+                self.deps.hub.emit(self.call_id, {"type": "card.matched", "card_id": card_id,
+                                                  "reason": "talk_track", "said": agent_text[:200]})
+                self._spawn(self._record_auto_accept(card_id))
+
+    async def _record_auto_accept(self, card_id: str) -> None:
+        """Persist the auto-accept like a manual one, tagged source=talk_track so analytics can tell them apart."""
+        at_ms = now_ms()
+        try:
+            await self.deps.store.add_feedback(card_id, self.call_id, "accept", None, at_ms)
+        except Exception:  # noqa: BLE001 - best effort; the live card is already shown as accepted
+            log.exception("auto-accept feedback save failed call_id=%s card_id=%s", self.call_id, card_id)
+            return
+        self._history.emit("feedback", hs.feedback_row(card_id, self.call_id, "accept", None, at_ms))
+
     async def feedback(self, card_id: str, action: str, text: Optional[str]) -> None:
         if action not in ("accept", "reject", "edit"):
             raise ValueError("action must be accept|reject|edit")
+        self._open_cards.pop(card_id, None)   # resolved: no longer eligible for talk-track auto-accept
         if text is not None:
             cap_text(str(text), self.settings.max_text_bytes, "feedback text")
         at_ms = now_ms()

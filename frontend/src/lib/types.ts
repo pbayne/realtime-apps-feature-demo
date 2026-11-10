@@ -53,6 +53,7 @@ export type ServerEvent =
   | { type: "card.start"; card: Omit<Card, "body"> & { body?: undefined } }
   | { type: "card.delta"; card_id: string; delta: string }
   | { type: "card.done"; card: Card }
+  | { type: "card.matched"; card_id: string; reason: string; said?: string }
   | { type: "coverage"; items: CoverageItem[] }
   | {
       type: "metrics";

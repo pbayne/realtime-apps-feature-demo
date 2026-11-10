@@ -95,7 +95,7 @@ function CardItem({
   onResolve: Props["onResolve"];
   compact?: boolean;
 }) {
-  const { card, body, streaming, resolution, editedText } = view;
+  const { card, body, streaming, resolution, editedText, autoAccepted } = view;
   const meta = KIND_META[card.kind];
   const Icon = meta.Icon;
   const isCompliance = card.kind === "compliance";
@@ -222,6 +222,11 @@ function CardItem({
                 {resolution === "accepted" ? <Check className="size-3" /> : resolution === "edited" ? <Pencil className="size-3" /> : <X className="size-3" />}
                 {resolution === "accepted" ? "Accepted" : resolution === "edited" ? "Edited & sent" : "Dismissed"}
               </span>
+              {autoAccepted && (
+                <span className="chip chip-intent" title="You said this, so Sidekick marked it done automatically.">
+                  <Sparkles className="size-3" /> Auto · you said it
+                </span>
+              )}
               <button type="button" onClick={() => setCollapsed(true)} className="text-[11.5px] text-[var(--color-muted)] hover:text-slate-200">
                 collapse
               </button>

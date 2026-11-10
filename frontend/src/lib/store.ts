@@ -28,6 +28,8 @@ export interface CardView {
   streaming: boolean;
   resolution?: Resolution;
   editedText?: string;
+  /** Request C: resolved automatically because the agent's spoken line followed the card's talk track. */
+  autoAccepted?: boolean;
 }
 
 export interface MetricSample {
@@ -170,6 +172,16 @@ export function applyServerEvent(state: CallState, ev: ServerEvent, at: number):
         cardOrder: state.cardOrder.includes(card.card_id)
           ? state.cardOrder
           : [...state.cardOrder, card.card_id],
+      };
+    }
+
+    case "card.matched": {
+      // Request C: the agent's spoken line followed this card's talk track; mark it accepted automatically.
+      const cur = state.cards[ev.card_id];
+      if (!cur || cur.resolution) return state;
+      return {
+        ...state,
+        cards: { ...state.cards, [ev.card_id]: { ...cur, resolution: "accepted", autoAccepted: true } },
       };
     }
 
