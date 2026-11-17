@@ -1,159 +1,155 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Call sidekick — history tables for Zerobus Ingest (backbone=direct)
+# MAGIC # Call sidekick — history views over Lakebase Change Data Feed (backbone=direct)
 # MAGIC
-# MAGIC Creates the seven managed Delta tables the app writes through **Zerobus Ingest**
-# MAGIC (`src/app/history/zerobus.py`, SPEC section 3.7) and grants the app's service principal the
-# MAGIC privileges Zerobus needs. Idempotent. Serverless compute is fine: this notebook uses SQL only.
+# MAGIC History reaches UC Delta through **Lakebase Change Data Feed** (CDF), a managed Postgres->Delta
+# MAGIC mirror. Every INSERT/UPDATE/DELETE on the app's operational Lakebase tables (created by
+# MAGIC `src/notebooks/init.py`, which also sets `REPLICA IDENTITY FULL` on them) is captured from the
+# MAGIC write-ahead log and written to a Delta table named `lb_<table>_history` in the destination
+# MAGIC catalog/schema, batched and flushed ~15 s. There is **no** app-side history write any more
+# MAGIC (the old Zerobus Ingest sink is retired; `src/app/history/cdf.py` is a no-op sink).
 # MAGIC
-# MAGIC Zerobus requirements (Zerobus Ingest docs, https://docs.databricks.com/aws/en/ingestion/zerobus-ingest):
-# MAGIC - Target tables must already exist as UC managed Delta tables. Zerobus does not create them.
-# MAGIC - The ingest principal needs `USE CATALOG`, `USE SCHEMA`, and `MODIFY, SELECT` on each table
-# MAGIC   (ALL PRIVILEGES on the table also satisfies the zerobuswrite token request), plus the
-# MAGIC   Workspace access entitlement on the service principal.
-# MAGIC - Column types are restricted to STRING, INT, BIGINT, DOUBLE, BOOLEAN (the types the docs show).
-# MAGIC   JSON-valued columns are STRING. Epoch times are BIGINT milliseconds.
+# MAGIC Docs: https://docs.databricks.com/aws/en/oltp/projects/lakebase-cdf
 # MAGIC
-# MAGIC The column list must match `src/app/history/schema.py` (`TABLES`). `tests/app/test_history.py` checks it.
+# MAGIC This notebook does the Delta-side setup that is NOT part of starting the feed:
+# MAGIC   1. Creates the destination schema (idempotent).
+# MAGIC   2. Creates **silver current-state views** over each `lb_<table>_history` change feed:
+# MAGIC      the latest row per primary key by `_pg_lsn`, with deleted rows removed. Downstream
+# MAGIC      consumers (post_call_scoring.py, talk_track_insights.py) read these views, so they see
+# MAGIC      the same current-state shape the old Zerobus history tables had, not a raw change log.
+# MAGIC   3. Creates + seeds `crm_accounts` — NOT a CDF table; the app writes it with a parameterized
+# MAGIC      MERGE through the SQL warehouse, so it is created here.
 # MAGIC
-# MAGIC Tables are append-only. `calls` gets one row at start and one at end (latest `ended_at` wins).
+# MAGIC **Starting the feed itself is a one-time platform step** (not done here): a workspace admin
+# MAGIC enables the CDF preview, then in Lakebase Postgres -> Branch overview -> Lakebase CDF tab ->
+# MAGIC Start, source schema `public` of the `call-sidekick` project -> destination = this catalog/schema.
+# MAGIC Equivalent Postgres REST API: "Change Data Feed" in the Lakebase API guide. The views below
+# MAGIC are created `IF NOT EXISTS`-style with existence guards so this notebook is safe to run both
+# MAGIC before and after the feed has produced its `lb_*_history` tables.
+# MAGIC
+# MAGIC Keep the table/PK map in step with `src/app/history/schema.py` TABLES and the operational DDL
+# MAGIC in `src/notebooks/init.py`. `tests/app/test_history.py` checks it.
 
 # COMMAND ----------
 
 dbutils.widgets.text("uc_catalog", "main")
 dbutils.widgets.text("uc_schema", "call_sidekick")
-dbutils.widgets.text("zerobus_principal", "")   # service principal application id (UUID) = ZEROBUS_CLIENT_ID
+dbutils.widgets.text("cdf_prefix", "lb_")       # Lakebase CDF destination table prefix: lb_<table>_history
+dbutils.widgets.text("cdf_suffix", "_history")
 
 catalog = dbutils.widgets.get("uc_catalog").strip()
 schema = dbutils.widgets.get("uc_schema").strip()
-principal = dbutils.widgets.get("zerobus_principal").strip()
+cdf_prefix = dbutils.widgets.get("cdf_prefix").strip()
+cdf_suffix = dbutils.widgets.get("cdf_suffix").strip()
 for label, value in (("uc_catalog", catalog), ("uc_schema", schema)):
     if not value.replace("_", "").isalnum():
         raise ValueError(f"{label} must be a simple identifier, got {value!r}")
-if not principal:
-    raise ValueError("zerobus_principal is required: the service principal application id the app uses for Zerobus")
 
 # COMMAND ----------
 
-# Same table order and columns as src/app/history/schema.py TABLES.
-TABLE_DDL = [
-    """CREATE TABLE IF NOT EXISTS calls (
-      call_id STRING,
-      playbook STRING,
-      started_at BIGINT,
-      ended_at BIGINT,
-      customer_id STRING,
-      status STRING,
-      mode STRING,
-      script STRING,
-      owner STRING
-    ) USING DELTA""",
-    """CREATE TABLE IF NOT EXISTS utterances (
-      call_id STRING,
-      seq INT,
-      speaker STRING,
-      text STRING,
-      t_start_ms BIGINT,
-      t_end_ms BIGINT,
-      emitted_at_ms BIGINT,
-      playbook STRING
-    ) USING DELTA""",
-    """CREATE TABLE IF NOT EXISTS enrichments (
-      call_id STRING,
-      seq INT,
-      speaker STRING,
-      text STRING,
-      intent STRING,
-      sentiment DOUBLE,
-      risk_flags STRING,
-      objection STRING,
-      entities STRING,
-      methodology_hits STRING,
-      emitted_at_ms BIGINT,
-      enriched_at_ms BIGINT,
-      latency_ms BIGINT,
-      enrichment_source STRING
-    ) USING DELTA""",
-    """CREATE TABLE IF NOT EXISTS cards (
-      card_id STRING,
-      call_id STRING,
-      seq INT,
-      kind STRING,
-      title STRING,
-      body STRING,
-      confidence DOUBLE,
-      source_doc STRING,
-      source_clause STRING,
-      trigger STRING,
-      status STRING,
-      created_at_ms BIGINT,
-      trace STRING
-    ) USING DELTA""",
-    """CREATE TABLE IF NOT EXISTS feedback (
-      card_id STRING,
-      call_id STRING,
-      action STRING,
-      edited_text STRING,
-      at_ms BIGINT
-    ) USING DELTA""",
-    """CREATE TABLE IF NOT EXISTS voice_turns (
-      session_id STRING,
-      turn INT,
-      role STRING,
-      user_text STRING,
-      agent_text STRING,
-      interrupted BOOLEAN,
-      timing STRING,
-      created_at_ms BIGINT
-    ) USING DELTA""",
-    """CREATE TABLE IF NOT EXISTS voice_items (
-      item_id STRING,
-      session_id STRING,
-      turn INT,
-      kind STRING,
-      text STRING,
-      owner STRING,
-      due STRING,
-      source_doc STRING,
-      created_at_ms BIGINT
-    ) USING DELTA""",
-    """CREATE TABLE IF NOT EXISTS actions (
-      action_id STRING,
-      session_id STRING,
-      call_id STRING,
-      playbook STRING,
-      owner STRING,
-      kind STRING,
-      summary STRING,
-      params STRING,
-      status STRING,
-      proposed_by STRING,
-      created_at_ms BIGINT,
-      updated_at_ms BIGINT,
-      decided_at_ms BIGINT,
-      decided_by STRING,
-      result STRING,
-      error STRING
-    ) USING DELTA""",
-    """CREATE TABLE IF NOT EXISTS contacts (
-      contact_id STRING,
-      owner STRING,
-      first_name STRING,
-      last_name STRING,
-      email STRING,
-      phone STRING,
-      company STRING,
-      updated_at_ms BIGINT
-    ) USING DELTA""",
-    """CREATE TABLE IF NOT EXISTS enrollments (
-      enrollment_id STRING,
-      contact_id STRING,
-      program STRING,
-      owner STRING,
-      note STRING,
-      created_at_ms BIGINT
-    ) USING DELTA""",
-]
+# The history-contract tables and their primary keys (same set/order as src/app/history/schema.py TABLES).
+# A None PK means the source table is append-only with no natural single key (feedback): its current-state
+# view is simply every inserted row. For the rest, the current-state view keeps the latest row per PK.
+HISTORY_PKS = {
+    "calls": ["call_id"],
+    "utterances": ["call_id", "seq"],
+    "enrichments": ["call_id", "seq"],
+    "cards": ["card_id"],
+    "feedback": None,
+    "voice_turns": ["session_id", "turn"],
+    "voice_items": ["item_id"],
+    "actions": ["action_id"],
+    "contacts": ["contact_id"],
+    "enrollments": ["enrollment_id"],
+}
+
+# CDF system columns on every lb_<table>_history row (docs "Destination table schema"):
+#   _pg_change_type TEXT  insert | delete | update_preimage | update_postimage
+#   _pg_lsn BIGINT        Postgres Log Sequence Number (monotonic; the ordering key)
+#   _pg_xid INTEGER       transaction id
+#   _timestamp TIMESTAMP  change time
+CDF_SYS_COLS = {"_pg_change_type", "_pg_lsn", "_pg_xid", "_timestamp"}
+
+# COMMAND ----------
+
+# MAGIC %md ## 1. Destination schema
+
+# COMMAND ----------
+
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema}`")
+print(f"schema ready: {catalog}.{schema}")
+
+# COMMAND ----------
+
+# MAGIC %md ## 2. Silver current-state views over the CDF change feeds
+# MAGIC
+# MAGIC For a keyed table: keep the row with the greatest `_pg_lsn` per PK, then drop it if that latest
+# MAGIC change was a `delete`. `update_preimage` rows (the "before" image of an update) are excluded;
+# MAGIC `insert` and `update_postimage` are the live values. For the append-only `feedback` table we
+# MAGIC keep every non-delete change row (there are no updates in practice).
+# MAGIC
+# MAGIC The view name is the bare table name (`calls`, `utterances`, …) so downstream SQL is unchanged
+# MAGIC from the Zerobus era — only the source (now a CDF feed) differs.
+
+# COMMAND ----------
+
+def cdf_table(table):
+    return f"`{catalog}`.`{schema}`.`{cdf_prefix}{table}{cdf_suffix}`"
+
+
+def view_name(table):
+    return f"`{catalog}`.`{schema}`.`{table}`"
+
+
+def source_columns(fqtn):
+    """Non-system source columns of a CDF history table, as they exist right now."""
+    cols = [f.name for f in spark.table(fqtn).schema.fields]
+    return [c for c in cols if c not in CDF_SYS_COLS]
+
+
+created, skipped = [], []
+for table, pk in HISTORY_PKS.items():
+    src = cdf_table(table)
+    # The feed may not have produced this table yet (needs >= 1 row in the source). Guard so the
+    # notebook is safe to run before Start / before any rows exist.
+    if not spark.catalog.tableExists(f"{catalog}.{schema}.{cdf_prefix}{table}{cdf_suffix}"):
+        skipped.append(table)
+        continue
+    cols = source_columns(src)
+    col_list = ", ".join(f"`{c}`" for c in cols)
+    if pk is None:
+        # Append-only: every non-delete change row is a live row.
+        body = f"""
+            SELECT {col_list}
+            FROM {src}
+            WHERE _pg_change_type IN ('insert', 'update_postimage')
+        """
+    else:
+        part = ", ".join(f"`{c}`" for c in pk)
+        body = f"""
+            WITH ranked AS (
+              SELECT {col_list}, _pg_change_type,
+                     ROW_NUMBER() OVER (PARTITION BY {part} ORDER BY _pg_lsn DESC) AS _rn
+              FROM {src}
+              WHERE _pg_change_type IN ('insert', 'update_postimage', 'delete')
+            )
+            SELECT {col_list}
+            FROM ranked
+            WHERE _rn = 1 AND _pg_change_type <> 'delete'
+        """
+    spark.sql(f"CREATE OR REPLACE VIEW {view_name(table)} AS {body}")
+    created.append(table)
+
+print(f"current-state views created: {created}")
+if skipped:
+    print(f"skipped (no CDF feed table yet — run again after the feed is Started and has rows): {skipped}")
+
+# COMMAND ----------
+
+# MAGIC %md ## 3. crm_accounts (NOT a CDF table)
+# MAGIC The update_record action (SPEC 12) writes this via a parameterized MERGE through the SQL
+# MAGIC warehouse (Statement Execution API). It lives in Delta directly, so it is created and seeded
+# MAGIC here. Keep the columns in step with src/app/actions/records.py.
 
 # COMMAND ----------
 
@@ -161,20 +157,6 @@ def qualified(table):
     return f"{catalog}.{schema}.{table}"
 
 
-def qualify_ddl(ddl):
-    # ddl names bare tables; the schema is set here.
-    import re
-    return re.sub(r"CREATE TABLE IF NOT EXISTS (\w+)", lambda m: f"CREATE TABLE IF NOT EXISTS {qualified(m.group(1))}", ddl, count=1)
-
-
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}")
-for ddl in TABLE_DDL:
-    spark.sql(qualify_ddl(ddl))
-    print("ready:", ddl.split()[5])
-
-# CRM account record for the update_record action (SPEC 12). This table is NOT a Zerobus sink target: the app
-# writes it with a parameterized MERGE through the SQL warehouse (Statement Execution API), so it is created and
-# seeded here rather than listed in TABLE_DDL / schema.py. Keep the columns in step with src/app/actions/records.py.
 spark.sql(f"""CREATE TABLE IF NOT EXISTS {qualified('crm_accounts')} (
   account_id STRING,
   name STRING,
@@ -187,7 +169,6 @@ spark.sql(f"""CREATE TABLE IF NOT EXISTS {qualified('crm_accounts')} (
 ) USING DELTA""")
 print("ready: crm_accounts")
 
-# Seed a few demo accounts so update_record has something to MERGE in a demo (idempotent).
 DEMO_ACCOUNTS = [
     ("acct-northwind", "Northwind Traders", "Discovery", 180000.0, "patrick.bayne@databricks.com",
      "Send fee breakdown", "Prospect; evaluating managed portfolios."),
@@ -203,33 +184,17 @@ if spark.table(qualified("crm_accounts")).count() == 0:
     spark.createDataFrame(rows).write.format("delta").mode("append").saveAsTable(qualified("crm_accounts"))
     print(f"seeded {len(DEMO_ACCOUNTS)} demo accounts into crm_accounts")
 
-# Existing deployments: calls.owner was added later (SPEC 10). Delta has no ADD COLUMN IF NOT EXISTS, so check first.
-if "owner" not in [field.name for field in spark.table(qualified("calls")).schema.fields]:
-    spark.sql(f"ALTER TABLE {qualified('calls')} ADD COLUMNS (owner STRING)")
-    print("added column calls.owner")
+# COMMAND ----------
+
+# MAGIC %md ## 4. Verify
+# MAGIC Shows which current-state views resolved and their row counts. Views over feeds that have not
+# MAGIC produced data yet are listed under "pending" above and simply re-run later.
 
 # COMMAND ----------
 
-# MAGIC %md ## Grants for the Zerobus service principal
-# MAGIC The principal is a UUID, so it is backquoted. Re-running is harmless.
-
-# COMMAND ----------
-
-quoted = f"`{principal}`"
-spark.sql(f"GRANT USE CATALOG ON CATALOG `{catalog}` TO {quoted}")
-spark.sql(f"GRANT USE SCHEMA ON SCHEMA `{catalog}`.`{schema}` TO {quoted}")
-for table in [name for name in ("calls", "utterances", "enrichments", "cards", "feedback", "voice_turns", "voice_items",
-                                "actions", "contacts", "enrollments", "crm_accounts")]:
-    spark.sql(f"GRANT MODIFY, SELECT ON TABLE `{catalog}`.`{schema}`.`{table}` TO {quoted}")
-    print("granted MODIFY, SELECT on", table)
-
-# COMMAND ----------
-
-# MAGIC %md ## Verify
-
-# COMMAND ----------
-
-for table in ("calls", "utterances", "enrichments", "cards", "feedback", "voice_turns", "voice_items",
-               "actions", "contacts", "enrollments"):
-    n = len(spark.sql(f"DESCRIBE TABLE {qualified(table)}").collect())
-    print(f"{qualified(table)}: {n} rows in DESCRIBE")
+for table in created:
+    try:
+        n = spark.table(f"{catalog}.{schema}.{table}").count()
+        print(f"{catalog}.{schema}.{table}: {n} current rows")
+    except Exception as exc:  # noqa: BLE001 - verification only
+        print(f"{catalog}.{schema}.{table}: view exists, count failed ({exc})")

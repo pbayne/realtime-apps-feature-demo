@@ -34,7 +34,7 @@ resources:
 
     call_sidekick_init_history:
       name: call-sidekick-init-history
-      description: Creates the seven Zerobus history tables in UC and grants the ingest service principal MODIFY+SELECT. Idempotent. Run before the first app start (direct backbone).
+      description: Builds the silver current-state views over the Lakebase Change Data Feed (lb_*_history) and creates/seeds crm_accounts. Idempotent; guards feeds that do not exist yet. Run after CDF is Started on the Lakebase project (direct backbone).
       max_concurrent_runs: 1
       environments:
         - environment_key: default
@@ -48,36 +48,10 @@ resources:
             base_parameters:
               uc_catalog: ${var.catalog}
               uc_schema: ${var.uc_schema}
-              zerobus_principal: ${var.zerobus_principal}
 
-    call_sidekick_reconcile_history:
-      name: call-sidekick-reconcile-history
-      description: Lakebase (source of truth) -> Zerobus history Delta tables. MERGEs missing and changed rows by natural key, collapses Zerobus duplicates. Every 15 minutes, 48 h watermark. dedupe_existing and full_sync are one-off backfill switches (see README).
-      max_concurrent_runs: 1
-      schedule:
-        quartz_cron_expression: "0 0/15 * * * ?"
-        timezone_id: UTC
-        pause_status: UNPAUSED
-      environments:
-        - environment_key: default
-          spec:
-            environment_version: "6"
-      tasks:
-        - task_key: reconcile_history
-          environment_key: default
-          notebook_task:
-            notebook_path: ../src/notebooks/reconcile_history.py
-            base_parameters:
-              uc_catalog: ${var.catalog}
-              uc_schema: ${var.uc_schema}
-              source_mode: pg8000
-              secret_scope: ${var.secret_scope}
-              lakebase_catalog: ${var.lakebase_catalog}
-              lakebase_schema: public
-              watermark_hours: "48"
-              full_sync: "false"
-              dedupe_existing: "false"
-              grant_to: ${workspace.current_user.userName}
+    # (reconcile_history removed: Lakebase Change Data Feed mirrors Postgres->Delta with WAL
+    # completeness, so there is no best-effort gap to repair and no Zerobus duplicates to collapse.
+    # The old notebook src/notebooks/reconcile_history.py is retained for the legacy Zerobus path.)
 
     call_sidekick_kb_index:
       name: call-sidekick-kb-index

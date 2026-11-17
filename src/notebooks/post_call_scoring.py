@@ -7,11 +7,12 @@
 # MAGIC
 # MAGIC **What counts as "completed":** no utterance for `idle_minutes` (default 15),
 # MAGIC and not already present in `gold_call_scores`. Lakebase is the live store and
-# MAGIC this job reads the Delta bronze history instead, so it doesn't load OLTP.
+# MAGIC this job reads the Delta current-state history instead, so it doesn't load OLTP.
 # MAGIC
 # MAGIC Runs as a scheduled batch job on serverless compute. Not RTM, no streaming.
-# MAGIC Source tables: the Zerobus history tables `utterances` / `cards` (backbone=direct, the default job),
-# MAGIC or the Kafka bronze tables `bronze_utterances` / `bronze_cards` (backbone=kafka). Pass them as widgets.
+# MAGIC Source tables: the CDF current-state views `utterances` / `cards` (backbone=direct, built by
+# MAGIC init_history.py over the Lakebase Change Data Feed), or the Kafka bronze tables
+# MAGIC `bronze_utterances` / `bronze_cards` (backbone=kafka). Pass them as widgets.
 # MAGIC The output schema is a fixed JSON contract; the model is asked for JSON only,
 # MAGIC and unparseable outputs are kept with `parse_ok = false` so nothing is silently dropped.
 
@@ -23,8 +24,8 @@ dbutils.widgets.text("scoring_endpoint", "databricks-claude-sonnet-5-5")
 dbutils.widgets.text("idle_minutes", "15")
 dbutils.widgets.text("max_calls_per_run", "200")
 dbutils.widgets.text("playbook_filter", "")   # optional: scope to one playbook name
-dbutils.widgets.text("utterances_table", "utterances")  # direct: Zerobus history; kafka: bronze_utterances
-dbutils.widgets.text("cards_table", "cards")            # direct: Zerobus history; kafka: bronze_cards
+dbutils.widgets.text("utterances_table", "utterances")  # direct: CDF current-state view; kafka: bronze_utterances
+dbutils.widgets.text("cards_table", "cards")            # direct: CDF current-state view; kafka: bronze_cards
 
 catalog = dbutils.widgets.get("uc_catalog")
 schema = dbutils.widgets.get("uc_schema")

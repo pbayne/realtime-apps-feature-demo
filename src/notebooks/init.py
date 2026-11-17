@@ -309,6 +309,23 @@ TABLE_DDL = [
     """CREATE TRIGGER enrichments_notify
         AFTER INSERT OR UPDATE ON enrichments
         FOR EACH ROW EXECUTE FUNCTION notify_enrichment_ready()""",
+    # Lakebase Change Data Feed (backbone=direct history path): every INSERT/UPDATE/DELETE on these
+    # operational tables is mirrored to UC Delta as lb_<table>_history (~15 s flush). CDF requires
+    # REPLICA IDENTITY FULL so Postgres logs the full before/after row image to the WAL (not just the
+    # PK) for updates and deletes. Idempotent; harmless when CDF is not (yet) enabled on the project.
+    # The feed itself is started once at the platform level (Lakebase UI / Postgres REST API), not here;
+    # see src/notebooks/init_history.py and docs/ARCHITECTURE.md. Keep this list in step with
+    # src/app/history/schema.py TABLES.
+    "ALTER TABLE calls REPLICA IDENTITY FULL",
+    "ALTER TABLE utterances REPLICA IDENTITY FULL",
+    "ALTER TABLE enrichments REPLICA IDENTITY FULL",
+    "ALTER TABLE cards REPLICA IDENTITY FULL",
+    "ALTER TABLE feedback REPLICA IDENTITY FULL",
+    "ALTER TABLE voice_turns REPLICA IDENTITY FULL",
+    "ALTER TABLE voice_items REPLICA IDENTITY FULL",
+    "ALTER TABLE actions REPLICA IDENTITY FULL",
+    "ALTER TABLE contacts REPLICA IDENTITY FULL",
+    "ALTER TABLE enrollments REPLICA IDENTITY FULL",
 ]
 
 # Shared demo directory for the action executors (SPEC 12). Fictitious people on example.com; idempotent.

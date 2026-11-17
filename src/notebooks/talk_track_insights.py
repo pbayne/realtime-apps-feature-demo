@@ -2,7 +2,8 @@
 # MAGIC %md
 # MAGIC # Call sidekick: talk-track insights (Lakeflow job, serverless, daily)
 # MAGIC
-# MAGIC Reads the last `days` of call transcripts and the cards the sidekick showed (Zerobus history tables), asks
+# MAGIC Reads the last `days` of call transcripts and the cards the sidekick showed (the CDF current-state views
+# MAGIC `utterances` / `cards`, built by init_history.py over the Lakebase Change Data Feed), asks
 # MAGIC a model (`ai_query`) for recurring objections, responses that worked, knowledge-base gaps and coverage gaps,
 # MAGIC and appends the run to `talk_track_insights`. The admin insights page shows the latest run (MAX(run_id)).
 # MAGIC
@@ -21,8 +22,8 @@ dbutils.widgets.text("uc_schema", "call_sidekick")
 dbutils.widgets.text("scoring_endpoint", "databricks-claude-sonnet-5-5")
 dbutils.widgets.text("days", "7")
 dbutils.widgets.text("max_calls", "150")
-dbutils.widgets.text("utterances_table", "utterances")
-dbutils.widgets.text("cards_table", "cards")
+dbutils.widgets.text("utterances_table", "utterances")  # direct: CDF current-state view; kafka: bronze_utterances
+dbutils.widgets.text("cards_table", "cards")            # direct: CDF current-state view; kafka: bronze_cards
 
 import re
 from datetime import datetime, timezone

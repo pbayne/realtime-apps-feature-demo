@@ -5,7 +5,6 @@ import ast
 import asyncio
 import functools
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -241,35 +240,35 @@ def test_row_builders_emit_exactly_the_table_columns():
     assert json.loads(hs.to_record("actions", rows["actions"])["params"]) == {"to": ["x@y.co"]}
 
 
-def _init_history_ddl():
+def _init_history_pks():
+    """The HISTORY_PKS map the CDF view-builder notebook iterates (replaces the old TABLE_DDL)."""
     tree = ast.parse((ROOT / "src/notebooks/init_history.py").read_text(encoding="utf-8"))
     for node in tree.body:
-        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "TABLE_DDL" for t in node.targets):
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "HISTORY_PKS" for t in node.targets):
             return ast.literal_eval(node.value)
-    raise AssertionError("TABLE_DDL not found in init_history.py")
+    raise AssertionError("HISTORY_PKS not found in init_history.py")
 
 
-def test_init_history_creates_exactly_the_sink_tables_and_columns():
-    ddl = _init_history_ddl()
-    parsed = {}
-    for stmt in ddl:
-        m = re.match(r"CREATE TABLE IF NOT EXISTS (\w+) \((.*)\) USING DELTA\s*$", stmt.strip(), re.S)
-        assert m, stmt[:80]
-        cols = []
-        for part in m.group(2).split(","):
-            name, typ = part.split()
-            cols.append((name, typ))
-        parsed[m.group(1)] = cols
-    assert set(parsed) == set(hs.TABLES)
-    for table, cols in parsed.items():
-        assert cols == hs.TABLES[table], table
-        assert all(t in ("STRING", "INT", "BIGINT", "DOUBLE", "BOOLEAN") for _, t in cols), table
+def test_init_history_builds_current_state_views_for_exactly_the_history_tables():
+    """init_history.py (CDF path) must cover exactly the history-contract tables in schema.py TABLES,
+    so every Zerobus-era history table still resolves as a current-state view over its lb_*_history feed."""
+    pks = _init_history_pks()
+    assert set(pks) == set(hs.TABLES)
+    # Each keyed table's PK columns must be real columns of that table; feedback is append-only (None).
+    for table, pk in pks.items():
+        if pk is None:
+            continue
+        assert all(col in hs.column_names(table) for col in pk), table
 
 
-def test_init_history_grants_the_zerobus_principal_what_the_docs_require():
+def test_init_history_is_cdf_based_not_zerobus():
+    """The CDF rewrite drops the Zerobus service-principal grants and Delta table DDL; it builds views
+    over lb_<table>_history feeds instead. Guard against a regression to the old Zerobus notebook."""
     text = (ROOT / "src/notebooks/init_history.py").read_text(encoding="utf-8")
-    assert "GRANT USE CATALOG ON CATALOG" in text and "GRANT USE SCHEMA ON SCHEMA" in text
-    assert "GRANT MODIFY, SELECT ON TABLE" in text
+    assert "lb_" in text and "_history" in text and "REPLICA IDENTITY" in text or "replica identity" in text.lower()
+    assert "CREATE OR REPLACE VIEW" in text
+    assert "zerobus_principal" not in text, "CDF needs no Zerobus service principal"
+    assert "GRANT MODIFY, SELECT ON TABLE" not in text, "CDF needs no per-table MODIFY grants"
 
 
 # --------------------------------------------------------------- config
@@ -291,11 +290,33 @@ def test_kafka_backbone_rejects_zerobus_history():
 
 def test_effective_backends_per_backbone_and_mode():
     assert Settings(mode="local").effective_history == "memory"
-    assert Settings(mode="databricks").effective_history == "zerobus"
+    assert Settings(mode="databricks").effective_history == "cdf"
+    assert Settings(mode="databricks", history_backend="zerobus").effective_history == "zerobus"
     assert Settings(mode="databricks", history_backend="none").effective_history == "none"
     assert Settings(backbone="kafka", mode="local").effective_bus == "memory"
     assert Settings(backbone="kafka", mode="databricks").effective_bus == "kafka"
     assert Settings(backbone="kafka", mode="databricks").effective_history == "none"
+
+
+def test_direct_databricks_builds_the_cdf_noop_sink():
+    """backbone=direct + databricks resolves to the managed CDF path: build_history returns the no-op
+    sink (history is mirrored Postgres->Delta by Lakebase CDF, not written by the app)."""
+    from history import build_history
+    from history.cdf import CdfHistorySink
+
+    sink = build_history(Settings(mode="databricks"))
+    assert isinstance(sink, CdfHistorySink)
+    assert sink.emit("calls", {}) is False               # no app-side write under CDF
+    with pytest.raises(KeyError):
+        sink.emit("not_a_table", {})
+    stats = sink.stats()
+    assert stats["backend"] == "cdf" and stats["managed"] is True and stats["enabled"] is True
+    assert stats["written"] == 0 and stats["queue_depth"] == 0
+
+
+def test_kafka_backbone_rejects_cdf_history():
+    with pytest.raises(ValueError, match="direct-mode history path"):
+        Settings(backbone="kafka", history_backend="cdf")
 
 
 def test_direct_build_uses_null_bus_not_kafka():

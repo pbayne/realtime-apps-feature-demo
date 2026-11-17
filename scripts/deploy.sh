@@ -94,32 +94,19 @@ put_secret backbone "$backbone"
 put_secret history_catalog "$catalog"
 put_secret history_schema "$uc_schema"
 
-# --- 1a. Zerobus (direct backbone history) ---------------------------------
-if [[ "$backbone" == "direct" && "${SKIP_ZEROBUS:-0}" != "1" ]]; then
+# --- 1a. History (direct backbone = Lakebase Change Data Feed) --------------
+# CDF is a managed Postgres->Delta mirror: no service principal, no Zerobus secrets, no app-side
+# history write. The only history setup is (a) REPLICA IDENTITY FULL on the Lakebase tables (done by
+# the setup job via init.py) and (b) starting the feed once at the platform level (Lakebase UI /
+# Postgres REST API), which is not a bundle resource. init_history then builds the silver
+# current-state views over the lb_*_history feeds. Legacy Zerobus secrets are honoured if present
+# (HISTORY_BACKEND=zerobus) but are no longer required.
+if [[ "$backbone" == "direct" ]]; then
   [[ -n "${ZEROBUS_ENDPOINT:-}" ]] && put_secret zerobus_endpoint "$ZEROBUS_ENDPOINT"
   [[ -n "${ZEROBUS_CLIENT_ID:-}" ]] && put_secret zerobus_client_id "$ZEROBUS_CLIENT_ID"
   [[ -n "${ZEROBUS_CLIENT_SECRET:-}" ]] && put_secret zerobus_client_secret "$ZEROBUS_CLIENT_SECRET"
-  missing=()
-  for key in zerobus_endpoint zerobus_client_id zerobus_client_secret; do
-    have_secret "$key" || missing+=("$key")
-  done
-  if (( ${#missing[@]} > 0 )); then
-    cat >&2 <<EOM
-Missing Zerobus secrets in scope '$scope': ${missing[*]}
-Create a service principal with the Workspace access entitlement, then either export the values and rerun,
-or put them directly (values never go in git):
-  export ZEROBUS_ENDPOINT=<workspace-id>.zerobus.<region>.cloud.databricks.com
-  export ZEROBUS_CLIENT_ID=<application id>  ZEROBUS_CLIENT_SECRET=<oauth secret>
-  databricks secrets put-secret $scope zerobus_client_secret --profile $profile
-Set SKIP_ZEROBUS=1 to deploy without history.
-EOM
-    exit 1
-  fi
-  if [[ -z "${ZEROBUS_PRINCIPAL:-${ZEROBUS_CLIENT_ID:-}}" ]]; then
-    echo "ZEROBUS_PRINCIPAL (or ZEROBUS_CLIENT_ID) must be set: init_history grants the principal's MODIFY+SELECT" >&2
-    exit 2
-  fi
 fi
+# Kept for the init_history job parameter and the (now optional) legacy Zerobus path.
 zerobus_principal=${ZEROBUS_PRINCIPAL:-${ZEROBUS_CLIENT_ID:-}}
 
 # --- 1b. Kafka secrets (kafka backbone) or placeholders (direct) ----------
@@ -221,15 +208,16 @@ fi
 # --- 3. Setup: Lakebase role and tables (and Kafka topics in kafka mode) ---
 db bundle run call_sidekick_setup --target "$target"
 
-# --- 4. History tables and Zerobus grants (direct) -------------------------
-if [[ "$backbone" == "direct" && "${SKIP_ZEROBUS:-0}" != "1" ]]; then
-  db bundle run call_sidekick_init_history --target "$target"
-  # Lakebase -> Delta reconcile (the job is also scheduled every 15 min). Its Lakebase catalog is registered by the
-  # bundle (postgres_catalogs), so it runs after the bundle deploy above. Defaults only: the one-time backfill
-  # (dedupe_existing, full_sync) is a manual command, see README "Zerobus history".
-  # Best effort: it is a 15-minute scheduled job, so a failed first run must not block the app deploy.
-  db bundle run call_sidekick_reconcile_history --target "$target" \
-    || echo "WARNING: first reconcile_history run failed; the 15-minute schedule retries it (check the job run)." >&2
+# --- 4. History views over the Lakebase CDF feeds (direct) -----------------
+if [[ "$backbone" == "direct" ]]; then
+  # init_history builds the silver current-state views over the lb_*_history feeds and creates/seeds
+  # crm_accounts. It is idempotent and guards feeds that do not exist yet: on a first deploy, before
+  # Lakebase CDF has been Started on the project (a one-time platform step), no lb_*_history tables
+  # exist, so the view creation for those tables is skipped and reported as "pending" — re-run this
+  # job (or the whole deploy) once CDF is live and has mirrored at least one row. No reconcile job and
+  # no Zerobus grants: CDF is WAL-complete and managed, so there is nothing to dedupe or ingest.
+  db bundle run call_sidekick_init_history --target "$target" \
+    || echo "WARNING: init_history reported an error (often: CDF not yet Started, so no lb_*_history feeds). Re-run after enabling CDF." >&2
 fi
 
 # --- 5. GPU endpoints (opt-in, before the app deploy) ----------------------
@@ -272,8 +260,8 @@ fi
 cat <<EOM
 
 Deployment complete (backbone=$backbone, bundle target=$target).
-- Setup job, app, KB index finished. Post-call scoring is scheduled every 30 minutes (UTC). reconcile_history runs every 15 minutes (UTC).
-$(if [[ "$backbone" == "direct" ]]; then echo "- Direct backbone: no RTM cluster or Kafka job. History goes to Zerobus tables in $catalog.$uc_schema."; else echo "- Kafka backbone: RTM enrichment and Delta history are running (--no-wait). Requires a classic workspace."; fi)
+- Setup job, app, KB index finished. Post-call scoring is scheduled every 30 minutes (UTC).
+$(if [[ "$backbone" == "direct" ]]; then echo "- Direct backbone: history is Lakebase Change Data Feed (managed Postgres->Delta). If you have not yet Started CDF on the Lakebase project, do it now (Lakebase Postgres -> Branch overview -> Lakebase CDF -> Start; source schema public -> destination $catalog.$uc_schema), then re-run: db bundle run call_sidekick_init_history --target $target  to build the current-state views."; else echo "- Kafka backbone: RTM enrichment and Delta history are running (--no-wait). Requires a classic workspace."; fi)
 - The Postgres password is in secret scope '$scope' under lakebase_password. It is kept across deploys;
   set ROTATE_PG_PASSWORD=1 to rotate it (the setup job re-ALTERs the role and the app is restarted).
 EOM

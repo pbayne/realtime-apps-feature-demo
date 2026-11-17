@@ -2,7 +2,8 @@
 
 BACKBONE selects the data path (SPEC section 1 / docs/ARCHITECTURE.md):
   direct (default): no Kafka. Each final is enriched in-process; Lakebase holds live state;
-                    history goes to Delta through Zerobus Ingest (HistorySink).
+                    history reaches Delta through Lakebase Change Data Feed (a managed Postgres->Delta
+                    mirror; the app-side HistorySink is a no-op). Legacy: Zerobus Ingest (HISTORY_BACKEND=zerobus).
   kafka:            utterances go to Kafka for Spark Real-Time Mode (enrichment comes back through
                     Lakebase); history goes to Delta through the Kafka jobs.
 MODE=local swaps Kafka -> in-memory bus and Lakebase -> in-memory store.
@@ -76,9 +77,10 @@ class Settings(BaseSettings):
     # With backbone=direct the bus is always "none" (no Kafka client is created).
     bus_backend: Literal["auto", "memory", "kafka"] = "auto"
     store_backend: Literal["auto", "memory", "lakebase"] = "auto"
-    # HistorySink (SPEC section 3.7). auto: direct+databricks -> zerobus, direct+local -> memory,
-    # kafka -> none (history flows over Kafka to delta_history.py). Explicit values override.
-    history_backend: Literal["auto", "memory", "zerobus", "none"] = "auto"
+    # HistorySink (SPEC section 3.7). auto: direct+databricks -> cdf (Lakebase Change Data Feed, managed
+    # Postgres->Delta mirror), direct+local -> memory, kafka -> none (history flows over Kafka to
+    # delta_history.py). zerobus is the legacy direct-mode path, kept for back-compat. Explicit values override.
+    history_backend: Literal["auto", "memory", "cdf", "zerobus", "none"] = "auto"
 
     # --- models (SPEC section 6) ---
     llm_enabled: bool = True
@@ -288,9 +290,9 @@ class Settings(BaseSettings):
             raise ValueError("BACKBONE=direct does not use Kafka; set BACKBONE=kafka to use BUS_BACKEND=kafka")
         if self.backbone == "kafka" and self.kafka_security not in (None, *KAFKA_SECURITY_MODES):
             raise ValueError(f"KAFKA_SECURITY must be one of {KAFKA_SECURITY_MODES}, got {self.kafka_security!r}")
-        if self.backbone == "kafka" and self.history_backend == "zerobus":
-            raise ValueError("HISTORY_BACKEND=zerobus is the direct-mode history path; in kafka mode history "
-                             "flows over Kafka to delta_history.py (use auto or none)")
+        if self.backbone == "kafka" and self.history_backend in ("zerobus", "cdf"):
+            raise ValueError(f"HISTORY_BACKEND={self.history_backend} is a direct-mode history path; in kafka "
+                             "mode history flows over Kafka to delta_history.py (use auto or none)")
         return self
 
     @property
@@ -311,7 +313,7 @@ class Settings(BaseSettings):
             return self.history_backend
         if self.backbone == "kafka":
             return "none"
-        return "memory" if self.mode == "local" else "zerobus"
+        return "memory" if self.mode == "local" else "cdf"
 
     @property
     def effective_store(self) -> str:

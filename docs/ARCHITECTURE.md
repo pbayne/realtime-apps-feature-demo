@@ -8,7 +8,7 @@ target (`dev` = direct, `kafka` = kafka). The wire contract is in [`SPEC.md`](SP
 |---|---|---|
 | Enrichment | in process, `src/app/enrich/direct.py` (same rules as RTM) | Spark Real-Time Mode job reads Kafka, writes Lakebase |
 | Live state | Lakebase (utterances, enrichments, cards, feedback) | Lakebase (written by RTM for enrichments) |
-| History to Delta | **Zerobus Ingest** from the app (`src/app/history/zerobus.py`) | Kafka `utterances` and `cards` → `delta_history.py` (micro-batch, 5 s) |
+| History to Delta | **Lakebase Change Data Feed** (managed Postgres→Delta CDC; app-side sink is a no-op, `src/app/history/cdf.py`) | Kafka `utterances` and `cards` → `delta_history.py` (micro-batch, 5 s) |
 | Broker | none | Kafka (Redpanda Serverless, Confluent, or MSK) |
 | Compute | serverless jobs, Lakebase, GPU endpoints | the above, plus the RTM job and the history job (the bundle ships both on classic clusters; RTM itself is GA on serverless pipelines, see section 4) |
 | Workspace | any (serverless OK) | as shipped, classic compute for the RTM and history jobs |
@@ -30,11 +30,13 @@ Only the path from a final utterance to enrichment, and the path to history, cha
                       │ 3. customer final: perception (haiku, budget 2.5 s) + KB retrieval (in-app gte embeddings; Vector Search opt-in)
                       │ 4. decide (candidates → rank → guardrails), compose (sonnet, streamed)
                       │ 5. card.start / card.delta / card.done over WS  ─► UI
-                      │ 6. HistorySink.emit()  (sync, bounded queue, never blocks)
-                      │        └─ background flusher ─► Zerobus Ingest ─────────────►  UC Delta
-                      │                                                               calls, utterances, enrichments,
-                      │                                                               cards, feedback, voice_turns,
-                      │                                                               voice_items  (init_history.py)
+                      │ 6. (no app history write)
+                      │        └─ Lakebase Change Data Feed mirrors every Postgres change ─────────►  UC Delta
+                      │                                                               lb_calls_history, lb_utterances_history,
+                      │                                                               lb_enrichments_history, lb_cards_history,
+                      │                                                               lb_feedback_history, lb_voice_turns_history,
+                      │                                                               lb_voice_items_history (+ silver current-state
+                      │                                                               views, init_history.py)
                       └─ voice mode: Parakeet STT, Claude (haiku), Kokoro TTS (same app)
 ```
 
