@@ -1,0 +1,9 @@
+{
+  "app": "call-sidekick",
+  "gpu_endpoints": ["sidekick-parakeet", "sidekick-kokoro"],
+  "register_jobs": ["call_sidekick_parakeet_register", "call_sidekick_kokoro_register"],
+  "bundle_target": "dev",
+  "warmup": "scripts/warmup_voice.py",
+  "lakebase_project": "call-sidekick",
+  "lakebase_suspend": false
+}

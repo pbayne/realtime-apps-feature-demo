@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # sidekick — command-line shortcuts for the deployed Sidekick app.
 #
+#   sidekick up        bring the app fully online for a demo: (re)create GPU endpoints, start the app, warm them
+#   sidekick down      MONEY SAVER: stop the app and DELETE the GPU endpoints so they stop billing (UP rebuilds them)
+#   sidekick cost      show what is currently billing (app state + which GPU endpoints exist)
 #   sidekick on        demo mode: GPU voice endpoints always-on (no cold start; they bill while on) — ~8 min
 #   sidekick off       back to scale-to-zero (saves cost; next voice turn after idle may wait 2-6 min) — ~7 min
 #   sidekick status    endpoint readiness + scale-to-zero setting
@@ -10,6 +13,9 @@
 #   sidekick test      end-to-end voice check (speaks into the app, saves the spoken reply, plays it)
 #   sidekick logs      recent app logs
 #   sidekick deploy    redeploy (scripts/deploy.sh)
+#
+# on/off only flip GPU scale-to-zero (endpoints keep existing). up/down are the real lifecycle:
+# down DELETES the GPU endpoints (true cost stop); up re-creates them from the register jobs.
 #
 # Env: SIDEKICK_PROFILE (default realtime-call-sidekick), SIDEKICK_APP (default call-sidekick).
 # Install: ln -s <repo>/scripts/sidekick ~/.local/bin/sidekick
@@ -30,6 +36,9 @@ app_url() { databricks apps get "$app" --profile "$profile" -o json | "$py" -c "
 
 cmd=${1:-help}
 case "$cmd" in
+  up)     exec "$py" "$repo/scripts/lifecycle.py" up --profile "$profile" ;;
+  down)   shift; exec "$py" "$repo/scripts/lifecycle.py" down --profile "$profile" "$@" ;;
+  cost)   exec "$py" "$repo/scripts/lifecycle.py" status --profile "$profile" ;;
   on)     echo "Demo mode ON: voice GPUs always-on (billing continuously until 'sidekick off'). ~8 minutes…"
           exec "$py" "$repo/scripts/demo_mode.py" on --profile "$profile" ;;
   off)    echo "Demo mode OFF: back to scale-to-zero. ~7 minutes…"
@@ -55,6 +64,6 @@ PY
           "$py" "$repo/scripts/voice_smoke.py" --profile "$profile" --out "$out" && afplay "$out" ;;
   logs)   databricks apps logs "$app" --profile "$profile" --tail-lines "${2:-80}" ;;
   deploy) shift; cd "$repo" && exec scripts/deploy.sh "$profile" "$@" ;;
-  help|-h|--help) sed -n '2,15p' "$src" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,21p' "$src" | sed 's/^# \{0,1\}//' ;;
   *) echo "sidekick: unknown command '$cmd' (try: sidekick help)" >&2; exit 2 ;;
 esac
