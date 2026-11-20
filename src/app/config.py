@@ -87,9 +87,14 @@ class Settings(BaseSettings):
     fast_model: str = "databricks-claude-haiku-5-5"
     smart_model: str = "databricks-claude-sonnet-5-5"
     embed_model: str = "databricks-gte-large-en"
-    # Voice backend: "endpoints" = GPU serving endpoints (Parakeet STT + Kokoro TTS, SPEC 3.3);
-    # "moonshine" = in-process on-device Moonshine STT+TTS (no GPU endpoints, no artifact uploads).
-    voice_backend: Literal["endpoints", "moonshine"] = "endpoints"
+    # Voice backend — two tiers:
+    #   "moonshine" (DEFAULT, recommended): in-process on-device Moonshine STT + Phonon TTS. No GPU
+    #     endpoints, no artifact uploads, no idle cost. STT ~0.7s / first audio ~2.5s on App CPU.
+    #   "endpoints" (HIGH QUALITY, opt-in): the A10 GPU serving endpoints (Parakeet STT + Kokoro TTS,
+    #     SPEC 3.3). Higher-fidelity TTS voice; costs A10 time. The endpoints are scale-to-zero, so they
+    #     only bill when warmed — run `scripts/sidekick on <profile>` before a premium demo to avoid a
+    #     cold start, and `scripts/sidekick off <profile>` after. Set VOICE_BACKEND=endpoints to select.
+    voice_backend: Literal["endpoints", "moonshine"] = "moonshine"
     stt_endpoint: str = "sidekick-parakeet"  # Custom LLM Serving audio endpoint (register_parakeet.py)
     # parakeet = multipart /audio/transcriptions (SPEC 3.3). whisper_json = {"inputs": [base64 WAV]} on
     # /invocations, the contract of the Databricks-hosted system.ai whisper endpoint (e2-demo shared-whisper).

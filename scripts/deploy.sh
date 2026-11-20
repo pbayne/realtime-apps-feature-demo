@@ -63,8 +63,9 @@ case "$backbone" in
 esac
 scope=${SIDEKICK_SCOPE:-call-sidekick}
 
-# Voice backend (resolved early: app_config needs it). endpoints (default) | moonshine.
-voice_backend=${VOICE_BACKEND:-endpoints}
+# Voice backend tier (resolved early: app_config needs it). moonshine (DEFAULT: in-process, no GPU) |
+# endpoints (HIGH QUALITY: A10 Parakeet+Kokoro). Override with VOICE_BACKEND=endpoints for a premium demo.
+voice_backend=${VOICE_BACKEND:-moonshine}
 case "$voice_backend" in endpoints|moonshine) ;; *) echo "VOICE_BACKEND must be endpoints or moonshine" >&2; exit 2 ;; esac
 
 case "$kafka_security" in

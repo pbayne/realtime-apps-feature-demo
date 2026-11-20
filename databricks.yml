@@ -108,8 +108,8 @@ variables:
     description: Chat model for voice mode (SPEC 9.4). Fastest first token measured on e2-demo (docs/ARCHITECTURE.md); re-measure in region.
     default: databricks-claude-haiku-4-5
   voice_backend:
-    description: "Voice STT/TTS backend: endpoints (GPU Parakeet+Kokoro) | moonshine (in-process on-device, no GPU endpoints). deploy.sh sets this and, in moonshine mode, repoints parakeet_endpoint/kokoro_endpoint at an existing endpoint so the app binding resolves."
-    default: endpoints
+    description: "Voice STT/TTS tier: moonshine (DEFAULT — in-process on-device, no GPU, no idle cost) | endpoints (HIGH QUALITY — A10 GPU Parakeet+Kokoro, scale-to-zero so bills only when warmed). deploy.sh sets this; in moonshine mode it repoints parakeet_endpoint/kokoro_endpoint at an existing endpoint so the app binding resolves."
+    default: moonshine
   fast_model:
     description: Fast LLM serving endpoint for perception (SPEC FAST_MODEL).
     default: databricks-claude-haiku-5-5

@@ -10,4 +10,8 @@ if str(APP_DIR) not in sys.path:
 
 os.environ.setdefault("MODE", "local")
 os.environ.setdefault("LLM_ENABLED", "false")
+# Tests use the fake STT/TTS endpoint stand-ins (the long-standing default); they must not pull in the
+# in-process Moonshine models even though "moonshine" is now the production default. A test that wants the
+# moonshine path constructs Settings(voice_backend="moonshine") explicitly.
+os.environ.setdefault("VOICE_BACKEND", "endpoints")
 os.environ.pop("DATABRICKS_CONFIG_PROFILE", None)
