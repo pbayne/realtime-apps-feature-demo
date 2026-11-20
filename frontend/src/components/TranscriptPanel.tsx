@@ -105,11 +105,11 @@ function Bubble({ u, enrich }: { u: UtteranceView; enrich?: CallState["enrich"][
       <div className={`max-w-[84%] ${isAgent ? "items-end text-right" : ""}`}>
         <div className={`mb-1 flex items-center gap-2 text-[11px] text-[var(--color-muted)] ${isAgent ? "justify-end" : ""}`}>
           <span className="font-semibold">{s.label}</span>
-          {!u.final && <span className="font-medium uppercase tracking-wider text-[11px] text-slate-400">listening</span>}
+          {!u.final && <span className="font-medium uppercase tracking-wider text-[11px]" style={{ color: "var(--c-info)" }}>listening</span>}
         </div>
         <div
           className={`rounded-2xl border px-3.5 py-2.5 text-left text-[14px] leading-relaxed transition-colors ${
-            u.final ? `${s.bubble} text-slate-100` : "border-dashed border-[var(--color-line)] bg-transparent text-slate-400"
+            u.final ? `${s.bubble} text-slate-100` : "bubble-live border-dashed text-slate-200"
           }`}
         >
           <span className={u.final ? "" : "italic"}>{u.text}</span>

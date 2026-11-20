@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Awaitable, Callable, Optional
 
-from actions.proposals import parse_proposals
+from actions.proposals import parse_proposals, propose_for_call
 from config import Settings
 from enrich.rules import Rules, load_rules
 from history import schema as hs
@@ -794,11 +794,23 @@ class VoiceSession:
         for item in rec.items:
             await self._persist_item(item)
             self._emit({"type": "item", "turn": rec.turn, "item": _wire_item(item)})
-        if rec.proposals and self.deps.actions is not None and self.owner:
+        proposals = rec.proposals
+        if not proposals and self.role == "assistant" and rec.user_text and self.deps.actions is not None \
+                and self.owner and self.settings.voice_action_proposal_pass:
+            # The main voice reply does not always emit the inline <<ACTIONS>> block reliably (model
+            # adherence varies). Fall back to the same dedicated fast-model pass the call console uses, over
+            # the rep's spoken turn, so actions surface from real speech regardless. Fail-soft.
+            recent = [f"{m['role']}: {m['content']}" for m in self.history[-6:]]
+            proposals = await propose_for_call(
+                self.deps.llm, self.settings.fast_model, playbook_title=self.playbook.title,
+                programs=self.playbook.programs, speaker="agent", speaker_text=rec.user_text,
+                recent=recent, timeout_s=self.settings.action_propose_timeout_s,
+            )
+        if proposals and self.deps.actions is not None and self.owner:
             # SPEC 12: proposals are stored as `proposed` actions and shown for approval. Nothing runs here.
             try:
                 await self.deps.actions.propose(owner=self.owner, playbook=self.playbook.name,
-                                                session_id=self.session_id, proposals=rec.proposals)
+                                                session_id=self.session_id, proposals=proposals)
             except Exception:  # noqa: BLE001 - a bad proposal never breaks the turn
                 log.exception("action proposal failed session_id=%s", self.session_id)
         # Demo autonomy: when the rep's spoken turn covers a proposed action, auto-approve and run it (under the

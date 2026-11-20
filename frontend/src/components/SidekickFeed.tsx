@@ -23,11 +23,14 @@ export function SidekickFeed({ state, onResolve }: Props) {
   const live = state.status === "live" || state.status === "connecting" || state.status === "reconnecting";
 
   return (
-    <section className="panel flex h-full min-h-0 flex-col overflow-hidden">
+    <section className="panel panel-hero flex h-full min-h-0 flex-col overflow-hidden">
       <header className="flex items-center justify-between border-b border-[var(--color-line)] px-4 py-3">
         <div>
-          <h2 className="flex items-center gap-2 text-[14px] font-semibold">
-            <Sparkles className="size-4 text-sky-300" /> Sidekick feed
+          <h2 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight">
+            <span className="grid size-6 place-items-center rounded-lg" style={{ background: "color-mix(in srgb, var(--c-info-base) 16%, transparent)", color: "var(--c-info)" }}>
+              <Sparkles className="size-3.5" />
+            </span>
+            Sidekick feed
           </h2>
           <p className="text-[11.5px] text-[var(--color-muted)]">
             {all.length === 0 ? "Silent until there is something grounded to say" : `${all.length} suggestion${all.length === 1 ? "" : "s"} this call`}

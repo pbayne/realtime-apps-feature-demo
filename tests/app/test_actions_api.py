@@ -174,3 +174,40 @@ def test_auto_accept_actions_runs_proposed_action_from_speech(monkeypatch):
         snap = client.get(f"/api/voice/sessions/{sid}").json()
         assert snap["actions"] and snap["actions"][0]["status"] == "outboxed"
         assert snap["actions"][0]["decided_by"] == "local"
+
+
+def test_voice_action_proposal_pass_surfaces_action_without_inline_block(monkeypatch):
+    """When the main voice reply omits the inline <<ACTIONS>> block, the dedicated fast-model proposal pass
+    still surfaces the action from the rep's spoken turn (reliability fix for real-model adherence)."""
+    settings = Settings(mode="local", llm_enabled=True, retrieval_backend="keyword", debounce_ms=100,
+                        action_safety_lock=True, voice_action_proposal_pass=True, auto_accept_actions=False)
+    # No <<ACTIONS>> in the reply stream — only a spoken reply and an empty items array.
+    llm = FakeVoiceLlm(["I'll take care of that. ", "<<ITEMS>>", "[]"])
+    llm.action_proposals = PROPOSAL  # the fast-model pass returns the send_email proposal
+
+    def factory(s):
+        svc = Services(settings, llm=llm)
+        svc.voice_deps.tts = FakeTts()
+        svc.voice_deps.stt = FakeStt("send Dana the fee breakdown")
+        return svc
+
+    monkeypatch.setattr(main, "Services", factory)
+    monkeypatch.setattr(main, "get_settings", lambda: settings)
+    with TestClient(main.app) as client:
+        sid = _voice_session(client)
+        with client.websocket_connect(f"/ws/voice/{sid}") as ws:
+            assert ws.receive_json()["type"] == "hello"
+            ws.send_json({"type": "text", "text": "Please send Dana the fee breakdown"})
+            proposed = None
+            for _ in range(120):
+                ev = ws.receive_json()
+                if ev["type"] == "action":
+                    proposed = ev["action"]
+                    break
+                if ev["type"] == "turn_done" and proposed is None:
+                    # proposals are stored at finish; give the post-turn events a few more reads
+                    continue
+            assert proposed is not None, "expected an action proposed by the fallback pass"
+            assert proposed["kind"] == "send_email" and proposed["status"] == "proposed"
+        snap = client.get(f"/api/voice/sessions/{sid}").json()
+        assert snap["actions"] and snap["actions"][0]["kind"] == "send_email"

@@ -2,6 +2,8 @@
 // on a timeline so the console can be developed and demoed without the backend.
 import type { Card, CardKind, ClientMessage, CoverageItem, ServerEvent, Speaker } from "./types";
 import type { CallConnection, CallHandlers } from "./connection";
+import { type ActionView, DEFAULT_REMINDERS, localDateTimeToIso, summaryOf } from "./actions";
+import type { ActionKind } from "./actions";
 
 interface Enr {
   intent?: string;
@@ -18,7 +20,15 @@ interface Turn {
   covers?: string[];
   /** Cards the sidekick emits right after this customer turn. */
   cards?: MockCard[];
+  /** Implied follow-up actions the sidekick proposes after this turn (await your approval). */
+  actions?: MockAction[];
   pauseAfterMs?: number;
+}
+
+/** An implied follow-up the sidekick proposes from the conversation (SPEC 12). */
+interface MockAction {
+  kind: ActionKind;
+  params: Record<string, unknown>;
 }
 
 interface MockCard {
@@ -114,6 +124,15 @@ const TURNS: Turn[] = [
         trigger: "missing:assets.401k_status",
       },
     ],
+    actions: [
+      {
+        kind: "update_record",
+        params: {
+          account_id: "AC-10231",
+          fields: { next_step: "Roll old 401k into managed IRA", funds_in: "401k rollover (~$180k)" },
+        },
+      },
+    ],
     pauseAfterMs: 1700,
   },
   {
@@ -153,6 +172,18 @@ const TURNS: Turn[] = [
         source_doc: "kb/fee_objections.md",
         source_clause: "2.1 Reframe fee as behavioural coaching",
         trigger: "objection:fees",
+      },
+    ],
+    actions: [
+      {
+        kind: "send_email",
+        params: {
+          to: ["dana.whitfield@example.com"],
+          cc: [],
+          subject: "Your fee breakdown, net of costs",
+          body_text:
+            "Hi Dana,\n\nAs promised, here is the fee breakdown net of costs, alongside what the plan is designed to protect against. Happy to walk through it whenever suits.\n\nBest,\nPatrick",
+        },
       },
     ],
     pauseAfterMs: 1600,
@@ -211,6 +242,20 @@ const TURNS: Turn[] = [
         trigger: "objection:think_about_it",
       },
     ],
+    actions: [
+      {
+        kind: "create_meeting",
+        params: {
+          title: "Joint follow-up: Dana & Mike",
+          attendees: ["dana.whitfield@example.com", "mike.whitfield@example.com"],
+          start_iso: tomorrowAt("14:00"),
+          duration_min: 20,
+          location: "Zoom",
+          description: "Walk through the net-of-fee comparison together; agree next steps.",
+          reminders: DEFAULT_REMINDERS,
+        },
+      },
+    ],
     pauseAfterMs: 1400,
   },
   {
@@ -224,8 +269,40 @@ const TURNS: Turn[] = [
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+// Tomorrow at a given local time, as an ISO string (meetings are proposed for the next day).
+function tomorrowAt(time: string): string {
+  const d = new Date(Date.now() + 86_400_000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return localDateTimeToIso(date, time);
+}
+
 function rnd(lo: number, hi: number) {
   return Math.round(lo + Math.random() * (hi - lo));
+}
+
+let mockActionSeq = 0;
+
+/** Build a full proposed ActionView (outbox-safe) from a conversation-implied follow-up. */
+function buildAction(a: MockAction, callId: string): ActionView {
+  const now = Date.now();
+  return {
+    action_id: `mock-call-action-${++mockActionSeq}-${now.toString(36)}`,
+    session_id: null,
+    call_id: callId,
+    owner: "mock",
+    kind: a.kind,
+    params: a.params,
+    status: "proposed",
+    summary: summaryOf(a.kind, a.params),
+    proposed_by: "model",
+    created_at_ms: now,
+    updated_at_ms: now,
+    decided_at_ms: null,
+    error: null,
+    result: null,
+    safety: { lock: true, safe_recipient: "patrick.bayne@databricks.com", mode: "outbox" },
+  };
 }
 
 /**
@@ -328,6 +405,13 @@ export function openMockCall(callId: string, speed: number, h: CallHandlers): Ca
       for (const c of turn.cards) {
         if (cancelled) return;
         await streamCard(c, mySeq);
+      }
+    }
+    if (turn.actions) {
+      for (const a of turn.actions) {
+        if (cancelled) return;
+        await wait(rnd(500, 850));
+        emit({ type: "action", action: buildAction(a, callId) });
       }
     }
     if (turn.pauseAfterMs) await wait(turn.pauseAfterMs);

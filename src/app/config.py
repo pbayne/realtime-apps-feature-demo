@@ -244,6 +244,10 @@ class Settings(BaseSettings):
     # Call mode: a fast-model proposal pass on customer finals, at most one per interval per call (fail-soft).
     action_propose_interval_s: float = 5.0
     action_propose_timeout_s: float = 4.0
+    # Voice mode: run the same dedicated fast-model action-proposal pass (actions/proposals.propose_for_call)
+    # over the rep's spoken turn when the main voice reply did not emit an inline <<ACTIONS>> block. Makes
+    # actions surface reliably from speech instead of depending on the main model's protocol adherence.
+    voice_action_proposal_pass: bool = True
     # Request C: auto-accept a suggestion card when the agent's spoken line covers the card's talk track.
     # Conservative by default; set auto_accept_talk_track=False to require a manual Accept for every card.
     auto_accept_talk_track: bool = True

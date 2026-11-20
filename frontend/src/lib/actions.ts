@@ -1,7 +1,10 @@
 // Human-in-the-loop actions (SPEC 12, v0.7): wire types, the form <-> params mapping, the REST client, and the
 // ?mock=1 simulation. The server is the source of truth; the UI only proposes, edits, approves or rejects.
 import { useEffect, useState } from "react";
-import { MOCK } from "./useCallSession";
+
+// Read mock mode from the URL directly (not via useCallSession) so this leaf module
+// stays import-cycle free: mock.ts imports helpers from here, and useCallSession imports mock.ts.
+const MOCK = new URLSearchParams(window.location.search).get("mock") === "1";
 
 export type ActionKind = "send_email" | "create_meeting" | "update_contact" | "enroll" | "update_record";
 export type ActionStatus = "proposed" | "executing" | "done" | "outboxed" | "failed" | "rejected" | "undone";

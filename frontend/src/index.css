@@ -241,6 +241,21 @@
     -webkit-backdrop-filter: var(--panel-blur);
     box-shadow: var(--panel-shadow);
   }
+  /* Hero panel: the Sidekick feed is the primary surface of the console, so it
+   * gets a faint accent ring + lift to anchor the eye above the peer columns.
+   * Token-driven, so every theme keeps its own accent. */
+  .panel-hero {
+    border-color: color-mix(in srgb, var(--c-info-base) 22%, var(--color-line));
+    box-shadow:
+      var(--panel-shadow),
+      0 14px 40px -30px color-mix(in srgb, var(--c-info-base) 45%, transparent);
+  }
+  /* Live partial turn: a faint tinted surface so the in-progress bubble reads as
+   * active instead of fading into the background. */
+  .bubble-live {
+    background: color-mix(in srgb, var(--c-info-base) 8%, transparent);
+    border-color: color-mix(in srgb, var(--c-info-base) 32%, transparent);
+  }
   .chip {
     display: inline-flex;
     align-items: center;

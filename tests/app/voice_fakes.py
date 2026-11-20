@@ -70,6 +70,9 @@ class FakeVoiceLlm:
         self.streams: list[FakeStream] = []
         self.closed_streams = 0
         self.voice_calls: list[list[dict[str, str]]] = []
+        # Action-proposal pass (actions/proposals.propose_for_call): returned verbatim as the JSON array for
+        # any chat whose prompt is the proposal prompt (identified by the allowed-kinds hint). Default: none.
+        self.action_proposals: str = "[]"
 
     def chat_stream(self, model: str, messages, *, max_tokens: int = 160, timeout: Optional[float] = None):
         if model == "fake-smart":
@@ -94,6 +97,9 @@ class FakeVoiceLlm:
                 self.suggest_cancelled += 1
                 raise
             return json.dumps({"suggestions": self.suggestions})
+        # Action-proposal pass: the prompt lists the allowed action kinds. Return the scripted JSON array.
+        if any("send_email | create_meeting" in (m.get("content") or "") for m in messages):
+            return self.action_proposals
         return json.dumps(self.perception)
 
     async def multipart(self, endpoint, route, *, files, data, timeout=None):
