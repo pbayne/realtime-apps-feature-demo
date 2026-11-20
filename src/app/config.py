@@ -29,7 +29,7 @@ BUNDLED_ENV = {
     "LAKEBASE_CONFIG": {"host": "LAKEBASE_HOST", "db": "LAKEBASE_DB", "user": "LAKEBASE_USER",
                         "password": "LAKEBASE_PASSWORD", "endpoint": "LAKEBASE_ENDPOINT"},
     "APP_CONFIG": {"backbone": "BACKBONE", "history_catalog": "HISTORY_CATALOG", "history_schema": "HISTORY_SCHEMA",
-                   "kafka_security": "KAFKA_SECURITY"},
+                   "kafka_security": "KAFKA_SECURITY", "voice_backend": "VOICE_BACKEND"},
     "ZEROBUS_CONFIG": {"endpoint": "ZEROBUS_ENDPOINT", "client_id": "ZEROBUS_CLIENT_ID",
                        "client_secret": "ZEROBUS_CLIENT_SECRET"},
     "KAFKA_CONFIG": {"bootstrap": "KAFKA_BOOTSTRAP_SERVERS", "username": "KAFKA_USERNAME", "password": "KAFKA_PASSWORD"},

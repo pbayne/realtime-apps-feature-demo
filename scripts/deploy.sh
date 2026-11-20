@@ -23,6 +23,10 @@
 #                         warm the voice path before a demo: scripts/warmup_voice.py <profile>
 #   DEPLOY_VOICE=1        also register both GPU endpoints for voice mode: Parakeet (STT) and Kokoro (TTS)
 #   DEPLOY_PARAKEET=1     register only the Parakeet endpoint. Implied by DEPLOY_VOICE=1.
+#   VOICE_BACKEND         endpoints (default) | moonshine. moonshine runs STT+TTS in-process (no GPU endpoints):
+#                         the app's parakeet/kokoro serving-endpoint bindings are repointed at an existing LLM
+#                         endpoint so the bind resolves (the app ignores them in moonshine mode), and the GPU
+#                         register steps are skipped. Nothing GPU is created or billed.
 #   SIDEKICK_SCOPE        secret scope name (default call-sidekick)
 #   ROTATE_PG_PASSWORD=1  generate a new lakebase_password (the setup job re-ALTERs the role; the app is restarted).
 #                         Without it the password is written only when the key is absent.
@@ -58,6 +62,10 @@ case "$backbone" in
   *) echo "BACKBONE must be direct or kafka" >&2; exit 2 ;;
 esac
 scope=${SIDEKICK_SCOPE:-call-sidekick}
+
+# Voice backend (resolved early: app_config needs it). endpoints (default) | moonshine.
+voice_backend=${VOICE_BACKEND:-endpoints}
+case "$voice_backend" in endpoints|moonshine) ;; *) echo "VOICE_BACKEND must be endpoints or moonshine" >&2; exit 2 ;; esac
 
 case "$kafka_security" in
   SASL_SSL_PLAIN|SASL_SSL_SCRAM_SHA_256|SASL_SSL_SCRAM_SHA_512|SASL_SSL_MSK_IAM) ;;
@@ -179,7 +187,8 @@ secret_or() {   # secret_or <key> <fallback>
   if have_secret "$1"; then get_secret "$1"; else printf '%s' "$2"; fi
 }
 put_secret app_config "$(jq -cn --arg backbone "$backbone" --arg c "$catalog" --arg s "$uc_schema" --arg k "$kafka_security" \
-  '{backbone: $backbone, history_catalog: $c, history_schema: $s, kafka_security: $k}')"
+  --arg vb "$voice_backend" \
+  '{backbone: $backbone, history_catalog: $c, history_schema: $s, kafka_security: $k, voice_backend: $vb}')"
 put_secret zerobus_config "$(jq -cn --arg e "$(secret_or zerobus_endpoint "")" --arg i "$(secret_or zerobus_client_id "")" \
   --arg x "$(secret_or zerobus_client_secret "")" '{endpoint: $e, client_id: $i, client_secret: $x}')"
 put_secret kafka_config "$(jq -cn --arg b "$(secret_or kafka_bootstrap unused-direct-backbone)" \
@@ -196,6 +205,21 @@ export BUNDLE_VAR_kafka_security=$kafka_security
 export BUNDLE_VAR_zerobus_principal=$zerobus_principal
 export BUNDLE_VAR_gpu_scale_to_zero=${GPU_SCALE_TO_ZERO:-true}
 case "$BUNDLE_VAR_gpu_scale_to_zero" in true|false) ;; *) echo "GPU_SCALE_TO_ZERO must be true or false" >&2; exit 2 ;; esac
+
+# Voice backend. In moonshine mode the app runs STT+TTS in-process, so the GPU endpoints are neither
+# created nor needed. The app resource still declares parakeet-stt/kokoro-tts serving-endpoint bindings,
+# so repoint those names at an endpoint that exists (the voice LLM) to keep the bind valid; the app ignores
+# STT_ENDPOINT/TTS_ENDPOINT in moonshine mode. Also force the GPU register steps off. (voice_backend was
+# validated near the top; it is already in the app_config secret.)
+export BUNDLE_VAR_voice_backend=$voice_backend
+if [[ "$voice_backend" == "moonshine" ]]; then
+  existing_endpoint=${BUNDLE_VAR_voice_model:-databricks-claude-haiku-4-5}
+  export BUNDLE_VAR_parakeet_endpoint=$existing_endpoint
+  export BUNDLE_VAR_kokoro_endpoint=$existing_endpoint
+  DEPLOY_VOICE=0
+  DEPLOY_PARAKEET=0
+  echo "VOICE_BACKEND=moonshine: in-process STT+TTS; GPU endpoint bindings repointed at $existing_endpoint, no GPU endpoints registered."
+fi
 
 db bundle validate --strict --target "$target"
 if [[ "${DEPLOY_VOICE:-0}" == "1" || "${DEPLOY_PARAKEET:-0}" == "1" ]]; then
