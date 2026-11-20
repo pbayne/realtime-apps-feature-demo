@@ -136,3 +136,41 @@ def test_websocket_decision_errors_do_not_close_the_socket(client):
         err = ws.receive_json()
         assert err["type"] == "error" and "unknown action" in err["message"]
         ws.send_json({"type": "interrupt"})          # the socket is still usable
+
+
+def test_auto_accept_actions_runs_proposed_action_from_speech(monkeypatch):
+    """With auto_accept_actions on, a spoken turn that covers the proposal auto-approves and runs it (under the
+    outbox safety lock) — no manual decision. The action reaches `outboxed` on its own."""
+    settings = Settings(mode="local", llm_enabled=True, retrieval_backend="keyword", debounce_ms=100,
+                        action_safety_lock=True, auto_accept_actions=True, action_match_threshold=0.5)
+    llm = FakeVoiceLlm(["Sure, I will send it. ", "<<ITEMS>>", "[]", "<<ACTIONS>>", PROPOSAL])
+
+    def factory(s):
+        svc = Services(settings, llm=llm)
+        svc.voice_deps.tts = FakeTts()
+        # The spoken turn covers the proposal (subject "fee breakdown"), so it should auto-accept.
+        svc.voice_deps.stt = FakeStt("send Dana the fee breakdown email")
+        return svc
+
+    monkeypatch.setattr(main, "Services", factory)
+    monkeypatch.setattr(main, "get_settings", lambda: settings)
+    with TestClient(main.app) as client:
+        sid = _voice_session(client)
+        with client.websocket_connect(f"/ws/voice/{sid}") as ws:
+            assert ws.receive_json()["type"] == "hello"
+            ws.send_json({"type": "text", "text": "Send Dana the fee breakdown"})
+            # Collect events; the action auto-accepts from speech (no manual decision sent).
+            statuses, matched = [], False
+            for _ in range(120):
+                ev = ws.receive_json()
+                if ev["type"] == "action":
+                    statuses.append(ev["action"]["status"])
+                elif ev["type"] == "action.matched":
+                    matched = True
+                if matched and "outboxed" in statuses:
+                    break
+            assert matched, "expected an action.matched event from the spoken auto-accept"
+            assert "outboxed" in statuses and "executing" in statuses
+        snap = client.get(f"/api/voice/sessions/{sid}").json()
+        assert snap["actions"] and snap["actions"][0]["status"] == "outboxed"
+        assert snap["actions"][0]["decided_by"] == "local"

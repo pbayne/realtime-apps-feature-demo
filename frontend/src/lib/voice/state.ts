@@ -172,6 +172,7 @@ const VOICE_ONLY = new Set([
   "stream_stopped",
   "session_ended",
   "action",
+  "action.matched",
 ]);
 
 export function isVoiceEvent(ev: { type: string } & object): ev is VoiceServerEvent {

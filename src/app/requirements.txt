@@ -9,4 +9,7 @@ aiokafka==0.14.0
 # Zerobus Ingest history sink (SPEC 3.7; pip package databricks-zerobus-ingest-sdk, verified at 1.10.0).
 databricks-zerobus-ingest-sdk==1.10.0
 pyyaml==6.0.3
+# In-process on-device voice (VOICE_BACKEND=moonshine): Moonshine STT + Phonon TTS. CPU-only, no torch
+# (~18 MB wheel + numpy); models download to a local cache on first use. Replaces the GPU STT/TTS endpoints.
+moonshine-voice==0.1.6
 # Optional, not pinned (pulls torch, about 200 MB): silero-vad. Without it the energy VAD is used.

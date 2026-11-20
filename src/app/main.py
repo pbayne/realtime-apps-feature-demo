@@ -663,8 +663,12 @@ async def ws_audio(ws: WebSocket, call_id: str, channel: Literal["agent", "custo
     frames: asyncio.Queue[Optional[Frame]] = asyncio.Queue(maxsize=500)
     # Tell the call's sockets while transcription is warming (scale-to-zero GPU), and start waking the voice
     # endpoints now: a mic call is the moment someone is about to talk.
-    decoder = ParakeetDecoder(svc.llm, svc.settings.stt_endpoint,
-                              on_status=lambda ev: svc.hub.emit(call_id, {**ev, "channel": channel}))
+    if svc.settings.voice_backend == "moonshine":
+        from stt.moonshine import MoonshineDecoder
+        decoder: Any = MoonshineDecoder()
+    else:
+        decoder = ParakeetDecoder(svc.llm, svc.settings.stt_endpoint,
+                                  on_status=lambda ev: svc.hub.emit(call_id, {**ev, "channel": channel}))
     svc.prewarm_voice()
 
     async def frame_source():

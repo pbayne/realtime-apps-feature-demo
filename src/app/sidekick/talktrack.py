@@ -64,3 +64,31 @@ def matches_talk_track(said: str, *, title: str, body: str, threshold: float = 0
         overlap = max(overlap, shared)
         best = max(best, shared / len(want))
     return best >= threshold and overlap >= min_overlap
+
+
+def matches_action(said: str, *, summary: str, params: dict | None = None, threshold: float = 0.6,
+                   min_overlap: int = 2) -> bool:
+    """True when a spoken line covers a proposed action well enough to auto-accept and run it (demo autonomy).
+
+    Scores the utterance against the action's plain-language `summary` and the salient free-text params
+    (email subject/body, meeting title/description, enroll note) — NOT structural params like addresses, which
+    STT rarely gets verbatim. Same conservative coverage logic as talk tracks: a miss just leaves the action
+    for a manual decision, so a false auto-run is costly but a false miss is harmless. Under the outbox safety
+    lock nothing actually leaves, so this is safe to run eagerly in a demo."""
+    targets = [summary or ""]
+    p = params or {}
+    for key in ("subject", "body_text", "title", "description", "note", "program"):
+        val = p.get(key)
+        if isinstance(val, str) and val.strip():
+            targets.append(val)
+    said_words = _content_words(said)
+    best = 0.0
+    overlap = 0
+    for target in targets:
+        want = _content_words(target)
+        if not want:
+            continue
+        shared = len(want & said_words)
+        overlap = max(overlap, shared)
+        best = max(best, shared / len(want))
+    return best >= threshold and overlap >= min_overlap

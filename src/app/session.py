@@ -46,7 +46,7 @@ from sidekick.decide import (
 from sidekick.perception import Perception, perceive
 from sidekick.playbooks import Playbook, PlaybookRegistry
 from sidekick.retrieval import Hit, Retriever
-from sidekick.talktrack import matches_talk_track
+from sidekick.talktrack import matches_action, matches_talk_track
 from store.base import Store
 from stt.base import TranscriptEvent
 from stt.browser import BrowserPassthrough
@@ -400,6 +400,8 @@ class CallSession:
         # Request C: an agent line that follows a suggestion auto-accepts that card (no manual click needed).
         if ev.speaker == "agent":
             self._auto_accept_talk_track(ev.text)
+        # Auto-complete a proposed action the agent's line covers (demo autonomy; runs under the outbox lock).
+        self._maybe_auto_accept_actions(ev.text)
         self._history.emit("utterances", hs.utterance_row(utt))
         if not direct:
             await deps.bus.publish(self.settings.kafka_utterances_topic, call_id, {
@@ -722,6 +724,32 @@ class CallSession:
             log.exception("auto-accept feedback save failed call_id=%s card_id=%s", self.call_id, card_id)
             return
         self._history.emit("feedback", hs.feedback_row(card_id, self.call_id, "accept", None, at_ms))
+
+    def _maybe_auto_accept_actions(self, said: str) -> None:
+        """Demo autonomy: when a spoken line covers a `proposed` action in this call, auto-approve and run it
+        (under the outbox safety lock — nothing actually leaves). Fire-and-forget, fail-soft; a miss just leaves
+        the action for a manual decision."""
+        if (self.deps.actions is None or not self.settings.auto_accept_actions or self.ended
+                or not self.owner or not said.strip()):
+            return
+        self._spawn(self._auto_accept_actions(said))
+
+    async def _auto_accept_actions(self, said: str) -> None:
+        try:
+            actions = await self.deps.actions.list(self.owner, call_id=self.call_id)
+        except Exception:  # noqa: BLE001
+            return
+        threshold = self.settings.action_match_threshold
+        for a in actions:
+            if a.get("status") != "proposed":
+                continue
+            if matches_action(said, summary=a.get("summary", ""), params=a.get("params"), threshold=threshold):
+                self.deps.hub.emit(self.call_id, {"type": "action.matched", "action_id": a["action_id"],
+                                                  "reason": "spoken", "said": said[:200]})
+                try:
+                    await self.deps.actions.decide(self.owner, a["action_id"], "approve")
+                except Exception:  # noqa: BLE001 - a failed auto-run never breaks the call
+                    log.info("auto-accept action failed call_id=%s action=%s", self.call_id, a.get("action_id"))
 
     async def feedback(self, card_id: str, action: str, text: Optional[str]) -> None:
         if action not in ("accept", "reject", "edit"):

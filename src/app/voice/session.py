@@ -42,6 +42,7 @@ from llm import LlmClient, LlmUnavailable
 from models import cap_text, now_ms
 from sidekick.playbooks import Playbook, PracticeScenario
 from sidekick.retrieval import Hit, Retriever
+from sidekick.talktrack import matches_action
 from store.base import Store
 from stt.base import TranscriptEvent
 from stt.vad import EnergyVad
@@ -761,6 +762,28 @@ class VoiceSession:
         if self.deps.history is not None:
             self.deps.history.emit("voice_items", hs.voice_item_row(self.session_id, item))
 
+    async def _auto_accept_actions(self, said: str) -> None:
+        """Demo autonomy: auto-approve and run any `proposed` action in this session that the rep's spoken turn
+        covers (under the outbox safety lock — nothing actually leaves). Fail-soft; a miss leaves it manual."""
+        if not said.strip():
+            return
+        try:
+            actions = await self.deps.actions.list(self.owner, session_id=self.session_id)
+        except Exception:  # noqa: BLE001
+            return
+        threshold = self.settings.action_match_threshold
+        for a in actions:
+            if a.get("status") != "proposed":
+                continue
+            if matches_action(said, summary=a.get("summary", ""), params=a.get("params"), threshold=threshold):
+                self._emit({"type": "action.matched", "action_id": a["action_id"],
+                            "reason": "spoken", "said": said[:200]})
+                try:
+                    await self.deps.actions.decide(self.owner, a["action_id"], "approve")
+                except Exception:  # noqa: BLE001 - a failed auto-run never breaks the turn
+                    log.info("voice auto-accept action failed session_id=%s action=%s",
+                             self.session_id, a.get("action_id"))
+
     async def _finish_turn(self, rec: _Turn, t0: float, *, interrupted: bool, spoken: str) -> None:
         rec.timing["total_ms"] = _ms(t0)
         agent_text = spoken
@@ -778,6 +801,11 @@ class VoiceSession:
                                                 session_id=self.session_id, proposals=rec.proposals)
             except Exception:  # noqa: BLE001 - a bad proposal never breaks the turn
                 log.exception("action proposal failed session_id=%s", self.session_id)
+        # Demo autonomy: when the rep's spoken turn covers a proposed action, auto-approve and run it (under the
+        # outbox safety lock — nothing actually leaves). Fail-soft; a miss leaves the action for a manual decision.
+        if rec.user_text and self.deps.actions is not None and self.owner \
+                and self.deps.settings.auto_accept_actions:
+            await self._auto_accept_actions(rec.user_text)
         row = {"turn": rec.turn, "role": self.role, "user_text": rec.user_text, "agent_text": agent_text,
                "interrupted": interrupted, "timing": dict(rec.timing), "created_at_ms": now_ms()}
         if rec.user_text or rec.opening:

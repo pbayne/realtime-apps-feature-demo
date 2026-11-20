@@ -87,6 +87,9 @@ class Settings(BaseSettings):
     fast_model: str = "databricks-claude-haiku-5-5"
     smart_model: str = "databricks-claude-sonnet-5-5"
     embed_model: str = "databricks-gte-large-en"
+    # Voice backend: "endpoints" = GPU serving endpoints (Parakeet STT + Kokoro TTS, SPEC 3.3);
+    # "moonshine" = in-process on-device Moonshine STT+TTS (no GPU endpoints, no artifact uploads).
+    voice_backend: Literal["endpoints", "moonshine"] = "endpoints"
     stt_endpoint: str = "sidekick-parakeet"  # Custom LLM Serving audio endpoint (register_parakeet.py)
     # parakeet = multipart /audio/transcriptions (SPEC 3.3). whisper_json = {"inputs": [base64 WAV]} on
     # /invocations, the contract of the Databricks-hosted system.ai whisper endpoint (e2-demo shared-whisper).
@@ -240,6 +243,12 @@ class Settings(BaseSettings):
     # Conservative by default; set auto_accept_talk_track=False to require a manual Accept for every card.
     auto_accept_talk_track: bool = True
     talk_track_threshold: float = 0.6
+    # Auto-complete a PROPOSED action when the agent's spoken line covers it (demo autonomy): the Sidekick
+    # "hears" the rep ask/commit to what it proposed and runs it with no manual Accept. Safe because actions
+    # still run under the outbox safety lock (nothing leaves). OFF by default (manual approve is the normal
+    # lifecycle); set AUTO_ACCEPT_ACTIONS=true to enable the autonomous demo behavior.
+    auto_accept_actions: bool = False
+    action_match_threshold: float = 0.6
     # update_record target: a Unity Catalog Delta table Sidekick updates through the SQL warehouse
     # (Statement Execution API, app service principal). Writes run on databricks_warehouse_id. With no warehouse
     # the action is in outbox mode: the exact MERGE is rendered and stored, nothing runs.

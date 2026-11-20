@@ -4,6 +4,9 @@ command: ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${DATABRICKS_APP_P
 env:
   - name: MODE
     value: databricks
+  # Voice backend: "endpoints" (GPU Parakeet+Kokoro) or "moonshine" (in-process on-device STT+TTS, no GPUs).
+  - name: VOICE_BACKEND
+    value: endpoints
   # Deploy-time settings arrive as one JSON secret per group (Apps allow at most 20 resources); config.py expands
   # them into the individual env names (BACKBONE, LAKEBASE_*, ZEROBUS_*, HISTORY_*, KAFKA_*). See BUNDLED_ENV.
   - name: APP_CONFIG

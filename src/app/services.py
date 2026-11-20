@@ -99,11 +99,27 @@ class Services:
                          history=self.history, enricher=self.enricher, actions=self.actions)
         self.bus_enricher: Optional[BusEnricher] = None
         self.sessions: dict[str, CallSession] = {}
-        # Voice mode (SPEC 9): Kokoro TTS and Parakeet over the same workspace auth as the LLM.
-        self.tts = KokoroTts(self.llm.workspace_auth, settings.tts_endpoint, timeout_s=settings.tts_timeout_s)
-        self.transcriber = ParakeetTranscriber(self.llm, settings.stt_endpoint,
-                                               timeout_s=settings.voice_stt_timeout_s,
-                                               protocol=settings.stt_protocol)
+        # Voice mode (SPEC 9): either GPU serving endpoints (Kokoro TTS + Parakeet STT) or in-process
+        # Moonshine STT+TTS, chosen by settings.voice_backend.
+        policy = RetryPolicy(budget_s=settings.voice_warmup_budget_s, base_s=settings.voice_retry_base_s,
+                             cap_s=settings.voice_retry_cap_s)
+        if settings.voice_backend == "moonshine":
+            from stt.moonshine import MoonshineDecoder, MoonshineTranscriber
+            from voice.moonshine_tts import MoonshineTts
+            self.tts = MoonshineTts(voice=settings.tts_voice if settings.tts_voice != "af_heart" else "")
+            self.transcriber = MoonshineTranscriber()
+
+            def stream_decoder(emit):
+                return MoonshineDecoder()
+        else:
+            self.tts = KokoroTts(self.llm.workspace_auth, settings.tts_endpoint, timeout_s=settings.tts_timeout_s)
+            self.transcriber = ParakeetTranscriber(self.llm, settings.stt_endpoint,
+                                                   timeout_s=settings.voice_stt_timeout_s,
+                                                   protocol=settings.stt_protocol)
+
+            def stream_decoder(emit):
+                return VoiceDecoder(self.llm, settings.stt_endpoint, emit_status=emit, policy=policy)
+
         self.voice_sessions: dict[str, VoiceSession] = {}
         self.store_ready = False
         self._reaper: Optional[asyncio.Task[None]] = None
@@ -111,11 +127,6 @@ class Services:
         self._last_prewarm = float("-inf")
         self._warmth: dict[str, dict] = {}
         self._background: set[asyncio.Task] = set()
-        policy = RetryPolicy(budget_s=settings.voice_warmup_budget_s, base_s=settings.voice_retry_base_s,
-                             cap_s=settings.voice_retry_cap_s)
-
-        def stream_decoder(emit):
-            return VoiceDecoder(self.llm, settings.stt_endpoint, emit_status=emit, policy=policy)
 
         self.voice_deps = VoiceDeps(
             settings=settings, llm=self.llm, tts=self.tts, stt=self.transcriber, store=self.store,
@@ -124,9 +135,12 @@ class Services:
             stream_decoder=stream_decoder, vad=self.vad, rules_for=self.registry.rules_for,
             note_ok=self.note_voice_ok, actions=self.actions,
         )
+        # Moonshine runs in-process: no serving endpoints to probe, so report "local" (fetch=None).
+        _readiness_fetch = (self._endpoint_state_async
+                            if settings.mode == "databricks" and settings.voice_backend == "endpoints" else None)
         self.readiness = EndpointReadiness(
             {"stt": settings.stt_endpoint, "tts": settings.tts_endpoint},
-            self._endpoint_state_async if settings.mode == "databricks" else None,
+            _readiness_fetch,
             ttl_s=settings.readiness_ttl_s,
         )
 
@@ -145,6 +159,11 @@ class Services:
             self.bus_enricher.attach(self.bus, self.settings.kafka_utterances_topic)
         # Build and embed KB indexes in the background so the first customer turn does not pay for it.
         self._warmup = asyncio.ensure_future(self.retriever.warm(self.registry.all()))
+        if self.settings.voice_backend == "moonshine":
+            # Load the in-process STT+TTS models in the background so the first voice turn is not slowed
+            # by the one-time download/compile. Never blocks or crashes boot.
+            from stt.moonshine import preload as _moonshine_preload
+            self._moonshine_warmup = asyncio.ensure_future(_moonshine_preload())
         self._reaper = asyncio.ensure_future(self._reap_loop())
         log.info("services ready: mode=%s backbone=%s bus=%s store=%s history=%s vad=%s retrieval=%s llm=%s",
                  self.settings.mode, self.settings.backbone, self.settings.effective_bus,
