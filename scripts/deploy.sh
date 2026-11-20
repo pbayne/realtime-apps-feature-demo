@@ -68,6 +68,11 @@ scope=${SIDEKICK_SCOPE:-call-sidekick}
 voice_backend=${VOICE_BACKEND:-moonshine}
 case "$voice_backend" in endpoints|moonshine) ;; *) echo "VOICE_BACKEND must be endpoints or moonshine" >&2; exit 2 ;; esac
 
+# Auto-accept actions from speech (resolved early: app_config needs it). false (DEFAULT: manual approve) |
+# true (autonomous demo: a spoken turn that covers a proposed action auto-runs it under the outbox lock).
+auto_accept_actions=${AUTO_ACCEPT_ACTIONS:-false}
+case "$auto_accept_actions" in true|false) ;; *) echo "AUTO_ACCEPT_ACTIONS must be true or false" >&2; exit 2 ;; esac
+
 case "$kafka_security" in
   SASL_SSL_PLAIN|SASL_SSL_SCRAM_SHA_256|SASL_SSL_SCRAM_SHA_512|SASL_SSL_MSK_IAM) ;;
   *) echo "kafka_security must be SASL_SSL_PLAIN, SASL_SSL_SCRAM_SHA_256, SASL_SSL_SCRAM_SHA_512 or SASL_SSL_MSK_IAM" >&2; exit 2 ;;
@@ -188,8 +193,8 @@ secret_or() {   # secret_or <key> <fallback>
   if have_secret "$1"; then get_secret "$1"; else printf '%s' "$2"; fi
 }
 put_secret app_config "$(jq -cn --arg backbone "$backbone" --arg c "$catalog" --arg s "$uc_schema" --arg k "$kafka_security" \
-  --arg vb "$voice_backend" \
-  '{backbone: $backbone, history_catalog: $c, history_schema: $s, kafka_security: $k, voice_backend: $vb}')"
+  --arg vb "$voice_backend" --arg aa "$auto_accept_actions" \
+  '{backbone: $backbone, history_catalog: $c, history_schema: $s, kafka_security: $k, voice_backend: $vb, auto_accept_actions: $aa}')"
 put_secret zerobus_config "$(jq -cn --arg e "$(secret_or zerobus_endpoint "")" --arg i "$(secret_or zerobus_client_id "")" \
   --arg x "$(secret_or zerobus_client_secret "")" '{endpoint: $e, client_id: $i, client_secret: $x}')"
 put_secret kafka_config "$(jq -cn --arg b "$(secret_or kafka_bootstrap unused-direct-backbone)" \
