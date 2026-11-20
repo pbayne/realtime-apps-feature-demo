@@ -7,13 +7,18 @@ Contract: [`docs/SPEC.md`](docs/SPEC.md). Architecture, both backbones, latency 
 
 ## Command line: `sidekick`
 
+Voice runs on **Moonshine in-process** by default — on the App's own CPU, no GPU endpoints, no idle cost,
+nothing to warm. The GPU commands below are only for the optional HIGH QUALITY tier (A10 Parakeet +
+Kokoro), selected with `VOICE_BACKEND=endpoints` at deploy time.
+
 ```bash
 ln -s "$PWD/scripts/sidekick" ~/.local/bin/sidekick   # once
-sidekick on       # demo mode: voice GPUs always-on, no cold start (bills while on) — ~8 min to apply
-sidekick off      # back to scale-to-zero — ~7 min
-sidekick status   # readiness + scale-to-zero per endpoint
-sidekick warm     # wake the voice endpoints now
-sidekick open     # open the app;  sidekick health | test | logs | deploy
+sidekick open     # open the app
+sidekick health   # store, history, voice readiness
+sidekick test     # end-to-end voice check (speaks in, plays the reply)
+sidekick actions  # end-to-end actions check (propose/approve; nothing sends)
+sidekick logs | cost | deploy
+# HIGH QUALITY tier only (VOICE_BACKEND=endpoints): sidekick up | down | on | off | status | warm
 ```
 
 ## Try it
@@ -22,8 +27,8 @@ Deployed (FEVM `realtime-call-sidekick`, AWS us-west-2, Databricks SSO):
 **https://call-sidekick-7474650324322090.aws.databricksapps.com**
 
 1. Put on headphones (otherwise Sidekick hears itself).
-2. GPU endpoints scale to zero: run `scripts/warmup_voice.py --profile realtime-call-sidekick` first, or let the app
-   warm them (opening a voice session pings both; the banner shows "Warming up voice" for up to ~2 minutes).
+2. Voice is Moonshine in-process (the default): no warm-up needed, just open a voice session. (Only the
+   optional HIGH QUALITY tier uses GPU endpoints that must be warmed — see `sidekick warm`.)
 3. Start screen → **Talk to Sidekick** → **Practice customer** → *fee objection* (the customer talks back while
    Sidekick coaches you), or **Assistant** (ask it what to say next; it answers aloud and files outcomes).
    Deep links: `/?autostart=1&voice=practice&scenario=fee_objection`, `/?autostart=1&voice=assistant`.
@@ -118,12 +123,22 @@ printed), validates and deploys the `dev` bundle target, runs the setup job (Lak
 (the seven Zerobus tables and the MODIFY+SELECT grant), runs `reconcile_history` once (Lakebase → Delta), deploys and starts the app, and builds the KB index.
 No Kafka secrets are needed. Kafka keys get placeholders because the app's resources bind them at deploy time.
 
-Voice mode (adds two always-on GPU endpoints, see below):
+Voice mode. The default tier is **Moonshine in-process** (no GPU endpoints, no extra deploy flags):
 
 ```bash
-DEPLOY_VOICE=1 scripts/deploy.sh <profile> <catalog>      # registers Parakeet and Kokoro before the app binds them
+scripts/deploy.sh <profile> <catalog>                    # VOICE_BACKEND=moonshine is the default
+AUTO_ACCEPT_ACTIONS=true scripts/deploy.sh <profile> <catalog>   # autonomous: spoken turns auto-run matching actions (outbox lock)
+```
+
+Optional HIGH QUALITY tier (A10 Parakeet STT + Kokoro TTS GPU endpoints):
+
+```bash
+VOICE_BACKEND=endpoints DEPLOY_VOICE=1 scripts/deploy.sh <profile> <catalog>   # registers the GPU endpoints, binds them
 scripts/warmup_voice.py --profile <profile>              # before a demo, if GPU_SCALE_TO_ZERO=true (default)
 ```
+
+Deploy knobs: `VOICE_BACKEND=moonshine|endpoints`, `AUTO_ACCEPT_ACTIONS=true|false`, `GPU_SCALE_TO_ZERO=true|false`
+(endpoints tier only), `DEPLOY_VOICE=1` (register the GPU endpoints).
 
 ### Kafka backbone (scale mode)
 

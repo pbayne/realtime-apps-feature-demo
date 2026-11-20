@@ -5,6 +5,13 @@ example.com, so the safety lock must rewrite every recipient to the safe address
 .ics, enrolls a contact and undoes it, rejects one action, and checks that bad params are refused. Exit 0 only if
 every check passes.
 
+This covers the manual approve/reject path. Two newer behaviors are exercised by talking to the app, not here:
+  - Actions now surface reliably from a spoken turn via a dedicated fast-model proposal pass (so you no longer
+    depend on the main voice reply emitting the inline <<ACTIONS>> block).
+  - With AUTO_ACCEPT_ACTIONS=true (deploy knob), a spoken turn that covers a proposed action auto-approves and
+    runs it — still under the outbox safety lock, so nothing actually sends.
+Use scripts/voice_smoke.py (or the live UI) against an app deployed with AUTO_ACCEPT_ACTIONS=true to see those.
+
   .venv/bin/python scripts/actions_smoke.py --profile realtime-call-sidekick
 """
 

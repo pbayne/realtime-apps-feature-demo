@@ -1,21 +1,30 @@
 #!/usr/bin/env bash
 # sidekick — command-line shortcuts for the deployed Sidekick app.
 #
-#   sidekick up        bring the app fully online for a demo: (re)create GPU endpoints, start the app, warm them
-#   sidekick down      MONEY SAVER: stop the app and DELETE the GPU endpoints so they stop billing (UP rebuilds them)
-#   sidekick cost      show what is currently billing (app state + which GPU endpoints exist)
-#   sidekick on        demo mode: GPU voice endpoints always-on (no cold start; they bill while on) — ~8 min
-#   sidekick off       back to scale-to-zero (saves cost; next voice turn after idle may wait 2-6 min) — ~7 min
-#   sidekick status    endpoint readiness + scale-to-zero setting
-#   sidekick warm      wake both voice endpoints now (use a few minutes before talking)
+# Voice runs on Moonshine in-process by default (on the App's own CPU): no GPU endpoints, no cost when
+# idle, nothing to warm. The up/down/on/off/warm commands below only matter for the optional HIGH QUALITY
+# tier (A10 Parakeet + Kokoro), which you select with VOICE_BACKEND=endpoints at deploy time.
+#
 #   sidekick open      open the app in your browser
 #   sidekick health    the app's health report (store, history, voice readiness)
-#   sidekick test      end-to-end voice check (speaks into the app, saves the spoken reply, plays it)
+#   sidekick test      end-to-end voice check (speaks into the app, saves + plays the spoken reply)
+#   sidekick actions   end-to-end actions check (propose/approve under the outbox safety lock; nothing sends)
 #   sidekick logs      recent app logs
-#   sidekick deploy    redeploy (scripts/deploy.sh)
+#   sidekick cost      show what is currently billing (app state + which GPU endpoints exist)
+#   sidekick deploy    redeploy (scripts/deploy.sh). Env knobs: VOICE_BACKEND=moonshine|endpoints,
+#                      AUTO_ACCEPT_ACTIONS=true|false. e.g. AUTO_ACCEPT_ACTIONS=true sidekick deploy
+#
+#   --- HIGH QUALITY tier only (VOICE_BACKEND=endpoints): manage the A10 GPU endpoints ---
+#   sidekick up        (re)create the GPU endpoints, start the app, warm them — for a premium demo
+#   sidekick down      MONEY SAVER: stop the app and DELETE the GPU endpoints so they stop billing
+#   sidekick on        GPU endpoints always-on (no cold start; they bill while on) — ~8 min
+#   sidekick off       GPU endpoints back to scale-to-zero (bill only when warmed) — ~7 min
+#   sidekick status    GPU endpoint readiness + scale-to-zero setting
+#   sidekick warm      wake both GPU endpoints now (a few minutes before talking)
 #
 # on/off only flip GPU scale-to-zero (endpoints keep existing). up/down are the real lifecycle:
-# down DELETES the GPU endpoints (true cost stop); up re-creates them from the register jobs.
+# down DELETES the GPU endpoints (true cost stop); up re-creates them from the register jobs. None of
+# these are needed in the default Moonshine tier.
 #
 # Env: SIDEKICK_PROFILE (default realtime-call-sidekick), SIDEKICK_APP (default call-sidekick).
 # Install: ln -s <repo>/scripts/sidekick ~/.local/bin/sidekick
@@ -62,8 +71,9 @@ PY
           ;;
   test)   out=/tmp/sidekick-test-reply.wav
           "$py" "$repo/scripts/voice_smoke.py" --profile "$profile" --out "$out" && afplay "$out" ;;
+  actions) exec "$py" "$repo/scripts/actions_smoke.py" --profile "$profile" ;;
   logs)   databricks apps logs "$app" --profile "$profile" --tail-lines "${2:-80}" ;;
   deploy) shift; cd "$repo" && exec scripts/deploy.sh "$profile" "$@" ;;
-  help|-h|--help) sed -n '2,21p' "$src" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,30p' "$src" | sed 's/^# \{0,1\}//' ;;
   *) echo "sidekick: unknown command '$cmd' (try: sidekick help)" >&2; exit 2 ;;
 esac

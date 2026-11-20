@@ -4,6 +4,10 @@ Speaks a sentence (macOS `say`, or any 16 kHz mono WAV via --wav) into /ws/voice
 real-time pace, then records what comes back: live captions, live read, provisional suggestions, the reply
 text, the reply audio (saved as a WAV you can play) and the turn timing.
 
+The voice backend (Moonshine in-process by default, or the A10 endpoints) is chosen at deploy time
+(VOICE_BACKEND), not here — this script just talks to whatever the app is running. It reports suggestions
+and the spoken reply; to exercise actions (propose/auto-accept) use scripts/actions_smoke.py.
+
   .venv/bin/python scripts/voice_smoke.py --profile realtime-call-sidekick            # deployed app
   .venv/bin/python scripts/voice_smoke.py --base http://localhost:8000                  # local
   ... --role practice --scenario fee_objection --text "Our fee is one percent of assets."
