@@ -94,11 +94,11 @@
   --accent-btn-to: #0f766e;
 }
 
-/* ---- Daylight: clean modern light --------------------------------------------------------- */
+/* ---- Daylight: clean modern light (cool, airy, blue-led) --------------------------------- */
 [data-theme="daylight"] {
-  --color-ink: #f5f7fb;
+  --color-ink: #eef2f9;
   --color-panel: #ffffff;
-  --color-raised: #eceff6;
+  --color-raised: #eef2fa;
   --color-line: #d3dae6;
   --color-text: #0f172a;
   --color-muted: #475569;
@@ -108,15 +108,15 @@
   --color-on-accent: #ffffff;
   --color-scheme: light;
   --panel-blur: none;
-  --panel-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 10px 30px -18px rgba(15, 23, 42, 0.18);
-  --radius-panel: 14px;
-  --radius-control: 9px;
-  --glow-1: rgba(255, 54, 33, 0.04);
-  --glow-2: rgba(14, 165, 233, 0.05);
+  --panel-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 12px 32px -18px rgba(37, 99, 235, 0.22);
+  --radius-panel: 16px;
+  --radius-control: 10px;
+  --glow-1: rgba(37, 99, 235, 0.06);
+  --glow-2: rgba(14, 165, 233, 0.07);
   --scroll-thumb: #c3cde0;
-  --selection: rgba(14, 165, 233, 0.25);
-  --shadow-accent: rgba(197, 42, 20, 0.45);
-  --hover-tint: rgba(15, 23, 42, 0.06);
+  --selection: rgba(37, 99, 235, 0.22);
+  --shadow-accent: rgba(37, 99, 235, 0.4);
+  --hover-tint: rgba(15, 23, 42, 0.05);
   --ghost-tint: rgba(15, 23, 42, 0.03);
   --c-pos: #047857;
   --c-pos-base: #10b981;
@@ -130,16 +130,16 @@
   --c-neutral-base: #64748b;
   --c-accent: #0369a1;
   --c-accent-base: #0ea5e9;
-  --accent-btn-from: #c52a14;
-  --accent-btn-to: #c52a14;
+  --accent-btn-from: #2563eb;
+  --accent-btn-to: #1d4ed8;
 }
 
-/* ---- Databricks: lava and navy on oat surfaces ------------------------------------------- */
+/* ---- Databricks: lava and navy on warm oat surfaces -------------------------------------- */
 [data-theme="databricks"] {
-  --color-ink: #f7f4ee;
-  --color-panel: #ffffff;
-  --color-raised: #efebe2;
-  --color-line: #d8d0c0;
+  --color-ink: #f3ece0;
+  --color-panel: #fcf9f3;
+  --color-raised: #efe7d8;
+  --color-line: #d8cdb8;
   --color-text: #1b3139;
   --color-muted: #4a5e67;
   --color-lava: #ff3621;
@@ -148,14 +148,14 @@
   --color-on-accent: #ffffff;
   --color-scheme: light;
   --panel-blur: none;
-  --panel-shadow: 0 1px 2px rgba(27, 49, 57, 0.08), 0 12px 28px -20px rgba(27, 49, 57, 0.3);
+  --panel-shadow: 0 1px 2px rgba(27, 49, 57, 0.08), 0 12px 28px -20px rgba(151, 35, 15, 0.28);
   --radius-panel: 10px;
   --radius-control: 8px;
-  --glow-1: rgba(255, 54, 33, 0.05);
-  --glow-2: rgba(27, 49, 57, 0.04);
+  --glow-1: rgba(255, 54, 33, 0.07);
+  --glow-2: rgba(27, 49, 57, 0.05);
   --scroll-thumb: #cbbfa9;
   --selection: rgba(255, 54, 33, 0.22);
-  --shadow-accent: rgba(181, 43, 23, 0.4);
+  --shadow-accent: rgba(181, 43, 23, 0.45);
   --hover-tint: rgba(27, 49, 57, 0.07);
   --ghost-tint: rgba(27, 49, 57, 0.03);
   --c-pos: #1d6b4f;

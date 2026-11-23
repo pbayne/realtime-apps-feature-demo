@@ -15,7 +15,7 @@ export interface ThemeInfo {
 export const THEMES: ThemeInfo[] = [
   { id: "midnight", label: "Midnight", blurb: "The original dark navy with lava accents.", scheme: "dark" },
   { id: "aurora", label: "Aurora", blurb: "Glassy dark with violet and teal glows and blurred panels.", scheme: "dark" },
-  { id: "daylight", label: "Daylight", blurb: "Clean, bright and modern. Easy to read in a lit room.", scheme: "light" },
+  { id: "daylight", label: "Daylight", blurb: "Clean and modern, cool blues on bright white. Easy to read in a lit room.", scheme: "light" },
   { id: "databricks", label: "Databricks", blurb: "Lava and navy on warm oat surfaces.", scheme: "light" },
 ];
 
