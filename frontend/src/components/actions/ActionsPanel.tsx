@@ -100,16 +100,20 @@ export function ActionsPanel({ actions, scope, playbook, mock, onUpdate, classNa
         </button>
       </header>
 
-      {safety?.lock && (
-        <div role="note" className="flex items-start gap-2 border-b border-amber-400/25 bg-amber-400/[0.08] px-4 py-2 text-[12px] text-amber-100">
-          <ShieldAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-          <span>Test mode: only sends to {safety.safe_recipient}. Recipients are rewritten and the subject is marked.</span>
+      {safety?.lock ? (
+        <div role="note" className="flex items-start gap-2 border-b border-[var(--color-line)] bg-[color-mix(in_srgb,var(--c-warn-base)_7%,transparent)] px-4 py-2 text-[11.5px] text-[var(--color-muted)]">
+          <ShieldAlert className="mt-0.5 size-3.5 shrink-0 text-[var(--c-warn)]" aria-hidden />
+          <span>
+            <span className="font-medium text-[var(--c-warn)]">Test mode.</span> Approved items only send to {safety.safe_recipient}
+            {safety.mode === "outbox" ? " — and with no mail relay configured, they are rendered and kept here, not sent." : "; recipients are rewritten and the subject is marked."}
+          </span>
         </div>
-      )}
-      {safety && safety.mode === "outbox" && (
-        <p className="border-b border-[var(--color-line)] px-4 py-1.5 text-[11.5px] text-[var(--color-muted)]">
-          No mail relay is configured: approved mail is rendered and kept here, not sent.
-        </p>
+      ) : (
+        safety?.mode === "outbox" && (
+          <p className="border-b border-[var(--color-line)] px-4 py-1.5 text-[11.5px] text-[var(--color-muted)]">
+            No mail relay is configured: approved mail is rendered and kept here, not sent.
+          </p>
+        )
       )}
 
       <p aria-live="polite" className="sr-only">

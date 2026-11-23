@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Headphones, History, Mic, MicOff, PlayCircle, Radio, RotateCcw, Sparkles } from "lucide-react";
+import { FileText, Headphones, History, ListChecks, Mic, MicOff, PlayCircle, Radio, RotateCcw, Sparkles, Waves } from "lucide-react";
 import { FALLBACK_PLAYBOOKS, FALLBACK_SCRIPTS, FALLBACK_VOICES, MOCK_VOICES, getPlaybooks, getScripts, getVoices } from "../lib/api";
 import { MOCK, MOCK_SPEED, URL_PARAMS } from "../lib/useCallSession";
 import type { Mode, PlaybookSummary, StartOptions, VoiceOption, VoiceRole, VoiceStartOptions } from "../lib/types";
@@ -126,7 +126,8 @@ export function StartScreen({ error, onStart, onStartVoice }: Props) {
         </div>
       </header>
 
-      <main className="mx-auto grid w-full max-w-5xl flex-1 items-center gap-8 px-6 pb-10 pt-2 md:grid-cols-[1.1fr_1fr]">
+      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col justify-center gap-10 px-6 pb-8 pt-2 md:justify-start md:pt-[6vh]">
+        <div className="grid w-full items-center gap-8 md:grid-cols-[1.1fr_1fr]">
         <section>
           <p className="kbd-label flex items-center gap-2">
             <span className="inline-block size-1.5 rounded-full bg-[var(--color-lava)]" aria-hidden />
@@ -257,6 +258,25 @@ export function StartScreen({ error, onStart, onStartVoice }: Props) {
           </button>
           {MOCK && <p className="mt-3 text-center text-[11.5px] text-[var(--color-muted)]">Mock mode ignores the backend and mic.</p>}
         </section>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          <CapabilityCard
+            icon={<Waves className="size-4" />}
+            title="Live transcription"
+            body="Dual-channel speech-to-text with speaker labels and per-turn sentiment, streaming as the call happens."
+          />
+          <CapabilityCard
+            icon={<FileText className="size-4" />}
+            title="Grounded suggestions"
+            body="Coaching cards cite the knowledge base and carry a confidence score. Sidekick stays quiet until it is sure."
+          />
+          <CapabilityCard
+            icon={<ListChecks className="size-4" />}
+            title="Actions you approve"
+            body="Follow-up emails, meetings and record updates are drafted for your review. Nothing runs until you say so."
+          />
+        </div>
       </main>
     </div>
   );
@@ -275,6 +295,25 @@ function ModeButton({ active, onClick, icon, label }: { active: boolean; onClick
       {icon}
       {label}
     </button>
+  );
+}
+
+/** One capability tile on the start screen. Token-driven so it inherits every theme. */
+function CapabilityCard({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
+  return (
+    <div className="panel p-4">
+      <div className="flex items-center gap-2.5">
+        <span
+          className="grid size-8 shrink-0 place-items-center rounded-lg text-[var(--c-info)]"
+          style={{ background: "color-mix(in srgb, var(--c-info-base) 12%, transparent)" }}
+          aria-hidden
+        >
+          {icon}
+        </span>
+        <h3 className="text-[13.5px] font-semibold">{title}</h3>
+      </div>
+      <p className="mt-2.5 text-[12.5px] leading-relaxed text-[var(--color-muted)]">{body}</p>
+    </div>
   );
 }
 

@@ -128,8 +128,8 @@ export function ActionCard({ action: a, programs, onDecide }: Props) {
           </p>
           <Details action={a} />
           {testMode && (
-            <p className="mt-1.5 text-[11.5px] text-amber-200">
-              Test mode: only sends to {safety?.safe_recipient ?? "the safe recipient"}
+            <p className="mt-1.5 text-[11.5px] text-[var(--color-muted)]">
+              Sends to {safety?.safe_recipient ?? "the safe recipient"}
               {originals && originals.length > 0 ? ` (was ${originals.join(", ")})` : ""}
             </p>
           )}

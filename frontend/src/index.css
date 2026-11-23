@@ -245,10 +245,11 @@
    * gets a faint accent ring + lift to anchor the eye above the peer columns.
    * Token-driven, so every theme keeps its own accent. */
   .panel-hero {
-    border-color: color-mix(in srgb, var(--c-info-base) 22%, var(--color-line));
+    border-color: color-mix(in srgb, var(--c-info-base) 34%, var(--color-line));
     box-shadow:
       var(--panel-shadow),
-      0 14px 40px -30px color-mix(in srgb, var(--c-info-base) 45%, transparent);
+      inset 0 1px 0 0 color-mix(in srgb, var(--c-info-base) 14%, transparent),
+      0 18px 48px -30px color-mix(in srgb, var(--c-info-base) 60%, transparent);
   }
   /* Live partial turn: a faint tinted surface so the in-progress bubble reads as
    * active instead of fading into the background. */
