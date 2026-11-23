@@ -22,7 +22,7 @@ export function PostCallSummary({ state, onNewCall }: { state: CallState; onNewC
         <span className="chip border-[var(--color-line)] text-[var(--color-muted)]">Call ended · {state.playbook.replace(/_/g, " ")}</span>
       </header>
 
-      <main className="mx-auto w-full max-w-4xl flex-1 px-6 pb-16 pt-4">
+      <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col justify-center px-6 pb-12 pt-4 md:justify-start md:pt-[5vh]">
         <p className="kbd-label">Post-call summary</p>
         <h1 className="mt-2 text-[30px] font-semibold tracking-tight">
           {fmtClock(s.durationMs)} call, {s.accepted + s.edited} of {s.cardsShown} suggestions used
@@ -38,7 +38,7 @@ export function PostCallSummary({ state, onNewCall }: { state: CallState; onNewC
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <section className="panel p-5">
             <h2 className="text-[13px] font-semibold uppercase tracking-[0.08em] text-slate-300">Coverage</h2>
-            <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/[0.07]">
+            <div className="mt-3 h-2 overflow-hidden rounded-full" style={{ background: "color-mix(in srgb, var(--color-text) 10%, transparent)" }}>
               <div className="h-full rounded-full bg-gradient-to-r from-teal-400 to-sky-400" style={{ width: `${s.coveragePct}%` }} />
             </div>
             <ul className="mt-4 space-y-2 text-[13px]">
@@ -50,8 +50,8 @@ export function PostCallSummary({ state, onNewCall }: { state: CallState; onNewC
               ))}
             </ul>
             {missing.length > 0 && (
-              <p className="mt-4 rounded-lg bg-amber-400/10 px-3 py-2 text-[12.5px] text-amber-100">
-                Follow up on {missing.map((m) => m.label.toLowerCase()).join(", ")}.
+              <p className="mt-4 rounded-lg border border-[var(--color-line)] bg-[color-mix(in_srgb,var(--c-warn-base)_8%,transparent)] px-3 py-2 text-[12.5px] text-[var(--color-muted)]">
+                <span className="font-medium text-[var(--c-warn)]">Follow up</span> on {missing.map((m) => m.label.toLowerCase()).join(", ")}.
               </p>
             )}
           </section>
