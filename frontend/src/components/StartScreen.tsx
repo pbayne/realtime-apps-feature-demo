@@ -148,8 +148,8 @@ export function StartScreen({ error, onStart, onStartVoice }: Props) {
             </div>
           )}
           {backendNote && !error && (
-            <p role="status" className="mt-6 flex gap-2 rounded-lg border border-amber-400/25 bg-amber-400/[0.07] px-4 py-3 text-[13px] text-amber-100">
-              <Radio className="mt-0.5 size-4 shrink-0 text-amber-300" />
+            <p role="status" className="mt-6 flex gap-2 rounded-lg border border-[var(--color-line)] bg-[color-mix(in_srgb,var(--c-warn-base)_7%,transparent)] px-4 py-3 text-[13px] text-[var(--color-muted)]">
+              <Radio className="mt-0.5 size-4 shrink-0 text-[var(--c-warn)]" />
               <span>{backendNote} Scripted calls need the backend, but Live mic and Talk still work once it is up.</span>
             </p>
           )}

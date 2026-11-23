@@ -11,13 +11,6 @@
   --font-sans: "DM Sans", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  /* Radius scale: tightened toward an enterprise-tool feel (was 12/16/8px Tailwind
-   * defaults). The hardcoded rounded-xl/2xl/lg card + bubble classes read these, so the
-   * whole app tightens from one place. Chips keep their own 999px pill (set inline). */
-  --radius-lg: 7px;
-  --radius-xl: 8px;
-  --radius-2xl: 10px;
-
   --color-ink: #0a1322; /* page background: dark navy */
   --color-panel: #101b2e; /* column surface */
   --color-raised: #162540; /* cards / bubbles */
@@ -218,6 +211,16 @@
 
 /* Chip and button colours by theme (the component classes below read these). */
 @layer base {
+  /* Radius scale: tightened toward an enterprise-tool feel (Tailwind defaults are
+   * 8/12/16px). The hardcoded rounded-lg/xl/2xl card + bubble classes read these, so the
+   * whole app tightens from one place. Chips keep their own 999px pill (set inline).
+   * On :root:root so it outranks Tailwind's @theme :root defaults; kept out of the per-theme
+   * token blocks on purpose (global, not themed — see test_themes token-parity). */
+  :root:root {
+    --radius-lg: 7px;
+    --radius-xl: 8px;
+    --radius-2xl: 10px;
+  }
   html,
   body,
   #root {

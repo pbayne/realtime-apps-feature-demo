@@ -109,14 +109,14 @@ export function Console({ state, channel, sttBrowser, notice, onEnd, onChannel, 
       </header>
 
       {state.status === "reconnecting" && (
-        <div role="status" className="flex items-center gap-2 border-b border-amber-400/25 bg-amber-400/[0.08] px-5 py-2 text-[12.5px] text-amber-100">
-          <span className="anim-live-dot size-1.5 shrink-0 rounded-full bg-amber-300" aria-hidden />
-          <span className="min-w-0 flex-1">Connection dropped. Reconnecting… the call is still open.</span>
+        <div role="status" className="flex items-center gap-2 border-b border-[var(--color-line)] bg-[color-mix(in_srgb,var(--c-warn-base)_8%,transparent)] px-5 py-2 text-[12.5px] text-[var(--color-muted)]">
+          <span className="anim-live-dot size-1.5 shrink-0 rounded-full bg-[var(--c-warn-base)]" aria-hidden />
+          <span className="min-w-0 flex-1"><span className="font-medium text-[var(--c-warn)]">Connection dropped.</span> Reconnecting… the call is still open.</span>
         </div>
       )}
       {notice && (
-        <div role="alert" className="flex items-center gap-2 border-b border-amber-400/20 bg-amber-400/10 px-5 py-2 text-[12.5px] text-amber-100">
-          <Headphones className="size-3.5" /> {notice}
+        <div role="alert" className="flex items-center gap-2 border-b border-[var(--color-line)] bg-[color-mix(in_srgb,var(--c-warn-base)_8%,transparent)] px-5 py-2 text-[12.5px] text-[var(--color-muted)]">
+          <Headphones className="size-3.5 shrink-0 text-[var(--c-warn)]" /> {notice}
         </div>
       )}
 

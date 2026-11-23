@@ -107,7 +107,7 @@ function LookupForm({ mock, onFound }: { mock: boolean; onFound(a: Account): voi
         />
       </Field>
       {note && (
-        <p role="status" className="rounded-lg border border-amber-400/25 bg-amber-400/[0.08] px-3 py-2 text-[12px] text-amber-100">
+        <p role="status" className="rounded-lg border border-[var(--color-line)] bg-[color-mix(in_srgb,var(--c-warn-base)_8%,transparent)] px-3 py-2 text-[12px] text-[var(--color-muted)]">
           {note}
         </p>
       )}
