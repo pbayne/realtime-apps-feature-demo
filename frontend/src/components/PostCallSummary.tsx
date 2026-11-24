@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { CheckCircle2, Circle, Pencil, RotateCcw, X, Check } from "lucide-react";
+import { CheckCircle2, Circle, Pencil, RotateCcw, X, Check, Inbox } from "lucide-react";
 import { HEALTH_CLASS, TARGETS, fmtClock, fmtMs, health } from "../lib/format";
 import { summarize, type CallState } from "../lib/store";
 import { Brand } from "./Brand";
@@ -7,6 +7,9 @@ import { Brand } from "./Brand";
 export function PostCallSummary({ state, onNewCall }: { state: CallState; onNewCall(): void }) {
   const s = summarize(state);
   const missing = state.coverage.filter((c) => !c.covered);
+  // Genuinely-empty call: nothing to average or chart. Show an honest empty state instead of a
+  // wall of "--" placeholders (fmtMs renders null as "--").
+  const isEmpty = s.cardsShown === 0 && s.coverageTotal === 0 && state.metrics.length === 0;
   const latencyRows: { label: string; value: number | null; target: number; hint: string }[] = [
     { label: "STT first word", value: s.avg.stt_first_word_ms, target: TARGETS.stt_first_word_ms, hint: "≤ 0.8 s" },
     { label: "STT commit", value: s.avg.stt_commit_ms, target: TARGETS.stt_commit_ms, hint: "≈ 1.5 s" },
@@ -25,9 +28,24 @@ export function PostCallSummary({ state, onNewCall }: { state: CallState; onNewC
       <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col justify-center px-6 pb-12 pt-4 md:justify-start md:pt-[5vh]">
         <p className="kbd-label">Post-call summary</p>
         <h1 className="mt-2 text-[30px] font-semibold tracking-tight">
-          {fmtClock(s.durationMs)} call, {s.accepted + s.edited} of {s.cardsShown} suggestions used
+          {isEmpty
+            ? `${fmtClock(s.durationMs)} call`
+            : `${fmtClock(s.durationMs)} call, ${s.accepted + s.edited} of ${s.cardsShown} suggestions used`}
         </h1>
 
+        {isEmpty ? (
+          <div className="panel mt-7 flex flex-col items-center gap-3 px-6 py-12 text-center">
+            <span className="grid size-11 place-items-center rounded-full text-[var(--color-muted)]" style={{ background: "color-mix(in srgb, var(--color-text) 7%, transparent)" }}>
+              <Inbox className="size-5" aria-hidden />
+            </span>
+            <p className="text-[15px] font-semibold">No suggestions or metrics this call</p>
+            <p className="max-w-sm text-[13px] leading-relaxed text-[var(--color-muted)]">
+              Sidekick stayed quiet and nothing was measured — this happens on a very short call or when the
+              pipeline produced no coaching cards. The transcript is still saved under Past calls.
+            </p>
+          </div>
+        ) : (
+          <>
         <div className="mt-7 grid gap-3 sm:grid-cols-4">
           <Stat icon={<Check className="size-4 text-emerald-300" />} label="Accepted" value={s.accepted} />
           <Stat icon={<Pencil className="size-4 text-sky-300" />} label="Edited & sent" value={s.edited} />
@@ -76,8 +94,10 @@ export function PostCallSummary({ state, onNewCall }: { state: CallState; onNewC
             </p>
           </section>
         </div>
+          </>
+        )}
 
-        {state.error && <p className="mt-8 text-center text-[14px] text-amber-200">{state.error}</p>}
+        {state.error && <p className="mt-8 text-center text-[14px] text-[var(--c-warn)]">{state.error}</p>}
         <div className="mt-8 flex justify-center">
           <button type="button" onClick={onNewCall} className="btn btn-primary px-5 py-2.5 text-[14px]">
             <RotateCcw className="size-4" /> Start another call
