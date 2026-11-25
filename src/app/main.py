@@ -601,11 +601,14 @@ async def ws_call(ws: WebSocket, call_id: str):
         await ws.send_json({"type": "error", "message": "call not active in this process"})
         await ws.close(code=CLOSE_NOT_FOUND)
         return
-    q = svc.hub.subscribe(call_id)
     if session.ended:
+        # Kept only for its grace period (e.g. a reload after End). Its hub stream is already closed, so a
+        # subscription would never see the end-of-stream sentinel: say so and close rather than hang.
         await ws.send_json({"type": "call.ended", "emitted_at_ms": now_ms()})
-    else:
-        await ws.send_json({**session.coverage_event(), "emitted_at_ms": now_ms()})
+        await ws.close(code=CLOSE_ENDED)
+        return
+    q = svc.hub.subscribe(call_id)
+    await ws.send_json({**session.coverage_event(), "emitted_at_ms": now_ms()})
 
     async def pump_out() -> None:
         while True:

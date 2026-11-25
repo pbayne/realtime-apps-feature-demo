@@ -307,6 +307,19 @@ def test_a_practice_switch_over_the_call_cap_is_reported_and_rolled_back(monkeyp
             assert vs.closed is False
 
 
+def test_a_call_socket_opened_after_the_call_ended_gets_call_ended_then_4410(client):
+    cid = new_call(client)
+    svc = svc_of(client)
+    client.portal.call(svc.sessions[cid].finish)
+    assert svc.sessions[cid].ended
+    with client.websocket_connect(f"/ws/call/{cid}") as ws:
+        assert ws.receive_json()["type"] == "call.ended"
+        with pytest.raises(WebSocketDisconnect) as exc:
+            ws.receive_json()
+        assert exc.value.code == 4410
+    assert svc.sessions[cid].socket is None, "a dead call is not claimed by a late socket"
+
+
 def test_a_socket_message_over_the_rate_is_dropped_not_answered():
     now = [0.0]
     bucket = TokenBucket(rate=50, burst=50, clock=lambda: now[0])
