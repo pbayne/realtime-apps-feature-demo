@@ -482,6 +482,8 @@ class VoiceSession:
                 self.scenario = self.playbook.scenario(scenario_key) or self.playbook.scenarios[0]
                 self._pending_practice = True
                 # The call is created by ensure_practice_call() when the socket applies the config.
+            else:
+                self._pending_practice = False
             self.live.set_role(role, self.scenario.title if (role == "practice" and self.scenario) else None)
 
     async def ensure_practice_call(self, hub: Any) -> None:

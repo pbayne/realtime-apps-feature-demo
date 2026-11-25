@@ -582,6 +582,15 @@ async def _evict(ws: Any) -> None:
         pass
 
 
+def _json_object(text: str) -> dict[str, Any]:
+    """Parse one socket frame. Malformed JSON and non-object frames raise ValueError, which the pumps report
+    as an error event instead of letting it tear down the socket."""
+    payload = json.loads(text)          # JSONDecodeError is a ValueError
+    if not isinstance(payload, dict):
+        raise ValueError("message must be a JSON object")
+    return payload
+
+
 @app.websocket("/ws/call/{call_id}")
 async def ws_call(ws: WebSocket, call_id: str):
     svc = _svc(ws)
@@ -608,11 +617,12 @@ async def ws_call(ws: WebSocket, call_id: str):
     async def pump_in() -> None:
         bucket = _limiter(svc)
         while True:
-            msg = await ws.receive_json()
+            raw = await ws.receive_text()
             if not bucket.allow():
                 continue                       # over the per-socket rate: dropped, not answered
-            kind = msg.get("type")
             try:
+                msg = _json_object(raw)
+                kind = msg.get("type")
                 if kind == "feedback":
                     await session.feedback(msg.get("card_id", ""), msg.get("action", ""), msg.get("text"))
                 elif kind == "browser_stt":
@@ -777,7 +787,7 @@ async def ws_voice(ws: WebSocket, session_id: str):
                     continue
                 if not msg.get("text"):
                     continue
-                payload = json.loads(msg["text"])
+                payload = _json_object(msg["text"])
                 kind = payload.get("type")
                 if kind == "interrupt":
                     vs.interrupt()
@@ -802,9 +812,15 @@ async def ws_voice(ws: WebSocket, session_id: str):
                 elif kind == "text":
                     vs.submit_text(payload.get("text") or "")
                 elif kind == "config":
+                    prev_role = vs.role
                     vs.configure(voice=payload.get("voice"), role=payload.get("role"),
                                  scenario_key=payload.get("scenario"))
-                    await vs.ensure_practice_call(svc.hub)
+                    try:
+                        await vs.ensure_practice_call(svc.hub)
+                    except ServiceError as exc:
+                        # Over a call cap: undo the half-applied switch so the session stays usable.
+                        vs.configure(role=prev_role)
+                        raise ValueError(exc.message) from exc
                     vs.start_opening()
                 else:
                     await ws.send_json({"type": "error", "message": f"unknown message type {kind!r}"})

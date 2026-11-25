@@ -267,6 +267,46 @@ def test_an_oversized_typed_turn_is_reported_and_the_socket_stays_up(client):
         assert svc_of(client).voice_sessions[sid].closed is False
 
 
+def test_a_non_object_or_malformed_voice_frame_is_reported_and_the_socket_stays_up(client):
+    sid = new_voice(client)["session_id"]
+    with client.websocket_connect(f"/ws/voice/{sid}") as ws:
+        ws.receive_json()
+        for bad in ("[]", '"x"', "{not json"):
+            ws.send_text(bad)
+            ev = ws.receive_json()
+            assert ev["type"] == "error", (bad, ev)
+        ws.send_json({"type": "dismiss", "item_id": "nope"})   # still served
+        assert svc_of(client).voice_sessions[sid].closed is False
+
+
+def test_a_non_object_or_malformed_call_frame_is_reported_and_the_socket_stays_up(client):
+    cid = new_call(client)
+    with client.websocket_connect(f"/ws/call/{cid}") as ws:
+        ws.receive_json()                                       # coverage
+        for bad in ("[]", "{not json"):
+            ws.send_text(bad)
+            ev = ws.receive_json()
+            assert ev["type"] == "error", (bad, ev)
+        ws.send_json({"type": "nope"})
+        ev = ws.receive_json()
+        assert ev["type"] == "error" and "unknown message type" in ev["message"]
+
+
+def test_a_practice_switch_over_the_call_cap_is_reported_and_rolled_back(monkeypatch):
+    with build_client(monkeypatch, max_active_calls_per_user=0) as c:
+        sid = new_voice(c)["session_id"]
+        with c.websocket_connect(f"/ws/voice/{sid}") as ws:
+            ws.receive_json()
+            ws.send_json({"type": "config", "role": "practice"})
+            ev = ws.receive_json()
+            while ev["type"] != "error":
+                ev = ws.receive_json()
+            assert "too many" in ev["message"]
+            vs = svc_of(c).voice_sessions[sid]
+            assert vs.role == "assistant", "a refused switch leaves the session as it was"
+            assert vs.closed is False
+
+
 def test_a_socket_message_over_the_rate_is_dropped_not_answered():
     now = [0.0]
     bucket = TokenBucket(rate=50, burst=50, clock=lambda: now[0])
