@@ -105,6 +105,42 @@ def test_a_detached_call_is_finished_after_its_ttl_and_dropped_after_grace(clien
     assert cid not in svc.sessions
 
 
+def test_a_dropped_call_releases_its_actions_from_memory_but_not_the_store(client):
+    cid = new_call(client)
+    svc = svc_of(client)
+    email = {"to": ["dana.lee@example.com"], "subject": "Fees", "body_text": "Here is the breakdown."}
+    r = client.post("/api/actions", json={"call_id": cid, "kind": "send_email", "params": email})
+    assert r.status_code in (200, 201), r.text
+    aid = r.json()["action_id"]
+    client.portal.call(svc.actions.decide, "local", aid, "approve")
+    assert aid in svc.actions._cache and aid in svc.actions._locks
+    session = svc.sessions[cid]
+    client.portal.call(session.finish)
+    client.portal.call(svc.reap_once, session.ended_mono + svc.settings.session_grace_s + 1)
+    assert cid not in svc.sessions
+    assert aid not in svc.actions._cache and aid not in svc.actions._locks, "no per-process growth"
+    rec = client.portal.call(svc.actions.get, "local", aid)
+    assert rec.action_id == aid, "still readable from the store"
+
+
+def test_release_scope_keeps_an_action_mid_decision():
+    from actions.service import ActionService
+
+    async def go():
+        svc = Services(Settings(mode="local", llm_enabled=False, retrieval_backend="keyword"))
+        acts: ActionService = svc.actions
+        rec = SimpleNamespace(action_id="a1", session_id=None, call_id="c1")
+        acts._cache["a1"] = rec
+        lock = acts._lock("a1")
+        async with lock:
+            assert acts.release_scope(call_id="c1") == 0
+            assert "a1" in acts._cache
+        assert acts.release_scope(call_id="c1") == 1
+        assert "a1" not in acts._cache and "a1" not in acts._locks
+        assert acts.release_scope() == 0, "no scope: releases nothing"
+    asyncio.run(go())
+
+
 def test_delete_ends_the_session_and_the_attached_socket_closes_with_4410(client):
     sid = new_voice(client)["session_id"]
     with client.websocket_connect(f"/ws/voice/{sid}") as ws:

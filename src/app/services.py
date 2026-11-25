@@ -223,6 +223,7 @@ class Services:
             if vs.closed:
                 if vs.closed_mono is not None and now - vs.closed_mono > grace:
                     self.voice_sessions.pop(vs.session_id, None)
+                    self.actions.release_scope(session_id=vs.session_id)
             elif vs.socket is None and now - vs.detached_at > self.settings.voice_detached_ttl_s:
                 log.info("closing detached voice session session_id=%s", vs.session_id)
                 await self._close_quietly(vs)
@@ -230,6 +231,7 @@ class Services:
             if session.ended:
                 if session.ended_mono is not None and now - session.ended_mono > grace:
                     self.sessions.pop(call_id, None)
+                    self.actions.release_scope(call_id=call_id)
             elif session.attached == 0 and now - session.detached_at > self.settings.call_detached_ttl_s:
                 log.info("finishing detached call call_id=%s", call_id)
                 try:

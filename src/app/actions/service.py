@@ -199,6 +199,20 @@ class ActionService:
                 raise ActionError(400, f"program must be one of: {allowed}")
         return clean
 
+    def release_scope(self, *, session_id: Optional[str] = None, call_id: Optional[str] = None) -> int:
+        """Forget a dropped session's or call's actions in this process (the reaper calls this after the grace
+        period). The store stays the source of truth: get() reloads from it. Without this, every action ever
+        proposed (with its rendered eml/ics) stays in memory and list()/dedupe scan all of them. An action whose
+        lock is held is mid-decision and is kept. Returns how many were released."""
+        if session_id is None and call_id is None:
+            return 0
+        gone = [aid for aid, rec in self._cache.items()
+                if _in_scope(rec, session_id, call_id) and not self._locks.get(aid, _FREE).locked()]
+        for aid in gone:
+            self._cache.pop(aid, None)
+            self._locks.pop(aid, None)
+        return len(gone)
+
     # --------------------------------------------------------------- decisions
     def _lock(self, action_id: str) -> asyncio.Lock:
         return self._locks.setdefault(action_id, asyncio.Lock())
@@ -515,6 +529,9 @@ class ActionService:
 
 
 _CONTACT_COLS = ("first_name", "last_name", "email", "phone", "company")
+
+
+_FREE = asyncio.Lock()      # stand-in for "no lock yet": never acquired, so .locked() is False
 
 
 def _in_scope(rec: Action, session_id: Optional[str], call_id: Optional[str]) -> bool:
