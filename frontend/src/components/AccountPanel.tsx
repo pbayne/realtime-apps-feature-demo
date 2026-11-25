@@ -94,7 +94,7 @@ function LookupForm({ mock, onFound }: { mock: boolean; onFound(a: Account): voi
           onChange={(e) => setPhone(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && run()}
           placeholder="(415) 555-0142"
-          className="w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-ink)] px-3 py-2 text-[13.5px] focus:border-[var(--c-info-base)] focus:outline-none"
+          className="w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-ink)] px-3 py-2 text-[13.5px] focus:border-[var(--c-info-base)]"
         />
       </Field>
       <Field icon={<User className="size-3.5" />} label="Name">
@@ -103,7 +103,7 @@ function LookupForm({ mock, onFound }: { mock: boolean; onFound(a: Account): voi
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && run()}
           placeholder="Dana Whitfield"
-          className="w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-ink)] px-3 py-2 text-[13.5px] focus:border-[var(--c-info-base)] focus:outline-none"
+          className="w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-ink)] px-3 py-2 text-[13.5px] focus:border-[var(--c-info-base)]"
         />
       </Field>
       {note && (
@@ -169,11 +169,14 @@ function VerifyCard({
         }}
         onKeyDown={(e) => e.key === "Enter" && check()}
         placeholder="Type their answer…"
-        className="mt-3 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-ink)] px-3 py-2 text-[13.5px] focus:border-[var(--c-info-base)] focus:outline-none"
+        aria-label="Caller's security answer"
+        aria-invalid={failed || undefined}
+        aria-describedby={failed ? "account-verify-error" : undefined}
+        className="mt-3 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-ink)] px-3 py-2 text-[13.5px] focus:border-[var(--c-info-base)]"
         autoFocus
       />
       {failed && (
-        <p className="mt-2 text-[12px] text-rose-300">That doesn't match. Confirm the spelling, or ask a second time.</p>
+        <p id="account-verify-error" role="alert" className="mt-2 text-[12px] text-rose-300">That doesn't match. Confirm the spelling, or ask a second time.</p>
       )}
       {mock && (
         <p className="mt-2 flex items-center gap-1.5 text-[11px] text-[var(--color-muted)]">

@@ -172,6 +172,7 @@ function CardItem({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             rows={3}
+            aria-label="Edit suggestion"
             className="w-full resize-none rounded-lg border border-sky-400/40 bg-[var(--color-ink)] p-2.5 text-[13.5px] leading-relaxed focus:border-sky-300"
             autoFocus
           />

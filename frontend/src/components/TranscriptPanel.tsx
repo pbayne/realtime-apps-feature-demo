@@ -56,7 +56,16 @@ export function TranscriptPanel({ state }: { state: CallState }) {
       </header>
 
       <div className="relative min-h-0 flex-1">
-        <div ref={scroller} onScroll={onScroll} className="scroll-thin absolute inset-0 space-y-3 overflow-y-auto px-4 py-4">
+        <div
+          ref={scroller}
+          onScroll={onScroll}
+          role="log"
+          aria-live="polite"
+          aria-relevant="additions"
+          aria-label="Live transcript"
+          tabIndex={0}
+          className="scroll-thin absolute inset-0 space-y-3 overflow-y-auto px-4 py-4"
+        >
           {state.utterances.length === 0 && (
             <div className="grid h-full place-items-center text-center text-[13px] text-[var(--color-muted)]">
               <div>
@@ -95,7 +104,11 @@ function Bubble({ u, enrich }: { u: UtteranceView; enrich?: CallState["enrich"][
   const hasTags = !!(enrich && (enrich.intent || enrich.objection || enrich.risk_flags.length || enrich.sentiment != null));
 
   return (
-    <div className={`anim-bubble-in flex gap-2.5 ${isAgent ? "flex-row-reverse" : ""}`}>
+    <div
+      className={`anim-bubble-in flex gap-2.5 ${isAgent ? "flex-row-reverse" : ""}`}
+      // Interim words change several times a second; announce only the settled utterance.
+      aria-hidden={u.final ? undefined : true}
+    >
       <div
         className={`mt-0.5 grid size-7 shrink-0 place-items-center rounded-full text-[11px] font-bold ring-1 ${s.avatar}`}
         aria-hidden

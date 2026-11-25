@@ -48,7 +48,9 @@
    component can still opt out with a utility (form fields keep it: they do not set outline-none). */
 @layer base {
   :focus-visible {
-    outline: 2px solid #38bdf8;
+    /* Per-theme info token: sky #38bdf8 was ~2:1 on the light themes (below the 3:1 a focus indicator
+       needs). Not the accent token: that is lava in the Databricks theme and would read as an error. */
+    outline: 2px solid var(--c-info);
     outline-offset: 2px;
   }
 }
