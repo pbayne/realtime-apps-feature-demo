@@ -66,17 +66,21 @@ export function PastCalls() {
   );
 }
 
-/** Turn a fetch failure into a sentence a rep can act on; never surface a bare status code. */
+const UNAVAILABLE = " The history service may be unavailable — check your connection and try again.";
+
+/** Turn a fetch failure into a sentence a rep can act on; never surface a bare status code. A specific server
+ * message (e.g. a 403 reason) is shown as-is; only generic/network failures get the "unavailable" hint. */
 function friendlyError(e: unknown, fallback: string): string {
   const msg = e instanceof Error ? e.message : "";
-  if (!msg || /^request failed \(\d+\)$/.test(msg) || /failed to fetch|networkerror|load failed/i.test(msg)) return fallback;
+  if (!msg || /^request failed \(\d+\)$/.test(msg) || /failed to fetch|networkerror|load failed/i.test(msg))
+    return fallback + UNAVAILABLE;
   return msg;
 }
 
 function LoadError({ message, onRetry }: { message: string; onRetry(): void }) {
   return (
     <div role="alert" className="chip-risk mt-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3 text-[13px]">
-      <span>{message} The history service may be unavailable — check your connection and try again.</span>
+      <span>{message}</span>
       <button type="button" onClick={onRetry} className="btn btn-ghost shrink-0 py-1 text-[12.5px]">
         <RotateCw className="size-3.5" aria-hidden /> Retry
       </button>

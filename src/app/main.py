@@ -815,14 +815,15 @@ async def ws_voice(ws: WebSocket, session_id: str):
                 elif kind == "text":
                     vs.submit_text(payload.get("text") or "")
                 elif kind == "config":
-                    prev_role = vs.role
+                    prev = (vs.role, vs.voice, vs.scenario)
                     vs.configure(voice=payload.get("voice"), role=payload.get("role"),
                                  scenario_key=payload.get("scenario"))
                     try:
                         await vs.ensure_practice_call(svc.hub)
                     except ServiceError as exc:
-                        # Over a call cap: undo the half-applied switch so the session stays usable.
-                        vs.configure(role=prev_role)
+                        # Over a call cap: undo the whole frame, so "refused" means nothing changed.
+                        vs.configure(role=prev[0])
+                        vs.voice, vs.scenario = prev[1], prev[2]
                         raise ValueError(exc.message) from exc
                     vs.start_opening()
                 else:

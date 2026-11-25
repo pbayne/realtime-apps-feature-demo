@@ -298,13 +298,16 @@ def test_a_practice_switch_over_the_call_cap_is_reported_and_rolled_back(monkeyp
         sid = new_voice(c)["session_id"]
         with c.websocket_connect(f"/ws/voice/{sid}") as ws:
             ws.receive_json()
-            ws.send_json({"type": "config", "role": "practice"})
+            vs = svc_of(c).voice_sessions[sid]
+            before = (vs.voice, vs.scenario)
+            ws.send_json({"type": "config", "role": "practice", "voice": "am_adam"})
             ev = ws.receive_json()
             while ev["type"] != "error":
                 ev = ws.receive_json()
             assert "too many" in ev["message"]
-            vs = svc_of(c).voice_sessions[sid]
             assert vs.role == "assistant", "a refused switch leaves the session as it was"
+            assert (vs.voice, vs.scenario) == before, "the whole frame is undone, not just the role"
+            assert vs._pending_practice is False, "no practice call is left pending"
             assert vs.closed is False
 
 
