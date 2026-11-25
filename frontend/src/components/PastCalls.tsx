@@ -1,7 +1,7 @@
 // Past Calls (request E): the caller's own calls, with transcript, suggestion cards, actions and the
 // post-call summary. Read-only; data comes from Lakebase (live) plus the Delta gold summary when available.
 import { useEffect, useState } from "react";
-import { ArrowLeft, Clock, FileText, ListChecks, MessageSquare, Sparkles } from "lucide-react";
+import { ArrowLeft, Clock, FileText, ListChecks, MessageSquare, RotateCw, Sparkles } from "lucide-react";
 import { Brand } from "./Brand";
 import { type CallDetail, type CallSummaryRow, getCallDetail, listCalls } from "../lib/history";
 
@@ -21,12 +21,19 @@ export function PastCalls() {
   const [calls, setCalls] = useState<CallSummaryRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    let live = true;
+    setError(null);
+    setCalls(null);
     listCalls()
-      .then(setCalls)
-      .catch((e) => setError(e instanceof Error ? e.message : "Could not load calls"));
-  }, []);
+      .then((rows) => live && setCalls(rows))
+      .catch((e) => live && setError(friendlyError(e, "Couldn't load your past calls.")));
+    return () => {
+      live = false;
+    };
+  }, [attempt]);
 
   return (
     <div className="flex min-h-full flex-col">
@@ -47,18 +54,32 @@ export function PastCalls() {
           summary. Persisted to Lakebase.
         </p>
 
-        {error && (
-          <p role="alert" className="mt-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-[13px] text-rose-200">
-            {error}
-          </p>
-        )}
-
         {selected ? (
           <Detail callId={selected} onBack={() => setSelected(null)} />
+        ) : error ? (
+          <LoadError message={error} onRetry={() => setAttempt((n) => n + 1)} />
         ) : (
           <CallList calls={calls} onOpen={setSelected} />
         )}
       </main>
+    </div>
+  );
+}
+
+/** Turn a fetch failure into a sentence a rep can act on; never surface a bare status code. */
+function friendlyError(e: unknown, fallback: string): string {
+  const msg = e instanceof Error ? e.message : "";
+  if (!msg || /^request failed \(\d+\)$/.test(msg) || /failed to fetch|networkerror|load failed/i.test(msg)) return fallback;
+  return msg;
+}
+
+function LoadError({ message, onRetry }: { message: string; onRetry(): void }) {
+  return (
+    <div role="alert" className="chip-risk mt-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3 text-[13px]">
+      <span>{message} The history service may be unavailable — check your connection and try again.</span>
+      <button type="button" onClick={onRetry} className="btn btn-ghost shrink-0 py-1 text-[12.5px]">
+        <RotateCw className="size-3.5" aria-hidden /> Retry
+      </button>
     </div>
   );
 }
@@ -106,15 +127,29 @@ function CallList({ calls, onOpen }: { calls: CallSummaryRow[] | null; onOpen(id
 function Detail({ callId, onBack }: { callId: string; onBack(): void }) {
   const [d, setD] = useState<CallDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    let live = true;
     setD(null);
+    setError(null);
     getCallDetail(callId)
-      .then(setD)
-      .catch((e) => setError(e instanceof Error ? e.message : "Could not load this call"));
-  }, [callId]);
+      .then((detail) => live && setD(detail))
+      .catch((e) => live && setError(friendlyError(e, "Couldn't load this call.")));
+    return () => {
+      live = false;
+    };
+  }, [callId, attempt]);
 
-  if (error) return <p role="alert" className="mt-6 text-[13px] text-rose-300">{error}</p>;
+  if (error)
+    return (
+      <div className="mt-6">
+        <button type="button" onClick={onBack} className="btn btn-ghost py-1.5 text-[12.5px]">
+          <ArrowLeft className="size-3.5" /> All calls
+        </button>
+        <LoadError message={error} onRetry={() => setAttempt((n) => n + 1)} />
+      </div>
+    );
   if (!d) return <p className="mt-6 text-[13px] text-[var(--color-muted)]">Loading…</p>;
 
   const nextSteps = d.cards.filter((c) => c.kind === "next_best_action" || c.kind === "next_question");
