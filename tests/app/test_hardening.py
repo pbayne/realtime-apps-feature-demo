@@ -594,3 +594,58 @@ def test_lakebase_wait_enrichment_timeout_leaves_no_waiters():
     store._pool = NoRowPool()
     assert asyncio.run(store.wait_enrichment("c", 1, 0.35)) is None
     assert store._waiters == {}, "every poll's future is released"
+
+
+def test_lakebase_endpoint_password_is_minted_per_connection_and_refreshed(monkeypatch):
+    """The OAuth database token is short-lived: asyncpg must get a callable that mints (cached) tokens, not one
+    static string, or pool reconnects fail auth after the token expires."""
+    import asyncpg
+    import databricks.sdk
+    from store import lakebase
+
+    tokens = iter(f"tok-{i}" for i in range(100))
+    minted = []
+
+    class FakeW:
+        postgres = SimpleNamespace(
+            get_endpoint=lambda ep: SimpleNamespace(as_dict=lambda: {"status": {"hosts": {"host": "h"}}}),
+            generate_database_credential=lambda ep: minted.append(ep) or SimpleNamespace(token=next(tokens)),
+        )
+        current_user = SimpleNamespace(me=lambda: SimpleNamespace(user_name="sp@x"))
+
+    seen = {}
+
+    async def fake_create_pool(**kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("stop after recording the arguments")
+
+    monkeypatch.setattr(databricks.sdk, "WorkspaceClient", lambda: FakeW())
+    monkeypatch.setattr(asyncpg, "create_pool", fake_create_pool)
+    store = LakebaseStore(Settings(mode="local", lakebase_endpoint="projects/p/branches/b/endpoints/e"))
+    with pytest.raises(RuntimeError):
+        asyncio.run(store.start())
+    assert callable(seen["password"]), "a static token string goes stale on reconnect"
+    assert asyncio.run(seen["password"]()) == "tok-0", "cached within the TTL (minted once at start)"
+
+    now = [0.0]
+    mint = lakebase._token_minter(FakeW(), "ep", ttl_s=10, clock=lambda: now[0])
+    first = mint()
+    assert mint() == first
+    now[0] = 11.0
+    assert mint() != first, "past the TTL a new connection gets a fresh token"
+
+
+def test_a_static_lakebase_password_stays_a_string(monkeypatch):
+    import asyncpg
+
+    seen = {}
+
+    async def fake_create_pool(**kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(asyncpg, "create_pool", fake_create_pool)
+    store = LakebaseStore(Settings(mode="local", lakebase_host="h", lakebase_user="u", lakebase_password="p" * 24))
+    with pytest.raises(RuntimeError):
+        asyncio.run(store.start())
+    assert seen["password"] == "p" * 24

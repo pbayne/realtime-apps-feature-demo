@@ -77,6 +77,32 @@ def _j(v: Any) -> Optional[str]:
     return None if v is None else json.dumps(v)
 
 
+# Lakebase database credentials are short-lived OAuth tokens (~1 h). Reuse one for a while, then mint anew.
+TOKEN_TTL_S = 30 * 60
+
+
+def _token_minter(w: Any, endpoint: str, ttl_s: float = TOKEN_TTL_S, clock: Any = time.monotonic) -> Any:
+    """A sync callable returning a database token, cached for `ttl_s` (well inside the token's own lifetime)."""
+    cache: dict[str, Any] = {}
+
+    def mint() -> str:
+        now = clock()
+        if "token" not in cache or now - cache["at"] >= ttl_s:
+            cred = w.postgres.generate_database_credential(endpoint)
+            cache["token"] = getattr(cred, "token", None) or cred.as_dict().get("token")
+            cache["at"] = now
+        return cache["token"]
+
+    return mint
+
+
+def _async_password(mint: Any) -> Any:
+    async def password() -> str:
+        return await asyncio.to_thread(mint)    # the SDK call is blocking: keep it off the event loop
+
+    return password
+
+
 class LakebaseStore:
     def __init__(self, settings: Settings) -> None:
         self._s = settings
@@ -97,9 +123,12 @@ class LakebaseStore:
             w = WorkspaceClient()
             ep = s.lakebase_endpoint
             host = host or w.postgres.get_endpoint(ep).as_dict()["status"]["hosts"]["host"]
-            cred = w.postgres.generate_database_credential(ep)
-            password = getattr(cred, "token", None) or cred.as_dict().get("token")
+            mint = _token_minter(w, ep)
+            mint()                                  # fail at start, not on the first query, if minting is broken
             user = user or w.current_user.me().user_name
+            # A callable password: asyncpg calls it for every NEW connection, so pool reconnects after the
+            # short-lived OAuth token expires get a fresh one instead of failing auth until the app restarts.
+            password = _async_password(mint)
         if not (host and user and password):
             raise RuntimeError("Lakebase not configured: need LAKEBASE_HOST/USER/PASSWORD or LAKEBASE_ENDPOINT")
         return {"host": host, "port": s.lakebase_port, "database": s.lakebase_db, "user": user, "password": password, "ssl": s.lakebase_sslmode}
