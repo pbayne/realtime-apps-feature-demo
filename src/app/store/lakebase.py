@@ -256,8 +256,22 @@ class LakebaseStore:
                 await self._fetch_into_cache(key)
             except Exception:  # noqa: BLE001
                 return None
+            finally:
+                # One future per poll: drop ours so a late or missing row doesn't leak a future per 100 ms.
+                self._drop_waiter(key, fut)
             if key in self._cache:
                 return self._cache[key]
+
+    def _drop_waiter(self, key: tuple[str, int], fut: "asyncio.Future[None]") -> None:
+        waiters = self._waiters.get(key)
+        if waiters is None:
+            return
+        try:
+            waiters.remove(fut)
+        except ValueError:
+            pass
+        if not waiters:
+            self._waiters.pop(key, None)
 
     async def put_card(self, card: Card, trace: dict[str, Any]) -> None:
         await self._pool.execute(

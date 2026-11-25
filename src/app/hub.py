@@ -38,8 +38,15 @@ class Hub:
                 log.warning("dropping event %s for slow subscriber on call %s", event.get("type"), call_id)
 
     def close(self, call_id: str) -> None:
+        """End every subscriber's stream. The None sentinel must arrive even at a full queue, or its socket pump
+        waits forever: the oldest queued event makes room (the call is ending anyway)."""
         for q in list(self._subs.get(call_id, ())):
-            try:
-                q.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
+            while True:
+                try:
+                    q.put_nowait(None)
+                    break
+                except asyncio.QueueFull:
+                    try:
+                        q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass

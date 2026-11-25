@@ -11,6 +11,7 @@ import main
 import pytest
 from config import Settings
 from fastapi.testclient import TestClient
+from hub import Hub
 from llm import WARMUP, LlmClient, LlmUnavailable
 from models import CallRecord, cap_text
 from ratelimit import TokenBucket
@@ -566,3 +567,27 @@ def test_stt_failures_log_the_call_id(caplog):
     caplog.set_level(logging.ERROR, logger="sidekick.session")
     asyncio.run(session._drive_stt(Broken(), iter(())))
     assert any("call_id=call-xyz" in r.getMessage() for r in caplog.records)
+
+
+def test_hub_close_delivers_the_end_sentinel_to_a_full_queue():
+    async def go():
+        h = Hub()
+        q = h.subscribe("c")
+        for i in range(q.maxsize):
+            h.emit("c", {"type": "x", "i": i})
+        assert q.full()
+        h.close("c")
+        items = [q.get_nowait() for _ in range(q.qsize())]
+        assert items[-1] is None, "the socket pump must see end-of-stream"
+    asyncio.run(go())
+
+
+def test_lakebase_wait_enrichment_timeout_leaves_no_waiters():
+    class NoRowPool:
+        async def fetchrow(self, *a, **k):
+            return None
+
+    store = LakebaseStore(Settings(mode="local"))
+    store._pool = NoRowPool()
+    assert asyncio.run(store.wait_enrichment("c", 1, 0.35)) is None
+    assert store._waiters == {}, "every poll's future is released"
