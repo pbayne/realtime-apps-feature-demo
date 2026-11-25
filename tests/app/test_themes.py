@@ -119,3 +119,20 @@ def test_primary_button_text_meets_aa(theme):
     white = (255.0, 255.0, 255.0)
     for name in ("--accent-btn-from", "--accent-btn-to"):
         assert contrast(white, resolve(decls, name)[:3]) >= 4.5, (theme, name)  # type: ignore[arg-type]
+
+
+PALETTE_CLASS = re.compile(r"\b(?:text|bg|border|ring|from|to|via|fill|stroke|outline|divide|placeholder)-"
+                           r"(slate|sky|amber|emerald|rose|teal|violet|indigo|cyan|red|green|blue|orange|pink)-(\d{2,3})\b")
+
+
+def test_every_raw_palette_shade_in_the_ui_is_remapped_for_the_light_themes():
+    """Raw Tailwind palette classes only theme correctly if the light block remaps that exact shade; an unmapped
+    one (e.g. bg-rose-950) keeps its dark-theme value and paints a muddy wash on Daylight/Databricks."""
+    src = ROOT / "frontend/src"
+    used: dict[str, str] = {}
+    for f in [*src.glob("components/**/*.tsx"), *src.glob("lib/**/*.ts"), src / "App.tsx"]:
+        for fam, shade in PALETTE_CLASS.findall(f.read_text(encoding="utf-8")):
+            used.setdefault(f"--color-{fam}-{shade}", str(f.relative_to(src)))
+    light = theme_block("daylight")
+    missing = {tok: where for tok, where in used.items() if tok not in light}
+    assert not missing, f"palette shades with no light-theme remap (use a token instead): {missing}"

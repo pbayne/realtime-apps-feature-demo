@@ -143,7 +143,7 @@ export function StartScreen({ error, onStart, onStartVoice }: Props) {
           </p>
 
           {error && !isMicBlocked(error) && (
-            <div role="alert" className="mt-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-[13px] text-rose-200">
+            <div role="alert" className="chip-risk mt-6 rounded-lg border px-4 py-3 text-[13px]">
               {error}
             </div>
           )}

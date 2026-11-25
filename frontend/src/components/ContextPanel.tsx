@@ -128,7 +128,7 @@ function RiskSection({ state }: { state: CallState }) {
       ) : (
         <ul className="space-y-1.5">
           {flags.map((f) => (
-            <li key={f.flag} className="flex items-center justify-between rounded-lg bg-rose-500/[0.06] px-2.5 py-1.5 text-[12.5px] text-rose-100 ring-1 ring-rose-400/15">
+            <li key={f.flag} className="flex items-center justify-between rounded-lg bg-[color-mix(in_srgb,var(--c-neg-base)_6%,transparent)] px-2.5 py-1.5 text-[12.5px] text-[var(--c-neg)] ring-1 ring-[color-mix(in_srgb,var(--c-neg-base)_18%,transparent)]">
               <span>{f.flag.replace(/_/g, " ")}</span>
               <span className="font-mono text-[11px] text-rose-300">×{f.count}</span>
             </li>

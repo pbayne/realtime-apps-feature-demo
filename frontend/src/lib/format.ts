@@ -27,7 +27,7 @@ export const HEALTH_CLASS: Record<Health, string> = {
 export const HEALTH_DOT: Record<Health, string> = {
   good: "bg-emerald-400",
   warn: "bg-amber-400",
-  bad: "bg-rose-500",
+  bad: "bg-[var(--c-neg-base)]",
   none: "bg-slate-600",
 };
 

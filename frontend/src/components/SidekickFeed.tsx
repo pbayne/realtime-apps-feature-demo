@@ -140,7 +140,7 @@ function CardItem({
     <article
       className={`anim-card-in relative overflow-hidden rounded-xl border bg-[var(--color-raised)] p-3.5 transition-colors ${
         isCompliance && !resolved
-          ? "anim-pinned border-rose-500/50 bg-rose-950/30"
+          ? "anim-pinned border-[color-mix(in_srgb,var(--c-neg-base)_50%,transparent)] bg-[color-mix(in_srgb,var(--c-neg-base)_8%,var(--color-raised))]"
           : "border-[var(--color-line)]"
       }`}
     >
@@ -156,7 +156,7 @@ function CardItem({
               {KIND_LABEL[card.kind]}
             </span>
             {isCompliance && !resolved && (
-              <span className="chip border-rose-500/40 bg-rose-500/15 text-rose-200">
+              <span className="chip chip-risk">
                 <Pin className="size-2.5" /> pinned
               </span>
             )}
