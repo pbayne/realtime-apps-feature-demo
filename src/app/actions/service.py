@@ -83,6 +83,7 @@ class ActionService:
         self._record_target = self._build_record_target(settings)
         self._cache: dict[str, Action] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._unpersisted: set[str] = set()   # the store write failed: memory holds the only copy, never evict
 
     @staticmethod
     def _build_record_target(settings: Settings) -> Optional[records.RecordTarget]:
@@ -203,11 +204,12 @@ class ActionService:
         """Forget a dropped session's or call's actions in this process (the reaper calls this after the grace
         period). The store stays the source of truth: get() reloads from it. Without this, every action ever
         proposed (with its rendered eml/ics) stays in memory and list()/dedupe scan all of them. An action whose
-        lock is held is mid-decision and is kept. Returns how many were released."""
+        lock is held is mid-decision and is kept, as is one the store never accepted. Returns how many were released."""
         if session_id is None and call_id is None:
             return 0
         gone = [aid for aid, rec in self._cache.items()
-                if _in_scope(rec, session_id, call_id) and not self._locks.get(aid, _FREE).locked()]
+                if _in_scope(rec, session_id, call_id) and aid not in self._unpersisted
+                and not self._locks.get(aid, _FREE).locked()]
         for aid in gone:
             self._cache.pop(aid, None)
             self._locks.pop(aid, None)
@@ -514,7 +516,9 @@ class ActionService:
         row = rec.to_row()
         try:
             await self.store.put_action(row)
+            self._unpersisted.discard(rec.action_id)
         except Exception:  # noqa: BLE001 - persistence is best effort; the live card still updates
+            self._unpersisted.add(rec.action_id)
             log.exception("action persist failed action_id=%s", rec.action_id)
         self._history("actions", hs.action_row(row))
         if self._emit is not None:

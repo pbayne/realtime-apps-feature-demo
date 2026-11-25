@@ -138,6 +138,9 @@ def test_release_scope_keeps_an_action_mid_decision():
         assert acts.release_scope(call_id="c1") == 1
         assert "a1" not in acts._cache and "a1" not in acts._locks
         assert acts.release_scope() == 0, "no scope: releases nothing"
+        acts._cache["a2"] = SimpleNamespace(action_id="a2", session_id=None, call_id="c1")
+        acts._unpersisted.add("a2")
+        assert acts.release_scope(call_id="c1") == 0, "memory is the only copy of an unpersisted action"
     asyncio.run(go())
 
 

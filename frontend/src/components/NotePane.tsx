@@ -129,7 +129,7 @@ export function NotePane({ scope, mock, className = "" }: Props) {
             ? "Jot down what matters — key points, commitments, things to follow up. Autosaves as you type."
             : "Notes open once the session is live."
         }
-        className="scroll-thin min-h-0 flex-1 resize-none bg-transparent px-4 py-3.5 text-[13.5px] leading-relaxed text-slate-100 placeholder:text-[var(--color-muted)] focus:outline-none disabled:opacity-50"
+        className="scroll-thin min-h-0 flex-1 resize-none bg-transparent px-4 py-3.5 text-[13.5px] leading-relaxed text-slate-100 placeholder:text-[var(--color-muted)] disabled:opacity-50"
         aria-label="Session notes"
       />
       {active && (
