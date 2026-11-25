@@ -17,6 +17,7 @@ export const STREAM_CHUNK_SAMPLES = 1600;
 
 export class MicEngine {
   private cap: Capture | null = null;
+  private stopped = false;
   private readonly vad = new EnergyVad();
   private manual: Float32Array[] | null = null;
   private mode: VoiceInputMode = "hands_free";
@@ -33,8 +34,14 @@ export class MicEngine {
   ) {}
 
   async start(): Promise<void> {
-    if (this.cap) return;
-    this.cap = await startCapture((frame) => this.onFrame(frame));
+    if (this.cap || this.stopped) return;
+    const cap = await startCapture((frame) => this.onFrame(frame));
+    // stop() ran while the permission prompt / worklet load was pending: release the late capture.
+    if (this.stopped) {
+      cap.stop();
+      return;
+    }
+    this.cap = cap;
   }
 
   setMode(mode: VoiceInputMode): void {
@@ -79,6 +86,7 @@ export class MicEngine {
   }
 
   stop(): void {
+    this.stopped = true;
     this.cap?.stop();
     this.cap = null;
     this.manual = null;

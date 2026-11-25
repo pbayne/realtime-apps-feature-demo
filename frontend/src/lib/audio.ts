@@ -8,14 +8,25 @@ export async function startMicCapture(onFrame: (pcm: ArrayBuffer) => void): Prom
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
   });
-  const ctx = new AudioContext();
-  await ctx.audioWorklet.addModule("/pcm-worklet.js");
-  const source = ctx.createMediaStreamSource(stream);
-  const node = new AudioWorkletNode(ctx, "pcm-downsampler", {
-    numberOfInputs: 1,
-    numberOfOutputs: 0,
-    channelCount: 1,
-  });
+  let ctx: AudioContext | undefined;
+  let source: MediaStreamAudioSourceNode;
+  let node: AudioWorkletNode;
+  try {
+    ctx = new AudioContext();
+    await ctx.audioWorklet.addModule("/pcm-worklet.js");
+    source = ctx.createMediaStreamSource(stream);
+    node = new AudioWorkletNode(ctx, "pcm-downsampler", {
+      numberOfInputs: 1,
+      numberOfOutputs: 0,
+      channelCount: 1,
+    });
+  } catch (err) {
+    // A failed worklet load must not leave the mic (and an AudioContext) live.
+    stream.getTracks().forEach((t) => t.stop());
+    void ctx?.close().catch(() => {});
+    throw err;
+  }
+  const audioCtx = ctx;
   node.port.onmessage = (e: MessageEvent<ArrayBuffer>) => onFrame(e.data);
   source.connect(node);
 
@@ -25,7 +36,7 @@ export async function startMicCapture(onFrame: (pcm: ArrayBuffer) => void): Prom
       source.disconnect();
       node.disconnect();
       stream.getTracks().forEach((t) => t.stop());
-      void ctx.close();
+      void audioCtx.close();
     },
   };
 }

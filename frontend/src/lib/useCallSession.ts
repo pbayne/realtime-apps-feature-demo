@@ -39,6 +39,7 @@ export function useCallSession() {
   const channelRef = useRef<Speaker>("customer");
   const liveMicRef = useRef(false);
   const callIdRef = useRef<string | null>(null);
+  const genRef = useRef(0);
   const sttBrowserRef = useRef(false);
 
   const closeAudio = () => {
@@ -54,6 +55,7 @@ export function useCallSession() {
     sttRef.current = null;
   };
   const teardownMedia = useCallback(() => {
+    genRef.current += 1;               // any start() still awaiting the mic is now stale
     liveMicRef.current = false;
     closeAudio();
     stopStt();
@@ -93,13 +95,20 @@ export function useCallSession() {
       setNotice(null);
       teardownMedia();
       connRef.current?.close();
+      const gen = genRef.current;
       dispatch({ type: "begin", callId: null, playbook: opts.playbook, mode: opts.mode, script: opts.script, at: Date.now() });
       try {
         const wantsMic = opts.mode === "mic" && !MOCK;
         // Ask for the mic first so a denied permission fails before a call is created.
         if (wantsMic) {
           const frames = (pcm: ArrayBuffer) => audioRef.current?.send(pcm);
-          micRef.current = await startMicCapture(frames);
+          const mic = await startMicCapture(frames);
+          // Ended, reset or unmounted during the permission prompt: release the mic, create no call.
+          if (gen !== genRef.current) {
+            mic.stop();
+            return;
+          }
+          micRef.current = mic;
           liveMicRef.current = true;
         }
 
@@ -112,6 +121,11 @@ export function useCallSession() {
         }
 
         const { call_id } = await createCall({ playbook: opts.playbook, mode: opts.mode, script: opts.script });
+        if (gen !== genRef.current) {
+          // Ended while the call was being created: end it server-side too, or it lingers until the reaper.
+          void endCall(call_id).catch(() => {});
+          return;
+        }
         callIdRef.current = call_id;
         dispatch({ type: "begin", callId: call_id, playbook: opts.playbook, mode: opts.mode, script: opts.script, at: Date.now() });
         connRef.current = openCallSocket(call_id, { onEvent: handleEvent, onStatus: handleStatus, onTerminal: handleTerminal });
@@ -120,6 +134,7 @@ export function useCallSession() {
           openAudioFor(call_id, channelRef.current);
         }
       } catch (err) {
+        if (gen !== genRef.current) return;   // a superseded start's failure is not this session's error
         teardownMedia();
         dispatch({ type: "error", message: describeStartError(err) });
       }

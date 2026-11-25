@@ -290,7 +290,11 @@ export function useVoiceSession() {
         dispatch({ type: "notice", message: micNotice(err) });
         return;
       }
-      if (alive() && modeRef.current === "hands_free") openStream();
+      if (!alive()) {
+        mic.stop();                    // torn down during the permission prompt: release the mic
+        return;
+      }
+      if (modeRef.current === "hands_free") openStream();
     },
     [envNow, onLocal, onServer, onSocketOpen, onSocketStatus, onSocketTerminal, openStream, teardown],
   );

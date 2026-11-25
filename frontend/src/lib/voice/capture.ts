@@ -57,13 +57,26 @@ export async function startCapture(onFrame: (frame: Float32Array) => void): Prom
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   });
 
-  let ctx: AudioContext;
+  let ctx: AudioContext | undefined;
   try {
-    ctx = new AudioContext({ sampleRate: VOICE_RATE });
-  } catch {
-    ctx = new AudioContext();
+    return await wireCapture(stream, (ctx = makeContext()), onFrame);
+  } catch (err) {
+    // A failed worklet load or node construction must not leave the mic (and an AudioContext) live.
+    stream.getTracks().forEach((t) => t.stop());
+    void ctx?.close().catch(() => {});
+    throw err;
   }
+}
 
+function makeContext(): AudioContext {
+  try {
+    return new AudioContext({ sampleRate: VOICE_RATE });
+  } catch {
+    return new AudioContext();
+  }
+}
+
+async function wireCapture(stream: MediaStream, ctx: AudioContext, onFrame: (frame: Float32Array) => void): Promise<Capture> {
   const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
   try {
     await ctx.audioWorklet.addModule(url);
