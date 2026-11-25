@@ -225,7 +225,11 @@ def make_sdk_executor(warehouse_id: str) -> Executor:
 
     def run_sync(statement: str, params: dict[str, Any], types: dict[str, str]) -> list[dict[str, Any]]:
         from databricks.sdk import WorkspaceClient
-        from databricks.sdk.service.sql import StatementParameterListItem, StatementState
+        from databricks.sdk.service.sql import (
+            ExecuteStatementRequestOnWaitTimeout,
+            StatementParameterListItem,
+            StatementState,
+        )
 
         if "w" not in state:
             state["w"] = WorkspaceClient()
@@ -235,6 +239,9 @@ def make_sdk_executor(warehouse_id: str) -> Executor:
             warehouse_id=warehouse_id,
             parameters=[StatementParameterListItem(name=k, value=str(v), type=types[k]) for k, v in params.items()],
             wait_timeout="30s",
+            # CANCEL, not the SDK default CONTINUE: a statement we report as failed must not keep running and
+            # commit later (an update_record MERGE marked failed, then retried, would apply twice).
+            on_wait_timeout=ExecuteStatementRequestOnWaitTimeout.CANCEL,
         )
         if resp.status is None or resp.status.state != StatementState.SUCCEEDED:
             msg = resp.status.error.message if resp.status and resp.status.error else "statement did not succeed"

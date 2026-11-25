@@ -152,3 +152,24 @@ def test_other_errors_carry_no_access_hint():
         raise RuntimeError("warehouse stopped")
 
     assert "access" not in asyncio.run(I.Insights("c", "s", "wh", 0, broken).overview(7))
+
+
+def test_the_sdk_executor_cancels_a_statement_that_outlives_its_wait(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    import databricks.sdk
+    from admin.insights import make_sdk_executor
+    from databricks.sdk.service.sql import StatementState
+
+    seen: dict = {}
+
+    class FakeExec:
+        def execute_statement(self, **kw):
+            seen.update(kw)
+            return SimpleNamespace(status=SimpleNamespace(state=StatementState.SUCCEEDED, error=None),
+                                   manifest=SimpleNamespace(schema=SimpleNamespace(columns=[])), result=None)
+
+    monkeypatch.setattr(databricks.sdk, "WorkspaceClient", lambda: SimpleNamespace(statement_execution=FakeExec()))
+    assert asyncio.run(make_sdk_executor("wh")("SELECT 1", {}, {})) == []
+    assert seen["on_wait_timeout"].value == "CANCEL"
