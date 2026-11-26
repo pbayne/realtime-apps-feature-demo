@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Link2, Maximize2, Minimize2, Pause, Play } from "lucide-react";
 import { NODE_BY_ID, NODES, STAGES, STEPS, type ArchNode, type Metric } from "../../lib/architecture";
+import { PageEyebrow } from "../PageEyebrow";
 
 /** Shareable state lives in the hash: #/admin/architecture?c=<node>&s=<step>&k=1&p=1 (c, s, k, p). */
 interface ViewState {
@@ -72,7 +73,7 @@ export function ArchitecturePage() {
   return (
     <div className={view.p ? "fixed inset-0 z-50 overflow-auto bg-[var(--color-ink)] px-10 py-8 text-[18px]" : ""}>
       <section aria-labelledby="arch-h" className={view.p ? "mx-auto max-w-[1400px]" : ""}>
-        <p className="kbd-label">How it's built</p>
+        <PageEyebrow>How it's built</PageEyebrow>
         <div className="mt-2 flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 id="arch-h" className={`${view.p ? "text-[44px]" : "text-[28px]"} font-semibold leading-tight tracking-tight`}>

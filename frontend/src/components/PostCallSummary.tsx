@@ -3,6 +3,7 @@ import { CheckCircle2, Circle, Pencil, RotateCcw, X, Check, Inbox } from "lucide
 import { HEALTH_CLASS, TARGETS, fmtClock, fmtMs, health } from "../lib/format";
 import { summarize, type CallState } from "../lib/store";
 import { Brand } from "./Brand";
+import { PageEyebrow } from "./PageEyebrow";
 
 export function PostCallSummary({ state, onNewCall }: { state: CallState; onNewCall(): void }) {
   const s = summarize(state);
@@ -20,14 +21,14 @@ export function PostCallSummary({ state, onNewCall }: { state: CallState; onNewC
 
   return (
     <div className="flex min-h-full flex-col">
-      <header className="flex items-center justify-between px-8 py-5">
+      <header className="flex items-center justify-between px-8 py-4">
         <Brand />
         <span className="chip border-[var(--color-line)] text-[var(--color-muted)]">Call ended · {state.playbook.replace(/_/g, " ")}</span>
       </header>
 
-      <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col justify-center px-6 pb-12 pt-4 md:justify-start md:pt-[5vh]">
-        <p className="kbd-label">Post-call summary</p>
-        <h1 className="mt-2 text-[30px] font-semibold tracking-tight">
+      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col justify-center px-6 pb-12 pt-2 md:justify-start md:pt-8">
+        <PageEyebrow>Post-call summary</PageEyebrow>
+        <h1 className="mt-2 text-[28px] font-semibold tracking-tight">
           {isEmpty
             ? `${fmtClock(s.durationMs)} call`
             : `${fmtClock(s.durationMs)} call, ${s.accepted + s.edited} of ${s.cardsShown} suggestions used`}

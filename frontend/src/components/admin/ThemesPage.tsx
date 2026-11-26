@@ -1,5 +1,6 @@
 import { Check } from "lucide-react";
 import { THEMES, type ThemeId } from "../../lib/theme";
+import { PageEyebrow } from "../PageEyebrow";
 
 interface Props {
   active: ThemeId;
@@ -13,7 +14,7 @@ interface Props {
 export function ThemesPage({ active, saving, note, onPick }: Props) {
   return (
     <section aria-labelledby="themes-h">
-      <p className="kbd-label">Appearance</p>
+      <PageEyebrow>Appearance</PageEyebrow>
       <h1 id="themes-h" className="mt-2 text-[28px] font-semibold leading-tight tracking-tight">
         Theme
       </h1>

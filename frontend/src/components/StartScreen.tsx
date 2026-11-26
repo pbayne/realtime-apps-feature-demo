@@ -7,6 +7,7 @@ import { Brand } from "./Brand";
 import { AdminGear } from "./admin/AdminGear";
 import { VoiceStartPanel } from "./voice/VoiceStartPanel";
 import { isMicBlocked, MIC_BLOCKED } from "../lib/micErrors";
+import { PageEyebrow } from "./PageEyebrow";
 
 type Source = Mode | "talk";
 
@@ -126,13 +127,10 @@ export function StartScreen({ error, onStart, onStartVoice }: Props) {
         </div>
       </header>
 
-      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col justify-center gap-10 px-6 pb-8 pt-2 md:justify-start md:pt-[6vh]">
-        <div className="grid w-full items-center gap-8 md:grid-cols-[1.1fr_1fr]">
+      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col justify-center gap-10 px-6 pb-8 pt-2 md:justify-start md:pt-8">
+        <div className="grid w-full items-start gap-8 md:grid-cols-[1.1fr_1fr]">
         <section>
-          <p className="kbd-label flex items-center gap-2">
-            <span className="inline-block size-1.5 rounded-full bg-[var(--color-lava)]" aria-hidden />
-            {source === "talk" ? "Voice" : "New call"}
-          </p>
+          <PageEyebrow>{source === "talk" ? "Voice" : "New call"}</PageEyebrow>
           <h1 className="mt-2 bg-gradient-to-br from-[var(--color-text)] to-[var(--color-muted)] bg-clip-text text-[34px] font-semibold leading-[1.1] tracking-tight text-transparent">
             {source === "talk" ? "Talk to Sidekick" : "Start a sidekick session"}
           </h1>

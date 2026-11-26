@@ -226,6 +226,11 @@
   #root {
     height: 100%;
   }
+  /* Reserve the scrollbar's space on every page, so a page that is a few px taller than the window doesn't
+   * re-centre its column and shift the header 7px against its siblings. */
+  html {
+    scrollbar-gutter: stable;
+  }
   body {
     background: var(--color-ink);
     color: var(--color-text);

@@ -20,7 +20,7 @@ export function AdminShell({ page, isAdmin, children }: Props) {
   const tabs = TABS.filter((t) => isAdmin || !t.adminOnly);
   return (
     <div className="flex min-h-full flex-col">
-      <header className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-[var(--color-line)] bg-[var(--color-ink)]/80 px-5 py-3 backdrop-blur">
+      <header className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-[var(--color-line)] bg-[var(--color-ink)]/80 px-8 py-4 backdrop-blur">
         <Brand />
         <nav aria-label="Admin sections" className="flex flex-wrap items-center gap-1">
           {tabs.map((t) => {
@@ -41,10 +41,11 @@ export function AdminShell({ page, isAdmin, children }: Props) {
           })}
         </nav>
         <a href="#" className="btn btn-ghost ml-auto py-1.5 text-[12.5px]">
-          <ArrowLeft className="size-3.5" /> Back to Sidekick
+          <ArrowLeft className="size-3.5" /> Back to start
         </a>
       </header>
-      <main className="mx-auto w-full max-w-6xl flex-1 px-5 pb-12 pt-8">{children}</main>
+      {/* Same column as Start / Past calls; the architecture diagram is the one deliberately wider page. */}
+      <main className={`mx-auto w-full ${page === "architecture" ? "max-w-6xl" : "max-w-5xl"} flex-1 px-6 pb-12 pt-8`}>{children}</main>
     </div>
   );
 }

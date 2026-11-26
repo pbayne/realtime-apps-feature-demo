@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ArrowLeft, Clock, FileText, ListChecks, MessageSquare, RotateCw, Sparkles } from "lucide-react";
 import { Brand } from "./Brand";
 import { type CallDetail, type CallSummaryRow, getCallDetail, listCalls } from "../lib/history";
+import { PageEyebrow } from "./PageEyebrow";
 
 function fmtWhen(ms: number | null): string {
   if (!ms) return "";
@@ -44,10 +45,8 @@ export function PastCalls() {
         </a>
       </header>
 
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 pb-10">
-        <p className="kbd-label flex items-center gap-2">
-          <span className="inline-block size-1.5 rounded-full bg-[var(--color-lava)]" aria-hidden /> History
-        </p>
+      <main className="mx-auto w-full max-w-5xl flex-1 px-6 pb-10 pt-2 md:pt-8">
+        <PageEyebrow>History</PageEyebrow>
         <h1 className="mt-2 text-[28px] font-semibold tracking-tight">Past calls</h1>
         <p className="mt-2 max-w-xl text-[13.5px] leading-relaxed text-[var(--color-muted)]">
           Every call you ran — transcript, the cards Sidekick raised, the actions you approved, and the post-call

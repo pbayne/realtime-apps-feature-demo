@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { PageEyebrow } from "../PageEyebrow";
 
 // Shape of GET /api/admin/insights (src/app/admin/insights.py). Every section can be empty; `configured` false is the
 // empty state for an app without a SQL warehouse.
@@ -84,7 +85,7 @@ export function InsightsPage() {
     <section aria-labelledby="ins-h">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="kbd-label">Admin</p>
+          <PageEyebrow>Insights</PageEyebrow>
           <h1 id="ins-h" className="mt-2 text-[28px] font-semibold leading-tight tracking-tight">
             Insights
           </h1>
