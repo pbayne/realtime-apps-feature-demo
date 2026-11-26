@@ -1,8 +1,11 @@
 /* Live voice (SPEC 9.2 streaming, 9.7 live analysis). Palette only: no new colours, no new fonts. */
 
-/* Streamed words while the user talks. Light grey on navy, so the caption stays AA (about 12:1). */
+/* Streamed words while the user talks. Built from the theme's text token (the hard-coded slate-on-navy version
+   was ~1.4:1 on the light themes): the body is the text colour mixed slightly toward ink, the moving highlight is
+   the full text colour, so it stays AA in every theme. */
 .caption-shimmer {
-  background-image: linear-gradient(90deg, #cbd5e1 0%, #cbd5e1 38%, #f8fafc 50%, #cbd5e1 62%, #cbd5e1 100%);
+  --cap: color-mix(in srgb, var(--color-text) 82%, var(--color-ink));
+  background-image: linear-gradient(90deg, var(--cap) 0%, var(--cap) 38%, var(--color-text) 50%, var(--cap) 62%, var(--cap) 100%);
   background-size: 240% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -37,8 +40,8 @@
   border: 1px solid var(--color-line);
   border-bottom-width: 2px;
   border-radius: 5px;
-  background: rgba(255, 255, 255, 0.04);
-  color: #cbd5e1;
+  background: var(--ghost-tint);
+  color: var(--color-text);
   font-family: var(--font-mono);
   font-size: 10.5px;
   line-height: 1;
@@ -59,7 +62,7 @@
   .caption-shimmer {
     animation: none;
     background-image: none;
-    color: #e2e8f0;
+    color: var(--color-text);
   }
   .anim-solidify {
     animation: none;
