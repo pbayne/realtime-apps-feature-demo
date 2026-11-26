@@ -314,20 +314,27 @@ export function VoiceConsole({ api, onNew }: { api: VoiceSession; onNew(): void 
             </div>
           </div>
         ) : (
-          <div className="flex min-h-[360px] flex-col gap-3 md:min-h-0">
-            {live}
-            {lane}
-            <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1.15fr)_minmax(0,0.75fr)_minmax(0,0.85fr)] gap-3">
-              <ActionsPanel
-                actions={state.actions}
-                scope={{ session_id: state.sessionId ?? undefined }}
-                playbook={state.playbook}
-                mock={MOCK}
-                onUpdate={api.actionUpdate}
-              />
+          /* One scroller for the whole column (same pattern as the call console's right column): three nested
+             scrollers split ~400px between them and none could show its first item. */
+          <div className="scroll-thin flex min-h-[360px] flex-col gap-3 md:min-h-0 md:overflow-y-auto md:pr-0.5">
+            <div className="shrink-0">{live}</div>
+            <div className="shrink-0">{lane}</div>
+            <ActionsPanel
+              className="min-h-[260px] shrink-0"
+              actions={state.actions}
+              scope={{ session_id: state.sessionId ?? undefined }}
+              playbook={state.playbook}
+              mock={MOCK}
+              onUpdate={api.actionUpdate}
+            />
+            <div className="min-h-[200px] shrink-0">
               <Outcomes items={state.items} />
-              <NotePane scope={state.sessionId ? { session_id: state.sessionId } : null} mock={MOCK} />
             </div>
+            <NotePane
+              className="min-h-[220px] shrink-0"
+              scope={state.sessionId ? { session_id: state.sessionId } : null}
+              mock={MOCK}
+            />
           </div>
         )}
       </main>
